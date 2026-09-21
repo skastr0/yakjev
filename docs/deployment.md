@@ -24,7 +24,7 @@ Do this on a machine that already has Railway and Tailscale admin access. Do not
 ### 1. Repo and Railway project
 
 1. Publish the public GitHub repo (no secrets in git).
-2. Create a Railway project and one service. Select the Dockerfile builder with path `Dockerfile`; leave the start-command override empty so the image entrypoint runs. New Railway services do not read legacy `railway.json`. Confirm the deployed manifest uses `DOCKERFILE`, not `RAILPACK`.
+2. Create a Railway project and one service. Railway detects the root `Dockerfile`; set `RAILWAY_DOCKERFILE_PATH=Dockerfile` explicitly and leave the start-command override empty so the image entrypoint runs. New Railway services do not read legacy `railway.json`. Verify that build logs say `Using detected Dockerfile!`; the API builder enum alone does not establish which build path ran.
 3. Attach **one** volume, mount path `/data`. Keep **one replica**.
 4. Do **not** click Generate Domain. Do **not** add a TCP proxy. If Railway created a `*.railway.app` domain, delete it before the first successful start. The entrypoint exits if `RAILWAY_PUBLIC_DOMAIN` or `RAILWAY_TCP_PROXY_DOMAIN` is set.
 5. Leave the healthcheck path empty and set restart policy to `ON_FAILURE` (10 retries). See [Private health checks](#private-health-checks).
@@ -88,7 +88,7 @@ This repo does not modify your tailnet. Apply grants yourself in the admin conso
 3. Confirm `tailscale serve status` on the node (Railway exec/logs) shows HTTPS → `http://127.0.0.1:3210` and Funnel off.
 4. Confirm no Railway public domain and no TCP proxy.
 
-Railway's `SUCCESS` status alone is insufficient: a Railpack build can start the Bun app without running Tailscale. Check the build manifest and the entrypoint's `ready origin=...` log, then perform the tailnet HTTPS probe. Keep the long-lived provisioning credential in your local secret manager; pass only a scoped enrollment key into the Railway service, never into orb settings.
+Railway's `SUCCESS` status alone is insufficient: a Railpack build can start the Bun app without running Tailscale. Check Dockerfile build logs and the entrypoint's `ready origin=...` log, then perform the tailnet HTTPS probe. Keep the long-lived provisioning credential in your local secret manager; pass only a scoped enrollment key into the Railway service, never into orb settings.
 
 ## Private health checks
 

@@ -35,8 +35,7 @@ ENV NODE_ENV=production \
     YAKJEV_LISTEN_HOST=127.0.0.1 \
     YAKJEV_LISTEN_PORT=3210
 
-# Single Railway volume should be mounted at /data (app + Tailscale state).
-VOLUME ["/data"]
+# Mount a Railway-managed volume at /data; Railway rejects Docker VOLUME declarations.
 
 # tini as PID 1: reap zombies and forward SIGTERM. Do not rely on shell job control.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/yakjev-entrypoint.sh"]
