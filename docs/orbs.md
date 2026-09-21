@@ -34,10 +34,10 @@ Then set `YAKJEV_REMOTE_URL` in Amp project settings. Resume will verify `/healt
 
 Railway CLI consumes the inherited token without persisting a login. Once the Railway project/service/environment exist, use explicit target IDs for status, logs, and deployments. Do not infer the target from an unrelated parent-directory link. Lifecycle hooks never create projects, deploy, or mutate tailnet policy.
 
-Read-only access checks in a fresh orb:
+Read-only access checks in a fresh orb. Workspace tokens often reject account queries such as `railway whoami` and `railway project list` while still allowing resource operations against explicit IDs:
 
 ```sh
-railway whoami --json
+railway status --project "$RAILWAY_PROJECT_ID" --environment "$RAILWAY_ENVIRONMENT_ID" --json
 quasar stats
 curl --fail --proto '=https' "$YAKJEV_REMOTE_URL/healthz" # only after deployment
 ```
