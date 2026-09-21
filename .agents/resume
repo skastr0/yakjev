@@ -35,7 +35,11 @@ for entry in "${QUASAR_SERVER_URL:-}|/health" "${YAKJEV_REMOTE_URL:-}|/healthz";
   path="${entry##*|}"
   [[ -n "$base" ]] || continue
   [[ "$base" == https://* ]] || { echo '[resume] Remote services require HTTPS' >&2; exit 1; }
-  curl --fail --silent --show-error --proto '=https' --max-time 5 "${base%/}$path" >/dev/null
+  echo "[resume] Checking configured HTTPS service ($path)"
+  # Cold tailnet routes can take ~10s; keep warm resumes fast without hiding outages.
+  curl --fail --silent --show-error --proto '=https' \
+    --connect-timeout 5 --max-time 15 --retry 2 --retry-delay 1 \
+    --retry-max-time 45 --retry-connrefused "${base%/}$path" >/dev/null
 done
 echo '[resume] Tailscale connected; configured service probes passed'
 # Railway reads RAILWAY_API_TOKEN (account) or RAILWAY_TOKEN (project) directly.
