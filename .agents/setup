@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+version=1.3.14
+
+if [[ "$(uname -s)" == Linux ]]; then
+  missing=()
+  for cmd in curl unzip python3 gh; do
+    command -v "$cmd" >/dev/null || missing+=("$cmd")
+  done
+  if ((${#missing[@]})); then
+    sudo apt-get update -qq
+    sudo apt-get install -y "${missing[@]}"
+  fi
+fi
+
+if ! command -v bun >/dev/null || [[ "$(bun --version)" != "$version" ]]; then
+  echo "Installing Bun $version"
+  curl -fsSL https://bun.com/install | bash -s "bun-$version"
+  export PATH="$HOME/.bun/bin:$PATH"
+fi
+# New agent shells and supervised services must see the pinned binary too.
+if [[ "${AMP_ORB:-}" == 1 && "$(uname -s)" == Linux ]]; then
+  binary="$(readlink -f "$(command -v bun)")"
+  if [[ "$binary" != /usr/local/bin/bun ]]; then
+    sudo ln -sfn "$binary" /usr/local/bin/bun
+  fi
+fi
+
+echo "Installing locked dependencies"
+time bun install --frozen-lockfile
+echo "Building web scaffold"
+time bun run build
+
+if [[ "${AMP_ORB:-}" == 1 && "$(uname -s)" == Linux ]]; then
+  # Install clients only; authentication belongs in resume, after snapshotting.
+  sudo install -d /etc/systemd/system/tailscaled.service.d
+  sudo tee /etc/systemd/system/tailscaled.service.d/amp-orb.conf >/dev/null <<'EOF'
+[Service]
+Environment=TS_ASSUME_NETWORK_UP_FOR_TEST=true
+EOF
+  if ! command -v tailscale >/dev/null; then
+    curl -fsSL https://tailscale.com/install.sh | sh
+  fi
+  sudo systemctl daemon-reload
+  sudo systemctl enable tailscaled
+
+  for spec in '@railway/cli@5.58.0' '@skastr0/quasar-cli@0.5.3'; do
+    package="${spec%@*}"
+    expected="${spec##*@}"
+    installed="$(node -e 'try { console.log(require(process.argv[1]).version) } catch {}' "$HOME/.local/lib/node_modules/$package/package.json")"
+    if [[ "$installed" != "$expected" ]]; then
+      npm install --global --prefix "$HOME/.local" "$spec"
+    fi
+  done
+  marker='# yakjev orb clients'
+  if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
+    cat >> "$HOME/.bash_profile" <<'EOF'
+
+# yakjev orb clients
+export PATH="$HOME/.local/bin:$PATH"
+EOF
+  fi
+fi
+echo "Orb setup complete; runtime authentication is deferred to resume"

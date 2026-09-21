@@ -1,0 +1,13 @@
+{
+  "name": "@yakjev/server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/main.ts"
+  },
+  "dependencies": {
+    "@yakjev/protocol": "workspace:*",
+    "effect": "3.21.2"
+  }
+}

@@ -1,0 +1,12 @@
+services:
+  api:
+    command: bun run --cwd packages/server dev
+    port: 3210
+    health: /healthz
+  web:
+    command: bun run --cwd apps/web dev --host 0.0.0.0 --port "$PORT"
+    health: /
+    review: false
+    portal:
+      title: yakjev scaffold
+      description: Development only. Synthetic local data, not the deployed app.

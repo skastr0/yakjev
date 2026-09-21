@@ -1,0 +1,5 @@
+bun.lock
+node_modules
+dist
+.data
+.agents/skills/typesafe-ai

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set +x
+set -euo pipefail
+
+export PATH="$HOME/.local/bin:$PATH"
+command -v bun >/dev/null
+[[ "$(bun --version)" == 1.3.14 ]] || {
+  echo "Expected Bun 1.3.14; run .agents/setup" >&2
+  exit 1
+}
+
+[[ "${AMP_ORB:-}" == 1 ]] || exit 0
+
+# Forks can develop without the owner's private integrations.
+if [[ -z "${TAILSCALE_CLIENT_ID:-}" && -z "${TAILSCALE_AUDIENCE:-}" ]]; then
+  echo '[resume] No Tailscale OIDC configuration; local development only'
+  exit 0
+fi
+: "${TAILSCALE_CLIENT_ID:?Set the Tailscale OIDC client ID in Amp settings}"
+: "${TAILSCALE_AUDIENCE:?Set the Tailscale OIDC audience in Amp settings}"
+
+sudo systemctl start tailscaled
+# This is the existing account-wide Amp OIDC pattern. No persistent auth key,
+# token file, argv token, or registration state is added to the setup snapshot.
+amp orb id-token --audience "$TAILSCALE_AUDIENCE" --subject-scope project |
+  sudo tailscale up \
+    --client-id="${TAILSCALE_CLIENT_ID}?ephemeral=true&preauthorized=true" \
+    --id-token=file:/dev/stdin \
+    --advertise-tags=tag:amp-orb \
+    --hostname="amp-orb-$(hostname | cut -c1-40)" \
+    --accept-routes=false --ssh=false --timeout=8s
+
+for entry in "${QUASAR_SERVER_URL:-}|/health" "${YAKJEV_REMOTE_URL:-}|/healthz"; do
+  base="${entry%|*}"
+  path="${entry##*|}"
+  [[ -n "$base" ]] || continue
+  [[ "$base" == https://* ]] || { echo '[resume] Remote services require HTTPS' >&2; exit 1; }
+  curl --fail --silent --show-error --proto '=https' --max-time 5 "${base%/}$path" >/dev/null
+done
+echo '[resume] Tailscale connected; configured service probes passed'
+# Railway reads RAILWAY_API_TOKEN (account) or RAILWAY_TOKEN (project) directly.
+# Do not log in, link an unrelated project, or deploy during lifecycle hooks.
+if [[ -n "${RAILWAY_API_TOKEN:-}${RAILWAY_TOKEN:-}" ]]; then
+  echo '[resume] Railway credential available to CLI; no deployment performed'
+else
+  echo '[resume] Railway credential absent; deployment access not configured'
+fi

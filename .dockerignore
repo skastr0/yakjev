@@ -1,0 +1,13 @@
+.git
+.agents
+.amp
+node_modules
+**/node_modules
+**/dist
+.data
+.env
+.env.*
+**/*.sqlite*
+**/*.db*
+coverage
+*.log

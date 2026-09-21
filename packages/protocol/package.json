@@ -1,0 +1,12 @@
+{
+  "name": "@yakjev/protocol",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "effect": "3.21.2"
+  }
+}
