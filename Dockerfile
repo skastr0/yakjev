@@ -1,5 +1,5 @@
 # yakjev production image: Bun app + userspace Tailscale in one container.
-# Build context is the repository root (see railway.json dockerfilePath).
+# Keep this at the repository root for Railway's Dockerfile detection.
 FROM oven/bun:1.3.14-debian
 
 ARG TAILSCALE_VERSION=1.102.4

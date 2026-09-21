@@ -20,7 +20,7 @@ jobs:
       - run: bun run verify
       - run: bash -n .agents/setup .agents/resume deploy/entrypoint.sh
       - name: Build deployment image (never publish or enroll)
-        run: docker build -f deploy/Dockerfile -t yakjev:ci .
+        run: docker build -t yakjev:ci .
       - name: Fresh image refuses to run without deployment configuration
         run: |
           if docker run --rm yakjev:ci > /tmp/yakjev-rejection.log 2>&1; then

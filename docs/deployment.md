@@ -6,14 +6,14 @@ Keep `TS_AUTHKEY` only in Railway service secrets. Keep personal tailnet names a
 
 ## Shape
 
-| Piece           | Where                                                                    |
-| --------------- | ------------------------------------------------------------------------ |
-| Image           | `deploy/Dockerfile` (Bun 1.3.14 + pinned Tailscale + tini)               |
-| Supervisor      | `deploy/entrypoint.sh` (userspace `tailscaled`, Serve, app; fail closed) |
-| Railway config  | `railway.json` (Dockerfile builder, 1 replica, no healthcheck path)      |
-| App data        | `/data/yakjev` (`YAKJEV_DATA_DIR`)                                       |
-| Tailscale state | `/data/tailscale` (`TS_STATE_DIR`)                                       |
-| Public origin   | `YAKJEV_ORIGIN=https://<hostname>.<tailnet>.ts.net`                      |
+| Piece            | Where                                                                    |
+| ---------------- | ------------------------------------------------------------------------ |
+| Image            | Root `Dockerfile` (Bun 1.3.14 + pinned Tailscale + tini)                 |
+| Supervisor       | `deploy/entrypoint.sh` (userspace `tailscaled`, Serve, app; fail closed) |
+| Railway settings | Dockerfile builder, 1 replica, no healthcheck path                       |
+| App data         | `/data/yakjev` (`YAKJEV_DATA_DIR`)                                       |
+| Tailscale state  | `/data/tailscale` (`TS_STATE_DIR`)                                       |
+| Public origin    | `YAKJEV_ORIGIN=https://<hostname>.<tailnet>.ts.net`                      |
 
 Railway mounts **one** volume at `/data`. Volumes cannot be used with replicas ([Railway volumes reference](https://docs.railway.com/volumes/reference)).
 
@@ -24,15 +24,15 @@ Do this on a machine that already has Railway and Tailscale admin access. Do not
 ### 1. Repo and Railway project
 
 1. Publish the public GitHub repo (no secrets in git).
-2. Create a Railway project and one service from that repo. Builder is Dockerfile; path is `deploy/Dockerfile` (`railway.json`).
+2. Create a Railway project and one service. Select the Dockerfile builder with path `Dockerfile`; leave the start-command override empty so the image entrypoint runs. New Railway services do not read legacy `railway.json`. Confirm the deployed manifest uses `DOCKERFILE`, not `RAILPACK`.
 3. Attach **one** volume, mount path `/data`. Keep **one replica**.
 4. Do **not** click Generate Domain. Do **not** add a TCP proxy. If Railway created a `*.railway.app` domain, delete it before the first successful start. The entrypoint exits if `RAILWAY_PUBLIC_DOMAIN` or `RAILWAY_TCP_PROXY_DOMAIN` is set.
-5. Do **not** set `deploy.healthcheckPath` (already `null` in `railway.json`). See [Private health checks](#private-health-checks).
+5. Leave the healthcheck path empty and set restart policy to `ON_FAILURE` (10 retries). See [Private health checks](#private-health-checks).
 
 ### 2. Tailscale: HTTPS, tags, auth key
 
 1. Enable MagicDNS and HTTPS certificates in the admin console. Enabling HTTPS publishes machine names in Certificate Transparency (public ledger). Use a boring hostname such as `yakjev`. Do not put secrets in the hostname. See [Enabling HTTPS](https://tailscale.com/docs/how-to/set-up-https-certificates).
-2. Prefer a **stable host tag** you already use for servers (for example `tag:server`). Do not invent a new tag per app unless policy already has one. Define it in `tagOwners` before minting a tagged auth key. See [Tags](https://tailscale.com/docs/features/tags).
+2. Use a **stable host tag** for Railway hosts, such as `tag:railway`. Define it in `tagOwners` before minting a tagged auth key. An OAuth provisioning credential should carry only that host-role tag: combining unrelated host tags can require enrollment keys to carry the entire set. Keep provisioning separate from administration credentials. See [Tags](https://tailscale.com/docs/features/tags).
 3. Generate an auth key: **tagged**, **not ephemeral**, **reusable only if you must re-register**, expiry 1–90 days. Treat reusable keys as passwords. After the node is Running with persisted `/data/tailscale`, you can revoke the key. See [Auth keys](https://tailscale.com/docs/features/access-control/auth-keys).
 4. Set Railway **service** variables (not shared git, not orbs):
 
@@ -40,7 +40,7 @@ Do this on a machine that already has Railway and Tailscale admin access. Do not
    | ------------------- | --------------------------------------------------------- |
    | `YAKJEV_ORIGIN`     | `https://<hostname>.<tailnet>.ts.net` (no trailing slash) |
    | `TS_HOSTNAME`       | same `<hostname>` as in `YAKJEV_ORIGIN`                   |
-   | `TS_ADVERTISE_TAGS` | `tag:server` (or your existing server tag)                |
+   | `TS_ADVERTISE_TAGS` | `tag:railway` (or your existing Railway host tag)         |
    | `TS_AUTHKEY`        | the tagged key (Railway secret / sealed variable)         |
    | `YAKJEV_DATA_DIR`   | `/data/yakjev`                                            |
    | `TS_STATE_DIR`      | `/data/tailscale`                                         |
@@ -87,6 +87,8 @@ This repo does not modify your tailnet. Apply grants yourself in the admin conso
    `curl -fsS "$YAKJEV_ORIGIN/healthz"`.
 3. Confirm `tailscale serve status` on the node (Railway exec/logs) shows HTTPS → `http://127.0.0.1:3210` and Funnel off.
 4. Confirm no Railway public domain and no TCP proxy.
+
+Railway's `SUCCESS` status alone is insufficient: a Railpack build can start the Bun app without running Tailscale. Check the build manifest and the entrypoint's `ready origin=...` log, then perform the tailnet HTTPS probe. Keep the long-lived provisioning credential in your local secret manager; pass only a scoped enrollment key into the Railway service, never into orb settings.
 
 ## Private health checks
 
