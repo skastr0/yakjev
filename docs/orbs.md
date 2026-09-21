@@ -10,15 +10,16 @@ Setup installs Bun 1.3.14, dependencies, a web build, GitHub CLI if missing, Tai
 
 This follows the established Quasar orb pattern: [Amp project-scoped OIDC](https://ampcode.com/docs/orbs/handling-secrets#tailscale), an ephemeral `tag:amp-orb` node, and the E2B network-availability systemd drop-in. Tokens flow through stdin, not arguments or files. No Tailscale auth key is needed **for orbs**.
 
-The owner's existing personal Amp settings supply these at runtime; public forks must configure their own values:
+Amp personal settings supply credentials; project settings select the app's deployment. These arrive at runtime; public forks must configure their own values:
 
-| Setting                                     | Purpose                                                             |
-| ------------------------------------------- | ------------------------------------------------------------------- |
-| `TAILSCALE_CLIENT_ID`, `TAILSCALE_AUDIENCE` | Existing OIDC registration identifiers (not secrets)                |
-| `QUASAR_SERVER_URL`                         | HTTPS session-memory endpoint                                       |
-| `TYPESAFE_API_KEY`                          | Server-side Jev calls, once implemented                             |
-| `RAILWAY_API_TOKEN`                         | Existing account credential used by Railway CLI                     |
-| `YAKJEV_REMOTE_URL`                         | Add to project settings after deployment; bare tailnet HTTPS origin |
+| Setting                                                              | Purpose                                                             |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `TAILSCALE_CLIENT_ID`, `TAILSCALE_AUDIENCE`                          | Existing OIDC registration identifiers (not secrets)                |
+| `QUASAR_SERVER_URL`                                                  | HTTPS session-memory endpoint                                       |
+| `TYPESAFE_API_KEY`                                                   | Server-side Jev calls, once implemented                             |
+| `RAILWAY_API_TOKEN`                                                  | Existing account/workspace credential used by Railway CLI           |
+| `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID`, `RAILWAY_SERVICE_ID` | Project settings selecting this app's deployment, not another app   |
+| `YAKJEV_REMOTE_URL`                                                  | Add to project settings after deployment; bare tailnet HTTPS origin |
 
 Personal secrets override project secrets of the same name. For narrower Railway authority, use a project/environment `RAILWAY_TOKEN`, and explicitly unset `RAILWAY_API_TOKEN` when invoking the CLI. A public repository does not grant contributors the owner's secrets: do not run unreviewed PR code in a credentialed orb. GitHub CI receives none of these credentials.
 
