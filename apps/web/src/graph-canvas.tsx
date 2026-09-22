@@ -511,6 +511,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             const drawn = thread(from, to, strength);
             const width = 1.15 + strength * 1.7;
             const plate = Math.max(36, ghost.label.length * 6.3 + 16);
+            const ink = labelInk(ghost.kind, strength);
             return (
               <g
                 key={`${ghost.kind}:${endpointKey(ghost.from)}:${ghost.to}:${ghost.label}`}
@@ -521,12 +522,16 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
                 <path
                   className="ghost-glow"
                   d={drawn.d}
+                  fill="none"
+                  stroke={ink.thread}
                   strokeWidth={width + 5}
                   opacity={0.08 + strength * 0.14}
                 />
                 <path
                   className="ghost-thread"
                   d={drawn.d}
+                  fill="none"
+                  stroke={ink.thread}
                   strokeWidth={width}
                   opacity={0.38 + strength * 0.55}
                   markerEnd="url(#ghost-arrow)"
@@ -535,6 +540,8 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
                   <path
                     className="ghost-bead"
                     d={drawn.d}
+                    fill="none"
+                    stroke={ink.bead}
                     pathLength={1}
                     strokeWidth={Math.max(1.4, width - 0.2)}
                     style={{ animationDelay: `${index * 0.14}s` }}
@@ -551,8 +558,18 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
                       width={plate}
                       height={18}
                       rx={9}
+                      fill="#f5f2e9"
+                      stroke={ink.plate}
+                      strokeWidth={1}
                     />
-                    <text textAnchor="middle" dominantBaseline="central">
+                    <text
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      fill="#203d35"
+                      fontFamily="Georgia, serif"
+                      fontStyle="italic"
+                      fontSize={11}
+                    >
                       {ghost.label}
                     </text>
                   </g>
@@ -632,6 +649,21 @@ function endpointKey(end: Ghost["from"]) {
 function clamp01(value: number) {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
+}
+
+function labelInk(kind: Ghost["kind"], strength: number) {
+  const alpha = (0.35 + strength * 0.5).toFixed(2);
+  if (kind === "typing")
+    return {
+      thread: "#2c84ff",
+      bead: "#2c84ff",
+      plate: `rgba(44,132,255,${alpha})`,
+    };
+  return {
+    thread: "#284e40",
+    bead: "#e35b00",
+    plate: `rgba(40,78,64,${alpha})`,
+  };
 }
 
 function dragAnnouncement(ghosts: readonly Ghost[]) {
