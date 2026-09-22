@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Command, Graph, Node, Preview } from "@yakjev/protocol";
 import {
   addRelation,
@@ -72,10 +72,12 @@ export function GraphEditor({
   paint: Readonly<Record<string, string>>;
   onPaint: (id: string, color: string) => void;
 }) {
+  const height = useRenderedHeight();
   if (!anchor) return null;
-  const style = placeCard(anchor, mode.kind);
+  const style = placeCard(anchor, mode.kind, height.value);
   return (
     <div
+      ref={height.ref}
       className="graph-editor"
       style={style}
       role="dialog"
@@ -924,16 +926,34 @@ function Swatches({
   );
 }
 
+// The card grows as it works (Jev's live list, sources), so place it by what
+// was actually rendered rather than a guess.
+function useRenderedHeight() {
+  const [value, setValue] = useState<number | null>(null);
+  const observer = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((element: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    observer.current = new ResizeObserver(() => setValue(element.offsetHeight));
+    observer.current.observe(element);
+  }, []);
+  return { ref, value };
+}
+
 function placeCard(
   anchor: Point,
-  kind?: Mode["kind"],
+  kind: Mode["kind"],
+  rendered: number | null,
 ): { left: number; top: number } {
   const margin = 12;
   const innerW = typeof window !== "undefined" ? window.innerWidth : 1024;
   const innerH = typeof window !== "undefined" ? window.innerHeight : 768;
   const cardWidth = Math.min(300, Math.max(0, innerW - margin * 2));
-  const cardHeight =
-    kind === "create" ? 80 : Math.min(320, Math.max(0, innerH - margin * 2));
+  const cardHeight = Math.min(
+    rendered ?? (kind === "create" ? 80 : 320),
+    Math.max(0, innerH - margin * 2),
+  );
 
   const isCenter =
     Math.abs(anchor.x - innerW / 2) <= 16 &&
