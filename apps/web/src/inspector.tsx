@@ -161,7 +161,13 @@ function NodeInspector(props: Props & { node: Node }) {
                 positions: [
                   {
                     id: node.id,
-                    ...(node.position ?? initialPosition(node.id)),
+                    ...(node.position ??
+                      initialPosition(
+                        node.id,
+                        graph.nodes.flatMap((item) =>
+                          item.position ? [item.position] : [],
+                        ),
+                      )),
                     pinned: !node.position?.pinned,
                   },
                 ],
@@ -440,7 +446,8 @@ function SuggestionInspector({
       </h3>
       <p className="interpretation">
         A proposal, not a dependency or permission. Accepting explicitly creates
-        an assertion; existing assertions cannot be overwritten.
+        an assertion or reframes an existing one, preserving its original
+        assertion and correction history. Nothing is applied automatically.
       </p>
       <p>{suggestion.rationale}</p>
       <p>

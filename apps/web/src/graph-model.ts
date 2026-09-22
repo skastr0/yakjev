@@ -12,14 +12,25 @@ export type LayoutPosition = {
   pinned: boolean;
 };
 
-// Stable fallback for an unsaved node. It depends only on its ID, not graph order.
-export function initialPosition(id: string) {
+// Seed new nodes within the saved layout's coordinate scale, without moving
+// existing nodes. Stable for the same ID and persisted positions, not array order.
+export function initialPosition(
+  id: string,
+  saved: readonly { x: number; y: number }[] = [],
+) {
   let hash = 2166136261;
   for (const char of id)
     hash = Math.imul(hash ^ char.charCodeAt(0), 16777619) >>> 0;
   const angle = (hash % 6283) / 1000;
   const radius = 80 + ((hash >>> 12) % 240);
-  return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
+  const bounds = layoutBounds(saved);
+  const span = Math.max(bounds.x[1] - bounds.x[0], bounds.y[1] - bounds.y[0]);
+  return {
+    x:
+      (bounds.x[0] + bounds.x[1]) / 2 + (Math.cos(angle) * radius * span) / 800,
+    y:
+      (bounds.y[0] + bounds.y[1]) / 2 + (Math.sin(angle) * radius * span) / 800,
+  };
 }
 
 export function layoutBounds(positions: readonly { x: number; y: number }[]): {
@@ -72,6 +83,9 @@ export function searchNodes(nodes: readonly Node[], query: string) {
 // Reconcile in-place: no clear(), no layout restart, no camera reset on events.
 export function syncGraph(target: MultiDirectedGraph, data: Graph) {
   const nodes = new Set(data.nodes.map((node) => node.id));
+  const saved = data.nodes.flatMap((node) =>
+    node.position ? [node.position] : [],
+  );
   for (const id of target.nodes()) if (!nodes.has(id)) target.dropNode(id);
   for (const node of data.nodes) {
     const existing = target.hasNode(node.id);
@@ -82,7 +96,7 @@ export function syncGraph(target: MultiDirectedGraph, data: Graph) {
             x: target.getNodeAttribute(node.id, "x"),
             y: target.getNodeAttribute(node.id, "y"),
           }
-        : initialPosition(node.id));
+        : initialPosition(node.id, saved));
     target.mergeNode(node.id, {
       ...position,
       label: node.title,
@@ -109,6 +123,8 @@ export function syncGraph(target: MultiDirectedGraph, data: Graph) {
     const corrected = edge.correction !== null;
     const disputed = edge.state === "disputed";
     const attributes = {
+      source: edge.source,
+      target: edge.target,
       label: `${disputed ? "Disputed · " : corrected ? "Corrected · " : ""}${relation?.label ?? edge.relation}`,
       color: disputed ? "#92998c" : relation?.blocking ? "#ab653e" : "#668477",
       size: 1.5,
@@ -140,6 +156,8 @@ export function syncGraph(target: MultiDirectedGraph, data: Graph) {
       suggestion.source,
       suggestion.target,
       {
+        source: suggestion.source,
+        target: suggestion.target,
         label: `Suggestion · ${label}`,
         color: "#9b88a6",
         size: 1,

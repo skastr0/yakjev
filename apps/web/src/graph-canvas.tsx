@@ -71,7 +71,23 @@ export function GraphCanvas(props: Props) {
               size: 9,
               labelColor: "#203d35",
               labelSize: 13,
-              labelPosition: "below",
+              labelPosition: (attributes) => {
+                const width = container.current?.clientWidth ?? 0;
+                if (width < 500) return "above";
+                const point = renderer.current?.graphToViewport({
+                  x: attributes.x as number,
+                  y: attributes.y as number,
+                });
+                return point &&
+                  point.x + String(attributes.label).length * 8 + 20 > width
+                  ? "left"
+                  : "right";
+              },
+              labelVisibility: (_attributes, _state, _graphState, graph) =>
+                graph.order <= 24 &&
+                (container.current?.clientWidth ?? 0) >= 500
+                  ? "visible"
+                  : "auto",
               labelBackgroundColor: "#f5f2e9",
               labelBackgroundPadding: 4,
               cursor: "grab",
@@ -93,12 +109,39 @@ export function GraphCanvas(props: Props) {
             {
               path: "straight",
               parallelPath: "curved",
-              parallelSpread: 1.4,
+              parallelSpread: (attributes) => {
+                const sigma = renderer.current;
+                if (!sigma) return 0.6;
+                const source = sigma.graphToViewport(
+                  graph.current.getNodeAttributes(attributes.source) as {
+                    x: number;
+                    y: number;
+                  },
+                );
+                const target = sigma.graphToViewport(
+                  graph.current.getNodeAttributes(attributes.target) as {
+                    x: number;
+                    y: number;
+                  },
+                );
+                // Short reciprocal edges need room for two labels. Long ones
+                // must not bow out beyond the node extent and clip offscreen.
+                const length = Math.hypot(
+                  source.x - target.x,
+                  source.y - target.y,
+                );
+                return Math.min(1.4, Math.max(0.6, 160 / Math.max(1, length)));
+              },
               selfLoopPath: "loop",
               head: "arrow",
               labelColor: "#526459",
               labelSize: 10,
-              labelPosition: "over",
+              labelPosition: "auto",
+              labelVisibility: (_attributes, _state, _graphState, graph) =>
+                graph.order <= 24 &&
+                (container.current?.clientWidth ?? 0) >= 500
+                  ? "visible"
+                  : "auto",
               labelBackgroundColor: "#f5f2e9",
               labelBackgroundPadding: 3,
               cursor: "pointer",
@@ -113,7 +156,7 @@ export function GraphCanvas(props: Props) {
           renderEdgeLabels: true,
           nodeLabelEvents: "extend",
           edgeLabelEvents: "extend",
-          stagePadding: 90,
+          stagePadding: container.current.clientWidth < 500 ? 90 : 40,
           labelDensity: 0.9,
           minCameraRatio: 0.05,
           maxCameraRatio: 15,
@@ -156,7 +199,14 @@ export function GraphCanvas(props: Props) {
           void latest.current.save(positions, dragRevision.current);
         }, 500);
       });
-      const resize = new ResizeObserver(() => sigma.resize());
+      const resize = new ResizeObserver(() => {
+        sigma.setSetting(
+          "stagePadding",
+          (container.current?.clientWidth ?? 0) < 500 ? 90 : 40,
+        );
+        sigma.resize();
+        sigma.refresh();
+      });
       resize.observe(container.current);
       return () => {
         resize.disconnect();
@@ -183,7 +233,12 @@ export function GraphCanvas(props: Props) {
         "Layout stopped because the graph changed. No positions were overwritten.",
       );
     }
+    const wasEmpty = graph.current.order === 0;
     syncGraph(graph.current, props.data);
+    // The first capture has no existing mental map. Later live edits must never
+    // change the camera, even when they add nodes outside the current viewport.
+    if (wasEmpty && graph.current.order > 0 && renderer.current)
+      fitGraph(renderer.current);
   }, [props.data]);
 
   useEffect(() => {
@@ -270,7 +325,11 @@ export function GraphCanvas(props: Props) {
       : null;
   return (
     <div className="graph-shell">
-      <div className="graph-actions" aria-label="Graph view controls">
+      <div
+        className="graph-actions"
+        role="group"
+        aria-label="Graph view controls"
+      >
         <button
           aria-label="Zoom in"
           onClick={() => void renderer.current?.getCamera().zoomIn()}

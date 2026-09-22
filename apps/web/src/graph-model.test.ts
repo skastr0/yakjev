@@ -94,10 +94,24 @@ describe("render projection", () => {
       graph.getNodeAttribute("b", "x"),
       graph.getNodeAttribute("b", "y"),
     ]).toEqual([102, -48]);
-    expect(initialPosition("new")).toEqual({
-      x: graph.getNodeAttribute("new", "x"),
-      y: graph.getNodeAttribute("new", "y"),
-    });
+    expect(graph.getNodeAttribute("new", "x")).toBeGreaterThan(-231);
+    expect(graph.getNodeAttribute("new", "x")).toBeLessThan(169);
+    expect(graph.getNodeAttribute("new", "y")).toBeGreaterThan(-103);
+    expect(graph.getNodeAttribute("new", "y")).toBeLessThan(297);
+  });
+  test("an external node appears in a small saved layout's scale instead of offscreen", () => {
+    const saved = [
+      { x: 1002, y: -903 },
+      { x: 1018, y: -879 },
+    ];
+    const position = initialPosition("external-live", saved);
+    expect(position.x).toBeGreaterThan(998);
+    expect(position.x).toBeLessThan(1022);
+    expect(position.y).toBeGreaterThan(-903);
+    expect(position.y).toBeLessThan(-879);
+    expect(initialPosition("external-live", [...saved].reverse())).toEqual(
+      position,
+    );
   });
   test("cycles and self-loops retain their directed endpoints; a correction changes labels, not node positions", () => {
     const graph = new MultiDirectedGraph();

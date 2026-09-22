@@ -155,7 +155,7 @@ summary {
   margin: 0;
 }
 .tagline {
-  color: #6e7c6e;
+  color: #566853;
 }
 .topbar nav {
   display: flex;
@@ -260,7 +260,7 @@ summary {
 }
 .sidebar-foot p {
   font-size: 10px;
-  color: #6e7c6e;
+  color: #566853;
   margin: 10px 0 0;
 }
 .graph-region {
@@ -405,7 +405,7 @@ summary {
 .hint {
   font-size: 12px;
   line-height: 1.6;
-  color: #637462;
+  color: #566853;
   font-weight: normal;
 }
 .field-pair {
@@ -677,8 +677,7 @@ summary {
     font-size: 9px;
   }
   .graph-region {
-    height: 480px;
-    min-height: 480px;
+    min-height: 620px;
   }
   .graph-heading {
     padding-top: 16px;
