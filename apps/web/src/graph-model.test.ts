@@ -17,7 +17,6 @@ import {
   syncGraph,
   unjudgedIds,
   settlePoint,
-  freshJevEdges,
   visibleGraph,
 } from "./graph-model";
 
@@ -312,24 +311,6 @@ describe("render projection", () => {
     expect(
       settlePoint({ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }, 140),
     ).toEqual({ x: 140, y: 0 });
-  });
-
-  test("only a newer Jev edge the canvas has not drawn yet arrives", () => {
-    const jev = {
-      id: "e1",
-      origin: { model: "jev" },
-      updated: { revision: 4 },
-    };
-    const owner = { id: "e2", updated: { revision: 4 } };
-    const older = {
-      id: "e3",
-      origin: { model: "jev" },
-      updated: { revision: 2 },
-    };
-    expect(
-      freshJevEdges([jev, owner, older], new Set(), 3).map((edge) => edge.id),
-    ).toEqual(["e1"]);
-    expect(freshJevEdges([jev], new Set(["e1"]), 3)).toEqual([]);
   });
 
   test("canonical source rendering never turns an executable URI into a link", () => {

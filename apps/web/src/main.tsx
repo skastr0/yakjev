@@ -15,7 +15,8 @@ import type {
 } from "@yakjev/protocol";
 import { errorMessage, previewJev, request } from "./api";
 import { GraphCanvas, type CanvasHandle } from "./graph-canvas";
-import { GraphEditor, type Mode } from "./editor";
+import { jevEdge, relationLabel, type Ghost } from "./jev";
+import { GraphEditor, JevActivity, type Mode } from "./editor";
 import {
   dragJudgments,
   searchNodes,
@@ -24,7 +25,6 @@ import {
 } from "./graph-model";
 import { readPaint, writePaint } from "./blend";
 import { useGraph } from "./use-graph";
-import { jevEdge, relationLabel, type Ghost } from "./jev";
 import "./style.css";
 
 function App() {
@@ -441,6 +441,11 @@ function App() {
               }
             />
           )}
+          <JevActivity
+            graph={view}
+            execute={state.execute}
+            onOpen={(id) => setMode({ kind: "edge", id })}
+          />
         </div>
       )}
     </main>

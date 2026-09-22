@@ -20,7 +20,6 @@ import { rememberLayout } from "./layout";
 import { blendedColors } from "./blend";
 import {
   DRAG_REACH,
-  freshJevEdges,
   idsWithinReach,
   layoutBounds,
   settlePoint,
@@ -28,7 +27,7 @@ import {
   type Selection,
 } from "./graph-model";
 import { ASSERTED_DISTANCE, BLOCKING_DISTANCE } from "./layout";
-import type { Ghost } from "./jev";
+import { backgroundArrivals, type Ghost } from "./jev";
 
 export type Point = { x: number; y: number };
 export type CanvasHandle = {
@@ -107,8 +106,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     const [renderError, setRenderError] = useState("");
     const [overlayTick, setOverlayTick] = useState(0);
     const [arrivals, setArrivals] = useState<Arrival[]>([]);
-    const seenEdges = useRef<Set<string> | null>(null);
-    const seenRevision = useRef(0);
+    const seenRevision = useRef<number | null>(null);
     const arrivingRef = useRef(false);
     arrivingRef.current = arrivals.length > 0;
     const reduceMotion = useRef(
@@ -556,17 +554,10 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
       seenIds.current = ids;
       renderer.current?.refresh();
       const edgeIds = new Set(props.data.edges.map((edge) => edge.id));
-      if (seenEdges.current === null) {
-        seenEdges.current = edgeIds;
-        seenRevision.current = props.data.revision;
-      } else if (!reduceMotion.current) {
-        const fresh = freshJevEdges(
-          props.data.edges,
-          seenEdges.current,
-          seenRevision.current,
-        );
-        seenEdges.current = edgeIds;
-        seenRevision.current = props.data.revision;
+      const since = seenRevision.current;
+      seenRevision.current = props.data.revision;
+      if (since !== null && !reduceMotion.current) {
+        const fresh = backgroundArrivals(props.data, since);
         if (fresh.length) {
           const born = performance.now();
           for (const edge of fresh) {
@@ -585,9 +576,6 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             ].slice(-24),
           );
         }
-      } else {
-        seenEdges.current = edgeIds;
-        seenRevision.current = props.data.revision;
       }
       if (
         renderer.current &&
