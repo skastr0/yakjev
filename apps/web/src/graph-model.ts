@@ -70,6 +70,29 @@ export function safeSourceHref(uri: string): string | undefined {
   }
 }
 
+export function nodeColor(status: Node["status"]) {
+  if (status === "active") return "#1d4a3c";
+  if (status === "done" || status === "archived") return "#a4ada1";
+  return "#386253";
+}
+
+// Archived nodes leave the drawing. The derived layout then follows what is shown.
+export function visibleGraph(graph: Graph, showArchived: boolean): Graph {
+  if (showArchived) return graph;
+  const nodes = graph.nodes.filter((node) => node.status !== "archived");
+  const ids = new Set(nodes.map((node) => node.id));
+  return {
+    ...graph,
+    nodes,
+    edges: graph.edges.filter(
+      (edge) => ids.has(edge.source) && ids.has(edge.target),
+    ),
+    suggestions: graph.suggestions.filter(
+      (item) => ids.has(item.source) && ids.has(item.target),
+    ),
+  };
+}
+
 export function searchNodes(nodes: readonly Node[], query: string) {
   const terms = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   return nodes.filter((node) => {
@@ -81,7 +104,11 @@ export function searchNodes(nodes: readonly Node[], query: string) {
 
 // Graphology is a render projection only. SQLite snapshots remain authoritative.
 // Reconcile in-place: no clear(), no layout restart, no camera reset on events.
-export function syncGraph(target: MultiDirectedGraph, data: Graph) {
+export function syncGraph(
+  target: MultiDirectedGraph,
+  data: Graph,
+  placed?: ReadonlyMap<string, { x: number; y: number }>,
+) {
   const nodes = new Set(data.nodes.map((node) => node.id));
   const saved = data.nodes.flatMap((node) =>
     node.position ? [node.position] : [],
@@ -90,22 +117,21 @@ export function syncGraph(target: MultiDirectedGraph, data: Graph) {
   for (const node of data.nodes) {
     const existing = target.hasNode(node.id);
     const position =
+      placed?.get(node.id) ??
       node.position ??
       (existing
         ? {
-            x: target.getNodeAttribute(node.id, "x"),
-            y: target.getNodeAttribute(node.id, "y"),
+            x: target.getNodeAttribute(node.id, "x") as number,
+            y: target.getNodeAttribute(node.id, "y") as number,
           }
         : initialPosition(node.id, saved));
     target.mergeNode(node.id, {
-      ...position,
+      x: position.x,
+      y: position.y,
       label: node.title,
       size: 9,
-      color:
-        node.status === "done" || node.status === "archived"
-          ? "#a4ada1"
-          : "#386253",
-      fixed: node.position?.pinned ?? false,
+      color: nodeColor(node.status),
+      fixed: placed ? false : (node.position?.pinned ?? false),
       status: node.status,
     });
   }

@@ -12,6 +12,7 @@ import {
   safeSourceHref,
   searchNodes,
   syncGraph,
+  visibleGraph,
 } from "./graph-model";
 
 const provenance = {
@@ -200,6 +201,21 @@ describe("render projection", () => {
     expect(searchNodes(nodes, "jev").map((item) => item.id)).toEqual(["b"]);
     expect(searchNodes(nodes, "skill")).toHaveLength(2);
     expect(searchNodes(nodes, "missing")).toHaveLength(0);
+  });
+  test("a derived layout replaces saved positions without pinning them", () => {
+    const graph = new MultiDirectedGraph();
+    const saved = node("a", { position: { x: 40, y: 40, pinned: true } });
+    syncGraph(graph, snapshot([saved]), new Map([["a", { x: -12, y: 7 }]]));
+    expect(graph.getNodeAttribute("a", "x")).toBe(-12);
+    expect(graph.getNodeAttribute("a", "y")).toBe(7);
+    expect(graph.getNodeAttribute("a", "fixed")).toBe(false);
+  });
+  test("archived nodes leave the visible graph until asked for", () => {
+    const data = snapshot([node("live"), node("old", { status: "archived" })]);
+    expect(visibleGraph(data, false).nodes.map((item) => item.id)).toEqual([
+      "live",
+    ]);
+    expect(visibleGraph(data, true).nodes).toHaveLength(2);
   });
   test("canonical source rendering never turns an executable URI into a link", () => {
     expect(safeSourceHref("javascript:alert(1)")).toBeUndefined();
