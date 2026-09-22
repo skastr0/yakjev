@@ -657,8 +657,7 @@ function alive(current: Session) {
 
 function answeredIds(current: Session) {
   const ids = new Set<string>();
-  for (const [id, slot] of current.held)
-    if (slot.kind !== "retry") ids.add(id);
+  for (const [id, slot] of current.held) if (slot.kind !== "retry") ids.add(id);
   return ids;
 }
 
