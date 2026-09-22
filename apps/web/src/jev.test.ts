@@ -150,8 +150,9 @@ test("typing ghosts start at the create point and label the relation", () => {
     strength: 1,
     label: initialTaxonomy.relations[0]!.label,
     kind: "typing",
+    relation,
   });
-  expect(ghosts[1]?.label).toBe("same");
+  expect(ghosts[1]).toMatchObject({ label: "same", relation });
 });
 
 test("confidence reads as a whole percent", () => {

@@ -119,6 +119,7 @@ export function typingGhosts(
     strength: clamp(judgment.relatedness),
     label: relationLabel(graph, judgment),
     kind: "typing",
+    ...(judgment.relation ? { relation: judgment.relation } : {}),
   }));
 }
 
