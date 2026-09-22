@@ -14,14 +14,14 @@ Config, first hit per field: `--server` / `--token`, then `YAKJEV_REMOTE_URL` (`
 
 Do not commit a real token. Payloads are inline JSON, `@file`, or `-`. `--timeout-ms` defaults to 30000.
 
-| Command | Payload |
-| --- | --- |
-| `read <view>` | `graph`, `history` `{after?,limit?}`, `search` `{query}`, `neighborhood` `{id,direction?,blocking?}`, `export`, `evaluation` `{id}`, `node` `{id}`, `edge` `{id}` or `{source,target}` |
-| `command` | `{requestId?, expectedRevision, command}` — same envelope as `POST /api/commands` |
-| `discover` | `{query, focusNodeId?, includeNodeIds?}` — lexical retrieval, not semantic search |
-| `evaluate` | `{requestId?, expectedRevision, query, focusNodeId?, includeNodeIds?}` |
-| `doctor` | config, `/healthz`, and `/api/session`; exit 0; status in `data.status` |
-| `capabilities`, `schema` | the same command and view table |
+| Command                  | Payload                                                                                                                                                                                |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read <view>`            | `graph`, `history` `{after?,limit?}`, `search` `{query}`, `neighborhood` `{id,direction?,blocking?}`, `export`, `evaluation` `{id}`, `node` `{id}`, `edge` `{id}` or `{source,target}` |
+| `command`                | `{requestId?, expectedRevision, command}` — same envelope as `POST /api/commands`                                                                                                      |
+| `discover`               | `{query, focusNodeId?, includeNodeIds?}` — lexical retrieval, not semantic search                                                                                                      |
+| `evaluate`               | `{requestId?, expectedRevision, query, focusNodeId?, includeNodeIds?}`                                                                                                                 |
+| `doctor`                 | config, `/healthz`, and `/api/session`; exit 0; status in `data.status`                                                                                                                |
+| `capabilities`, `schema` | the same command and view table                                                                                                                                                        |
 
 Success: `{"ok":true,"command":"...","data":...}` on stdout. Failure: `{"ok":false,"command":"yakjev","error":{"type","message","details?"}}` on stderr, exit 1.
 

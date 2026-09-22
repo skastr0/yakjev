@@ -146,6 +146,10 @@ test("an OK empty or non-JSON body resolves to undefined", async () => {
   ).resolves.toBeUndefined();
   const plain = stubFetch(() => new Response("pong", { status: 200 }));
   await expect(
-    request({ remoteUrl: "http://srv", fetchImpl: plain.fetchImpl }, "GET", "/x"),
+    request(
+      { remoteUrl: "http://srv", fetchImpl: plain.fetchImpl },
+      "GET",
+      "/x",
+    ),
   ).resolves.toBeUndefined();
 });

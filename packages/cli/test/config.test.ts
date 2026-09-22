@@ -12,7 +12,8 @@ import {
 
 const dirs: string[] = [];
 afterEach(async () => {
-  for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0))
+    await rm(dir, { recursive: true, force: true });
 });
 
 const tempConfig = async (contents?: string): Promise<string> => {
@@ -122,6 +123,9 @@ test("file values are used when env is absent; nothing resolves with no file", a
 test("env token beats the file token", async () => {
   const path = await tempConfig(JSON.stringify({ ownerToken: "file-tok" }));
   expect(
-    configuredOwnerToken({ YAKJEV_CONFIG: path, YAKJEV_OWNER_TOKEN: "env-tok" }),
+    configuredOwnerToken({
+      YAKJEV_CONFIG: path,
+      YAKJEV_OWNER_TOKEN: "env-tok",
+    }),
   ).toBe("env-tok");
 });

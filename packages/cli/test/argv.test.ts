@@ -24,10 +24,7 @@ test("a value option at the end reports a missing value", () => {
 });
 
 test("a value option consumes the next token even when it looks like an option", () => {
-  const args = parseCliArguments(
-    ["--server", "--token", "abc"],
-    valueOptions,
-  );
+  const args = parseCliArguments(["--server", "--token", "abc"], valueOptions);
   expect(args.first("--server")).toBe("--token");
   expect(args.optionNames).toEqual(["--server"]);
   expect(args.positionals).toEqual(["abc"]);
@@ -41,7 +38,10 @@ test("a bare dash is a positional (stdin marker), not an option", () => {
 });
 
 test("equals syntax is not split: --server=x is one unknown option", () => {
-  const args = parseCliArguments(["read", "graph", "--server=http://x"], valueOptions);
+  const args = parseCliArguments(
+    ["read", "graph", "--server=http://x"],
+    valueOptions,
+  );
   expect(args.optionNames).toEqual(["--server=http://x"]);
   expect(args.first("--server")).toBeUndefined();
   expect(args.positionals).toEqual(["read", "graph"]);

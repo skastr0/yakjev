@@ -59,7 +59,9 @@ test("writeJson emits single-line JSON plus newline when piped", () => {
 test("writeJson pretty-prints when the stream is a TTY", () => {
   const out = capture(true);
   writeJson(ok("command", { a: 1 }), out.stream);
-  expect(out.text()).toBe('{\n  "ok": true,\n  "command": "command",\n  "data": {\n    "a": 1\n  }\n}\n');
+  expect(out.text()).toBe(
+    '{\n  "ok": true,\n  "command": "command",\n  "data": {\n    "a": 1\n  }\n}\n',
+  );
 });
 
 test("writeJson defaults to compact when isTTY is unset", () => {

@@ -1,11 +1,7 @@
 import { expect, test } from "bun:test";
 import { CommandRequest, EvaluationRequest } from "@yakjev/protocol";
 import { Effect, Schema } from "effect";
-import {
-  COMMAND_REFERENCE,
-  EXAMPLES,
-  READ_REFERENCE,
-} from "../src/reference";
+import { COMMAND_REFERENCE, EXAMPLES, READ_REFERENCE } from "../src/reference";
 
 const COMMAND_TYPES = [
   "capture",
