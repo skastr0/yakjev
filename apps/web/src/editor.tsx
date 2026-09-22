@@ -54,6 +54,7 @@ export function GraphEditor({
   onAsserted,
   onFocus,
   onGhosts,
+  onPlace,
   focused,
   paint,
   onPaint,
@@ -68,6 +69,8 @@ export function GraphEditor({
   onFocus: (id: string) => void;
   // Links Jev will make for the intention being typed; [] when none.
   onGhosts?: (ghosts: Ghost[]) => void;
+  // Pin a node about to be created to the point the owner clicked.
+  onPlace?: (id: string, at: Point) => void;
   focused: boolean;
   paint: Readonly<Record<string, string>>;
   onPaint: (id: string, color: string) => void;
@@ -92,6 +95,7 @@ export function GraphEditor({
           onCreated={onCreated}
           onPaint={onPaint}
           onGhosts={onGhosts}
+          onPlace={onPlace}
         />
       )}
       {mode.kind === "node" && (
@@ -209,9 +213,11 @@ function Create({
   onCreated,
   onPaint,
   onGhosts,
+  onPlace,
 }: {
   graph: Graph;
   at: Point;
+  onPlace: ((id: string, at: Point) => void) | undefined;
   execute: Execute;
   onClose: () => void;
   onCreated: (id: string) => void;
@@ -239,12 +245,13 @@ function Create({
         event.preventDefault();
         const built = captureWithJev(title, draft.result, graph);
         if (!built) return;
-        void execute(built.command, graph.revision).then((ok) => {
-          if (!ok) return;
-          onGhosts?.([]);
-          onPaint(built.nodeId, color);
-          onCreated(built.nodeId);
-        });
+        // The node appears where the owner clicked, at once; the save runs
+        // behind it and a failure removes it with an error notice.
+        onPlace?.(built.nodeId, at);
+        onGhosts?.([]);
+        onPaint(built.nodeId, color);
+        void execute(built.command, graph.revision);
+        onCreated(built.nodeId);
       }}
     >
       <input

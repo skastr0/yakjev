@@ -40,6 +40,8 @@ export type CanvasHandle = {
   anchorNode: (id: string) => Point | null;
   anchorBetween: (source: string, target: string) => Point | null;
   fit: () => void;
+  // Put a node that is about to arrive at this client point, not a layout pick.
+  placeAt: (id: string, client: Point) => void;
 };
 
 declare global {
@@ -136,6 +138,21 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
       return { x: box.left + point.x, y: box.top + point.y };
     }
 
+    // Nodes the owner put somewhere by hand: their arrival never moves the camera.
+    const placedHere = useRef(new Set<string>());
+    function placeAt(id: string, client: Point) {
+      const sigma = renderer.current;
+      const box = container.current?.getBoundingClientRect();
+      if (!sigma || !box) return;
+      // rememberLayout keeps a known point, so the node lands exactly here.
+      const point = sigma.viewportToGraph({
+        x: client.x - box.left,
+        y: client.y - box.top,
+      });
+      positions.current.set(id, { x: point.x, y: point.y });
+      placedHere.current.add(id);
+    }
+
     function fit(duration?: number) {
       const sigma = renderer.current;
       if (!sigma) return;
@@ -171,6 +188,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         return { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
       },
       fit,
+      placeAt,
     }));
 
     // Acceptance aims a trusted shift-drag at these CSS-pixel anchors.
@@ -186,6 +204,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           return { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
         },
         fit,
+        placeAt,
       };
       window.__yakjevCanvas = hook;
       return () => {
@@ -645,7 +664,13 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         .map((node) => node.id)
         .sort()
         .join("\n");
-      const grew = ids !== seenIds.current;
+      const seenBefore = new Set(seenIds.current.split("\n"));
+      const newcomers = props.data.nodes.filter(
+        (node) => !seenBefore.has(node.id),
+      );
+      const grew =
+        ids !== seenIds.current &&
+        !newcomers.every((node) => placedHere.current.has(node.id));
       seenIds.current = ids;
       renderer.current?.refresh();
       const edgeIds = new Set(props.data.edges.map((edge) => edge.id));

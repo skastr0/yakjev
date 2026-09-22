@@ -441,6 +441,7 @@ function App() {
               onAsserted={(id) => setMode({ kind: "edge", id })}
               onFocus={toggleFocus}
               onGhosts={onTypingGhosts}
+              onPlace={(id, at) => canvas.current?.placeAt(id, at)}
               paint={paint}
               onPaint={(id, color) =>
                 setPaint((current) => writePaint(current, id, color))
