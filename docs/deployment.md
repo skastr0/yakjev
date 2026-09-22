@@ -1,154 +1,46 @@
-# Deploying yakjev (Tailscale-only on Railway)
+# Deploying yakjev
 
-This document does not deploy anything. Production traffic stays on the tailnet: the app binds `127.0.0.1:3210` and Tailscale Serve terminates HTTPS. There is no public Railway domain, no TCP proxy, and no Tailscale Funnel.
+Public HTTPS on Railway. The owner token is the lock. There is no private network path.
 
-Keep `TS_AUTHKEY` only in Railway service secrets. Keep personal tailnet names and origins out of GitHub and CI; authorized orbs receive the remote URL through Amp settings and join via OIDC, as described in [orb access](orbs.md).
+Keep `YAKJEV_OWNER_TOKEN` only in Railway service secrets. Never put it in Vite, a `VITE_` name, or the page source.
 
-## Shape
+| Piece | Choice |
+| --- | --- |
+| Runtime | Bun, `packages/server/src/main.ts` |
+| Process | `deploy/entrypoint.sh` |
+| Ingress | Railway service domain → `PORT` |
+| Data | one volume at `/data` |
+| Auth | `Authorization: Bearer <YAKJEV_OWNER_TOKEN>` and the browser session cookie |
 
-| Piece            | Where                                                                    |
-| ---------------- | ------------------------------------------------------------------------ |
-| Image            | Root `Dockerfile` (Bun 1.4.2 + pinned Tailscale + tini)                  |
-| Supervisor       | `deploy/entrypoint.sh` (userspace `tailscaled`, Serve, app; fail closed) |
-| Railway settings | Dockerfile builder, 1 replica, no healthcheck path                       |
-| App data         | `/data/yakjev` (`YAKJEV_DATA_DIR`)                                       |
-| Tailscale state  | `/data/tailscale` (`TS_STATE_DIR`)                                       |
-| Public origin    | `YAKJEV_ORIGIN=https://<hostname>.<tailnet>.ts.net`                      |
+## Railway
 
-Railway mounts **one** volume at `/data`. Volumes cannot be used with replicas ([Railway volumes reference](https://docs.railway.com/volumes/reference)).
+1. Dockerfile builder. Leave the start command empty so the image entrypoint runs.
+2. Attach one volume at `/data`. One replica. Volumes cannot be used with replicas.
+3. Generate a Railway service domain. Do not add a TCP proxy.
+4. Set service variables:
 
-## Manual deploy (operator)
+| Name | Value |
+| --- | --- |
+| `YAKJEV_OWNER_TOKEN` | at least 32 random characters |
+| `YAKJEV_ORIGIN` | `https://<generated-domain>` if not inferred from `RAILWAY_PUBLIC_DOMAIN` |
+| `TYPESAFE_API_KEY` | server-side Jev calls; never a `VITE_` name |
+| `YAKJEV_DATA_DIR` | `/data/yakjev` |
+| `YAKJEV_LISTEN_HOST` | `0.0.0.0` |
 
-Do this on a machine that already has Railway and Tailscale admin access. Do not apply tailnet policy from CI.
+Do not set `YAKJEV_DEV_AUTH` in Railway. The image runs with `NODE_ENV=production`, and the server exits if that flag is set.
 
-### 1. Repo and Railway project
+`/healthz` is public and returns no graph data. Graph reads, writes, and `/mcp` require the owner token. The browser exchanges that token for an HttpOnly cookie.
 
-1. Publish the public GitHub repo (no secrets in git).
-2. Create a Railway project and one service. Railway detects the root `Dockerfile`; set `RAILWAY_DOCKERFILE_PATH=Dockerfile` explicitly and leave the start-command override empty so the image entrypoint runs. New Railway services do not read legacy `railway.json`. Verify that build logs say `Using detected Dockerfile!`; the API builder enum alone does not establish which build path ran.
-3. Attach **one** volume, mount path `/data`. Keep **one replica**.
-4. Do **not** click Generate Domain. Do **not** add a TCP proxy. If Railway created a `*.railway.app` domain, delete it before the first successful start. The entrypoint exits if `RAILWAY_PUBLIC_DOMAIN` or `RAILWAY_TCP_PROXY_DOMAIN` is set.
-5. Leave the healthcheck path empty and set restart policy to `ON_FAILURE` (10 retries). See [Private health checks](#private-health-checks).
+## MCP
 
-### 2. Tailscale: HTTPS, tags, auth key
-
-1. Enable MagicDNS and HTTPS certificates in the admin console. Enabling HTTPS publishes machine names in Certificate Transparency (public ledger). Use a boring hostname such as `yakjev`. Do not put secrets in the hostname. See [Enabling HTTPS](https://tailscale.com/docs/how-to/set-up-https-certificates).
-2. Use a **stable host tag** for Railway hosts, such as `tag:railway`. Define it in `tagOwners` before minting a tagged auth key. An OAuth provisioning credential should carry only that host-role tag: combining unrelated host tags can require enrollment keys to carry the entire set. Keep provisioning separate from administration credentials. See [Tags](https://tailscale.com/docs/features/tags).
-3. Generate an auth key: **tagged**, **not ephemeral**, **reusable only if you must re-register**, expiry 1–90 days. Treat reusable keys as passwords. After the node is Running with persisted `/data/tailscale`, you can revoke the key. See [Auth keys](https://tailscale.com/docs/features/access-control/auth-keys).
-4. Set Railway **service** variables (not shared git, not orbs):
-
-   | Variable             | Value                                                             |
-   | -------------------- | ----------------------------------------------------------------- |
-   | `YAKJEV_ORIGIN`      | `https://<hostname>.<tailnet>.ts.net` (no trailing slash)         |
-   | `YAKJEV_OWNER_TOKEN` | Railway secret, at least 32 characters; required for graph writes |
-   | `YAKJEV_OWNER_ID`    | optional; defaults to `owner`                                     |
-   | `TYPESAFE_API_KEY`   | Railway secret for server-side Jev calls; never a `VITE_` name    |
-   | `TS_HOSTNAME`        | same `<hostname>` as in `YAKJEV_ORIGIN`                           |
-   | `TS_ADVERTISE_TAGS`  | `tag:railway` (or your existing Railway host tag)                 |
-   | `TS_AUTHKEY`         | the tagged key (Railway secret / sealed variable)                 |
-   | `YAKJEV_DATA_DIR`    | `/data/yakjev`                                                    |
-   | `TS_STATE_DIR`       | `/data/tailscale`                                                 |
-
-   Do not set `YAKJEV_DEV_AUTH` in Railway. The image runs with `NODE_ENV=production`, and the server exits if that flag is set. The synthetic token exists only for loopback development.
-
-   After the first successful login, you may remove `TS_AUTHKEY`. Fresh empty state without a key **fails closed**.
-
-### 3. Grants (additive — this is the usual footgun)
-
-Tailscale access rules are **deny-by-default** and **allow-if-any-rule-matches**. Adding a tight grant does **not** revoke a broader one. Personal tailnets often still have the default:
+Endpoint: `https://<generated-domain>/mcp`
 
 ```json
 {
-  "grants": [{ "src": ["*"], "dst": ["*"], "ip": ["*"] }]
+  "Authorization": "Bearer <YAKJEV_OWNER_TOKEN>"
 }
 ```
 
-If that (or `autogroup:member` → `*`) remains, a new `tcp:443` grant to `tag:server` changes nothing. Replace the wildcard; do not append beside it.
+## Backup
 
-Restricted example (illustrative tags only):
-
-```jsonc
-{
-  "tagOwners": {
-    "tag:server": ["autogroup:admin"],
-  },
-  "grants": [
-    {
-      "src": ["autogroup:member"],
-      "dst": ["tag:server"],
-      "ip": ["tcp:443"],
-    },
-  ],
-}
-```
-
-Narrower still: a group of operators instead of `autogroup:member`. Do not use `"dst": ["*"]` or `"ip": ["*"]` for this host. Do not enable Funnel on the node (`tailscale funnel` / Serve `AllowFunnel`). Serve is tailnet-only ([Serve](https://tailscale.com/docs/features/tailscale-serve)).
-
-This repo does not modify your tailnet. Apply grants yourself in the admin console.
-
-### 4. First start and verify
-
-1. Deploy the service. Watch logs for `yakjev: ready origin=...`.
-2. From a tailnet client that is allowed `tcp:443`:
-   `curl -fsS "$YAKJEV_ORIGIN/healthz"`.
-3. Confirm `tailscale serve status` on the node (Railway exec/logs) shows HTTPS → `http://127.0.0.1:3210` and Funnel off.
-4. Confirm no Railway public domain and no TCP proxy.
-
-Railway's `SUCCESS` status alone is insufficient: a Railpack build can start the Bun app without running Tailscale. Check Dockerfile build logs and the entrypoint's `ready origin=...` log, then perform the tailnet HTTPS probe. Keep the long-lived provisioning credential in your local secret manager; pass only a scoped enrollment key into the Railway service, never into orb settings.
-
-## Private health checks
-
-The app listens on **loopback only**. Railway healthchecks originate as `healthcheck.railway.app` and use `PORT` ([Healthchecks](https://docs.railway.com/deployments/healthchecks)). They cannot reach `127.0.0.1:3210`, and exposing `PORT` on `0.0.0.0` would fight the Tailscale-only design.
-
-So: **no Railway `healthcheckPath`**. Restart policy is `ON_FAILURE`. The entrypoint exits if `tailscaled` or the app dies, which is what Railway restarts. Volume-backed deploys already have downtime ([volumes + healthchecks](https://docs.railway.com/deployments/healthchecks)).
-
-In-container check: `curl -fsS http://127.0.0.1:3210/healthz` (SQLite-backed). From the tailnet: `GET $YAKJEV_ORIGIN/healthz`.
-
-## Backups and restore
-
-Railway supports volume backups, including SQLite data ([Volume backups](https://docs.railway.com/volumes/backups)). For a known-consistent application backup, use SQLite's Backup API or `VACUUM INTO`; copying a live database file alone can be inconsistent ([SQLite backup](https://sqlite.org/backup.html), [VACUUM INTO](https://sqlite.org/lang_vacuum.html)).
-
-Before a **manual** Railway snapshot you care about:
-
-1. Create a fresh backup with `VACUUM INTO` to a new filename under `/data/yakjev`, or use the Backup API. Alternatively, fully stop all writers before copying the database and its sidecars; a quiet period is not sufficient.
-2. Trigger a Railway volume backup, then test restoring the SQLite backup into a disposable database and run `PRAGMA integrity_check`. Scheduled volume backups do not replace restore testing.
-3. Wipe volume deletes all Railway backups.
-
-Restore: Railway Backups tab → Restore → review staged volume swap → Deploy. Restores only into the same project + environment. The old volume stays unmounted; do not wipe it until the node is healthy. Tailscale node identity lives under `/data/tailscale`; restoring an old snapshot can resurrect an old node key. After restore, check the machine still shows Running and Serve still points at `127.0.0.1:3210`.
-
-## Auth-key lifecycle
-
-| Phase                               | Action                                                                                                      |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| First boot, empty `/data/tailscale` | `TS_AUTHKEY` required or the container exits                                                                |
-| Running, state on volume            | Key not required; identity is the state file                                                                |
-| Key expires                         | Already-registered node stays until **node** key expiry (tagged devices disable node-key expiry by default) |
-| Re-register / lost volume           | Mint a new tagged, non-ephemeral key; do not reuse an ephemeral key                                         |
-| Key stolen                          | Revoke in admin console; rotate; treat the node as untrusted until re-auth                                  |
-| Ephemeral key                       | Do not use; Railway restarts would drop the node                                                            |
-
-## Amp orbs / CI
-
-`.agents/setup` installs clients without authentication; `.agents/resume` joins with an ephemeral Amp OIDC identity. Authorized orbs use Railway credentials and `YAKJEV_REMOTE_URL` from Amp settings, never the server's `TS_AUTHKEY`. Grant orb access to the deployed host's HTTPS port explicitly. See [orb access](orbs.md). CI only builds and tests; it has no production credentials.
-
-## Pinning
-
-- Bun image: `oven/bun:1.4.2-debian`
-- Tailscale: `1.102.4` from `pkgs.tailscale.com/stable` (Debian Trixie)
-- Init: Debian `tini` as PID 1
-
-## Official docs used
-
-- https://tailscale.com/docs/concepts/userspace-networking
-- https://tailscale.com/docs/reference/tailscaled
-- https://tailscale.com/docs/reference/tailscale-cli/up
-- https://tailscale.com/docs/reference/tailscale-cli/serve
-- https://tailscale.com/docs/features/access-control/auth-keys
-- https://tailscale.com/docs/how-to/set-up-https-certificates
-- https://tailscale.com/docs/features/tags
-- https://docs.railway.com/builds/dockerfiles
-- https://docs.railway.com/config-as-code/reference
-- https://docs.railway.com/volumes/reference
-- https://docs.railway.com/volumes/backups
-- https://docs.railway.com/deployments/healthchecks
-- https://docs.railway.com/networking/public-networking
-- https://sqlite.org/backup.html
+Railway volume backups include the SQLite file. For a consistent copy, use SQLite `VACUUM INTO` rather than copying a live database file. Restoring a volume restores the graph. There is no separate network identity to restore.

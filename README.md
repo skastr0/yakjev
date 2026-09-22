@@ -34,12 +34,12 @@ Deployment tests also require Bash, Python 3, and curl. See `.env.example` for c
 | `packages/mcp`      | Streamable HTTP tools over the shared server services        |
 | `apps/web`          | React/Sigma graph, persistent inspector, capture and editing |
 | `tests/acceptance`  | Black-box HTTP/SSE graph-loop acceptance                     |
-| `deploy`            | Railway image, Tailscale startup, synthetic deployment tests |
+| `deploy`            | Railway image and synthetic deployment tests                 |
 | `.agents`           | Orb setup/resume and vendored Jev skill                      |
 
 ## Amp orbs
 
-`.agents/setup` installs the runtime, dependencies, Railway/Quasar/Tailscale clients, and builds the web client. It is safe to repeat and contains no authentication. `.agents/resume` uses Amp OIDC for ephemeral tailnet access when configured. `.amp/services.yaml` declares the API and an authenticated Amp portal for the web client; run `amp orb services ensure` inside an orb. See [orb access](docs/orbs.md) for credential scopes and deployment operations.
+`.agents/setup` installs the runtime, dependencies, and builds the web client. It is safe to repeat and contains no authentication. `.amp/services.yaml` declares the API and an authenticated Amp portal for the web client; run `amp orb services ensure` inside an orb. See [orb access](docs/orbs.md) for credential scopes.
 
 The official TypeSafe skill is vendored in `.agents/skills/typesafe-ai`, with its MIT license and pinned source recorded in `THIRD_PARTY_NOTICES.md`. Clones and orbs get the same guidance without installing a global skill manager. No personal skills or private machine configuration are copied into this public repository.
 

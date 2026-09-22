@@ -2,7 +2,7 @@
 // Read-only deployed-instance smoke. Never writes graph data and never mutates
 // deployment state.
 //
-//   YAKJEV_REMOTE_URL=https://<hostname>.<tailnet>.ts.net bun tests/acceptance/deploy-smoke.ts
+//   YAKJEV_REMOTE_URL=https://<service>.up.railway.app bun tests/acceptance/deploy-smoke.ts
 //
 // Requires a tailnet identity that is allowed tcp:443 to the host. The script
 // fails loudly if the environment variable is missing: a silent skip would look
@@ -83,12 +83,10 @@ try {
   record("unauthenticated write is refused", false, String(error));
 }
 
-// 4. The deployment must not serve a public hostname. Checked from the operator
-//    side; here we only confirm the configured origin is a tailnet hostname.
 record(
-  "configured origin looks like a tailnet host",
-  /\.ts\.net$/.test(new URL(remoteOrigin).hostname),
-  "origin is a tailnet hostname",
+  "configured origin is https",
+  new URL(remoteOrigin).protocol === "https:",
+  remoteOrigin,
 );
 
 const failed = checks.filter((check) => !check.ok);

@@ -137,16 +137,7 @@ backend is superseded.
 
 ## Deployment
 
-The application at [b26f875](https://github.com/skastr0/yakjev/commit/b26f875b94885cc6a0725fc4d181189906b6692d)
-was deployed to the existing private Railway service on 2026-09-22. Railway reports SUCCESS;
-fresh container logs confirm authorized Tailscale registration, the loopback health readiness gate,
-HTTPS Serve, and the entrypoint's ready message. There are no public domains or TCP proxies.
-
-External reachability remains unverified: the configured hostname fails resolution from two orbs;
-a TLS-validated probe using the node address from deployment logs times out connecting to port 443.
-The read-only smoke reached none of the HTTP endpoints (only its hostname-shape check passed).
-These observations do not identify a policy or DNS cause. No tailnet policy was changed, and no
-production graph data was read or written by the verification probes.
+Public HTTPS on the Railway service domain. The owner token is the lock. Private network ingress is not part of this deploy.
 
 ## Not yet verifiable, and why
 

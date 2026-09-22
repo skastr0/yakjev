@@ -13,7 +13,7 @@ Read `docs/product-direction-entanglement-graph.md` before product work. It owns
 - The server owns graph semantics and writes. HTTP and MCP share `Store`, `Auth`, and `Evaluations`; neither owns a second database or rule engine. Preserve actor-scoped replay, atomic revision checks, immutable history, and explicit suggestion acceptance.
 - Authorized Amp orbs must be able to use Yakjev as MCP clients, including from the owner's other projects. Tailnet connectivity and application authorization are separate requirements; access to Yakjev does not grant Railway deployment authority or access to unrelated tailnet services.
 - Use the checked-in TypeSafe skill when implementing Jev. Keep provider credentials server-side, judgments versioned, and edits reversible. Never treat confidence as permission.
-- Deployment is private Tailscale Serve HTTPS to a loopback app on Railway. Public source does not mean public user data. Read `docs/deployment.md` before deployment changes.
+- Deployment is public HTTPS on a Railway service domain. The owner token is the lock. Read `docs/deployment.md` before deployment changes.
 
 ## Workflow
 
@@ -27,5 +27,5 @@ Read `docs/product-direction-entanglement-graph.md` before product work. It owns
 - ❌ Automatically merging similar ideas or deleting disputed edges. ✅ Preserve provenance and support correction.
 - ❌ Re-layout everything on each update. ✅ Preserve positions and the user's mental map.
 - ❌ Mock success or invent provider judgments. ✅ Record unavailable/failed evaluations honestly; verify the composed HTTP/MCP and rendered browser loop.
-- ❌ Public domains, Funnel, wildcard CORS, secrets in Vite, or production state in orb snapshots. ✅ Private ingress, explicit origins, server-only secrets, and synthetic development data.
+- ❌ Wildcard CORS, secrets in Vite, the owner token in client code, or production state in orb snapshots. ✅ Explicit origin, server-only secrets, and synthetic development data.
 - ❌ Building distribution infrastructure or integrations before the graph works. ✅ Ship the smallest useful graph loop first.

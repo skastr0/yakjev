@@ -43,9 +43,7 @@ Candidate retrieval is deterministic lexical and graph-neighborhood selection, c
 
 Amp orbs are clients of Yakjev, not only its development environment. The owner's projects must be able to capture into and retrieve relevant neighborhoods from the same graph while preserving project identity and provenance. Access must not depend on working in the Yakjev repository.
 
-Keep three boundaries separate: OIDC enrollment allows an orb to join the tailnet; a narrow network grant allows HTTPS to Yakjev; application authorization controls graph reads and edits. Client projects need only approved enrollment, network access, the endpoint, and an owner token—not Railway credentials or the server enrollment key. See [MCP configuration](mcp.md) and [orb access](orbs.md). Configuring arbitrary client projects or broadening tailnet policy is not an application startup side effect.
-
-The first version has one owner. Bearer credentials produce a server-derived actor; identity headers and actor arguments are not trusted. The browser exchanges the owner token for a signed, expiring HttpOnly/SameSite=Strict cookie (`Secure` and `__Host-` on HTTPS). Cookie mutations require exact Origin. MCP accepts bearer only. Host and Origin checks run before request dispatch. Production rejects synthetic dev auth and listens only on loopback behind private Tailscale Serve.
+The first version has one owner. Bearer credentials produce a server-derived actor; identity headers and actor arguments are not trusted. The browser exchanges the owner token for a signed, expiring HttpOnly/SameSite=Strict cookie (`Secure` and `__Host-` on HTTPS). Cookie mutations require exact Origin. MCP accepts bearer only. Host and Origin checks run before request dispatch. Production rejects synthetic dev auth. The public Railway domain is the ingress; the owner token is the lock. See [MCP configuration](mcp.md).
 
 ## First usable loop
 

@@ -194,7 +194,7 @@ function startChild(
   return spawn({
     cmd: ["bun", serverEntry],
     cwd: repoRoot,
-    // Deliberately minimal environment: no Railway, Tailscale, Amp, or provider
+    // Deliberately minimal environment: no Railway, Amp, or provider
     // credentials can leak into the disposable acceptance run.
     env: {
       PATH: process.env.PATH ?? "",

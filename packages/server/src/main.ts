@@ -3,17 +3,12 @@ import { resolve } from "node:path";
 import { createApp } from "./app";
 
 const root = resolve(import.meta.dir, "../../..");
-const port = Number(process.env.YAKJEV_LISTEN_PORT ?? 3210);
+const port = Number(
+  process.env.PORT ?? process.env.YAKJEV_LISTEN_PORT ?? 3210,
+);
 if (!Number.isInteger(port) || port < 1 || port > 65535)
-  throw new Error("Invalid YAKJEV_LISTEN_PORT");
-if (
-  process.env.YAKJEV_LISTEN_HOST &&
-  process.env.YAKJEV_LISTEN_HOST !== "127.0.0.1"
-) {
-  throw new Error(
-    "Yakjev must listen on loopback; use a trusted proxy for remote access",
-  );
-}
+  throw new Error("Invalid listen port");
+const listenHost = process.env.YAKJEV_LISTEN_HOST ?? "127.0.0.1";
 const configuredOrigin = process.env.YAKJEV_ORIGIN;
 if (process.env.NODE_ENV === "production" && !configuredOrigin) {
   throw new Error("Production requires YAKJEV_ORIGIN");
@@ -53,12 +48,12 @@ const app = createApp({
 });
 await app.ready();
 const server = Bun.serve({
-  hostname: "127.0.0.1",
+  hostname: listenHost,
   port,
   maxRequestBodySize: 1024 * 1024,
   fetch: app.fetch,
 });
-console.log(`yakjev listening on loopback port ${server.port}`);
+console.log(`yakjev listening on ${listenHost}:${server.port}`);
 let stopping = false;
 async function stop() {
   if (stopping) return;

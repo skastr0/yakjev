@@ -10,7 +10,7 @@ import { Evaluations } from "@yakjev/server/evaluation";
 import { Store, storeLayer } from "@yakjev/server/store";
 import { mcpLayer, provideActor } from "../src/index.ts";
 
-const origin = "https://yakjev.example.ts.net";
+const origin = "https://yakjev.example.com";
 const token = "owner-token-at-least-32-characters-long";
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {

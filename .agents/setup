@@ -36,17 +36,6 @@ time bun run build
 
 if [[ "${AMP_ORB:-}" == 1 && "$(uname -s)" == Linux ]]; then
   # Install clients only; authentication belongs in resume, after snapshotting.
-  sudo install -d /etc/systemd/system/tailscaled.service.d
-  sudo tee /etc/systemd/system/tailscaled.service.d/amp-orb.conf >/dev/null <<'EOF'
-[Service]
-Environment=TS_ASSUME_NETWORK_UP_FOR_TEST=true
-EOF
-  if ! command -v tailscale >/dev/null; then
-    curl -fsSL https://tailscale.com/install.sh | sh
-  fi
-  sudo systemctl daemon-reload
-  sudo systemctl enable tailscaled
-
   for spec in '@railway/cli@5.58.0' '@skastr0/quasar-cli@0.5.3'; do
     package="${spec%@*}"
     expected="${spec##*@}"

@@ -20,7 +20,7 @@ async function fixture() {
   const options = {
     databasePath: `${dir}/graph.sqlite`,
     webRoot: `${dir}/web`,
-    origin: "https://yakjev.example.ts.net",
+    origin: "https://yakjev.example.com",
     ownerToken: "synthetic-owner-test-token-with-40-characters",
   };
   const app = createApp(options, Layer.effect(Discovery, makeDiscovery(null)));
@@ -207,9 +207,9 @@ test("all data reads and writes reject missing, wrong and spoofed credentials", 
         await request(path, {
           headers: {
             authorization: "Bearer invalid",
-            "tailscale-user-login": "owner",
+            "x-user-login": "owner",
             "x-actor": "owner",
-            "x-forwarded-host": "yakjev.example.ts.net",
+            "x-forwarded-host": "yakjev.example.com",
           },
         })
       ).status,
@@ -226,7 +226,7 @@ test("all data reads and writes reject missing, wrong and spoofed credentials", 
       "content-type": "application/json",
       authorization: `Bearer ${options.ownerToken}`,
       "x-actor": "forged",
-      "tailscale-user-login": "forged",
+      "x-user-login": "forged",
     },
     body: JSON.stringify(command),
   });
@@ -440,7 +440,7 @@ test("mounted MCP over TCP authenticates every request and shares HTTP graph and
   expect(
     (
       await rpc("initialize", initialize, "Bearer forged", {
-        "tailscale-user-login": "owner",
+        "x-user-login": "owner",
         "x-actor": "owner",
       })
     ).status,
