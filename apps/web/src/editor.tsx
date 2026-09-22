@@ -48,7 +48,7 @@ export function GraphEditor({
   focused: boolean;
 }) {
   if (!anchor) return null;
-  const style = placeCard(anchor);
+  const style = placeCard(anchor, mode.kind);
   return (
     <div
       className="graph-editor"
@@ -556,15 +556,44 @@ function RelationChoices({
   );
 }
 
-function placeCard(anchor: Point): { left: number; top: number } {
-  const width = 300;
+function placeCard(
+  anchor: Point,
+  kind?: Mode["kind"],
+): { left: number; top: number } {
   const margin = 12;
-  let left = anchor.x + 16;
-  let top = anchor.y - 12;
-  if (left + width > window.innerWidth - margin)
-    left = Math.max(margin, anchor.x - width - 16);
-  if (top > window.innerHeight - 220) top = window.innerHeight - 220;
-  if (top < margin) top = margin;
+  const innerW = typeof window !== "undefined" ? window.innerWidth : 1024;
+  const innerH = typeof window !== "undefined" ? window.innerHeight : 768;
+  const cardWidth = Math.min(300, Math.max(0, innerW - margin * 2));
+  const cardHeight =
+    kind === "create" ? 80 : Math.min(320, Math.max(0, innerH - margin * 2));
+
+  const isCenter =
+    Math.abs(anchor.x - innerW / 2) <= 16 &&
+    Math.abs(anchor.y - innerH / 2) <= 16;
+
+  let left: number;
+  let top: number;
+
+  if (isCenter) {
+    left = Math.round((innerW - cardWidth) / 2);
+    top = Math.round((innerH - cardHeight) / 2);
+  } else {
+    left = anchor.x + 16;
+    if (left + cardWidth > innerW - margin) {
+      left = anchor.x - cardWidth - 16;
+    }
+    top = anchor.y - 12;
+    if (top + cardHeight > innerH - margin) {
+      top = anchor.y - cardHeight - 12;
+    }
+  }
+
+  const maxLeft = Math.max(margin, innerW - margin - cardWidth);
+  const maxTop = Math.max(margin, innerH - margin - cardHeight);
+
+  left = Math.min(Math.max(margin, left), maxLeft);
+  top = Math.min(Math.max(margin, top), maxTop);
+
   return { left, top };
 }
 
