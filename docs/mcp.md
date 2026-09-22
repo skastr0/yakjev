@@ -17,12 +17,13 @@ Actor is `{ id, channel: "mcp" }` from the bearer. Arguments named `actor`, `use
 
 Every mutation is one `graph_command` call: `{ requestId, expectedRevision, command }`. Read `revision` from `graph_read` first; a stale `expectedRevision` conflicts without writing. Re-sending an identical requestId replays its original receipt; the same requestId with a changed payload conflicts.
 
-- `capture`: nodes + edges + a capture record, atomically. New nodes only; existing nodes go in `capture.nodeIds`.
+- `capture`: nodes + edges + a capture record, atomically. New nodes only; existing nodes go in `capture.nodeIds`. Jev then connects each new node to related intentions in the background (as actor `jev`); send `autoConnect: false` to skip that.
 - `capture.remove`: drop the capture record only. Nodes and edges it created stay, and `history` keeps the original command. A capture also feeds its text into Jev discovery input for every nodeId it names — including ids whose nodes were later removed — so `capture.remove` is what detaches that context.
 - `node.put`: create or replace a node. `status: "archived"` retires a node without deleting it.
 - `node.remove`: `ids[]` plus optional `removeEdges` and `rationale`. Refuses while incident edges exist — the error lists their ids — unless `removeEdges: true` cascades them away. Cascaded corrected or disputed edges keep their suppression exactly as `edge.remove`'s default does; plain cascaded assertions leave no trace. Pending suggestions on removed endpoints become superseded. Captures keep their `nodeIds` as historical provenance.
 - `edge.put`: new directed assertions only; an existing pair must be explicitly reframed.
 - `edge.reframe`: correct an existing edge's relation, rationale, or state.
+- `edge.remove` on an edge Jev made (it has `origin`) suppresses the pair by default and teaches Jev: the removal is sent to later judgments as an owner correction.
 - `edge.remove`: resolve by `id` or by a directed `source` + `target` pair; a mismatched `id`/pair combination and a reverse-only pair fail. `suppress` records the pair as rejected for machine inference: it defaults on for corrected or disputed edges, whose suppression would otherwise die with the edge, and off for plain assertions. Suppression blocks `suggestion.record` in both directions but never an explicit `edge.put`, and it is permanent. Pending suggestions for exactly that pair become superseded.
 - `layout.set`: `{ id, x, y, pinned }` positions, or `{ id, clear: true }` to un-place a node.
 - `taxonomy.replace`: replace relation definitions; referenced types cannot be dropped.

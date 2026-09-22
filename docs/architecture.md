@@ -29,9 +29,14 @@ Graph snapshots hold evaluation summaries. Full input audit, probabilities, prov
 
 ## Jev
 
-Candidate retrieval is lexical and graph-neighborhood selection, capped at 24 nodes with explicit coverage/truncation. Jev then scores each candidate's relatedness and classifies relation and direction against the taxonomy. Source URLs are unfetched pointers; only supplied context participates.
+Jev runs as the graph is edited; there is no "ask" step.
 
-`Evaluations.evaluate` serializes requests, checks durable replay before invoking the provider, and commits through the same revision guard as other edits. A concurrent graph change refuses a stale result. Missing credentials and provider errors are recorded as unavailable/failed results.
+- **Preview** (`POST /api/jev/preview`, `Evaluations.preview`): judges a draft (text being typed) or an existing node against up to 24 candidates and returns, per candidate, relatedness, match, same-intention, relation and direction, and the server's `connect` decision. Nothing is journaled. The browser uses it while typing, while dragging, and when a link is drawn.
+- **Connect policy** (`discovery.ts`): connect when the candidate restates the same intention (linked as `related_to`), or when Jev matches it, names a relation, and rates it at least directly relevant; never a suppressed pair or an already linked pair; at most `MAX_CONNECTIONS`, strongest first.
+- **Auto-connect** (`Evaluations.command`): every capture from any channel is connected in the background by the `jev` system actor unless it says `autoConnect: false` (the browser sends its previewed edges itself). The evaluation audit and the edges commit in one revision; a concurrent edit retries against the new graph. Failures leave no trace.
+- **Learning**: Jev edges carry `origin` (model, prompt version, confidence, same). Reframing one records a correction; removing one suppresses the pair and records a `jev-edge-removed` rejection. Both are sent to Jev as `ownerCorrections`, precedent for later judgments.
+
+Candidate retrieval is lexical and graph-neighborhood selection, capped at 24 nodes with explicit coverage/truncation. Source URLs are unfetched pointers; only supplied context participates. Missing credentials and provider errors produce unavailable/failed results, never invented judgments.
 
 ## Cross-project agent access
 
