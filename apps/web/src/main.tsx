@@ -109,7 +109,14 @@ function App() {
         setMode(null);
         setFocusRoot(null);
         setQuery("");
-      } else if (event.key === "c" && graph) {
+      } else if (
+        event.key === "c" &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        graph
+      ) {
+        event.preventDefault();
         setMode({
           kind: "create",
           x: window.innerWidth / 2,
