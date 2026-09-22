@@ -220,11 +220,15 @@ function pack(
     valid.rank.explicit.has(candidate.nodeId),
   ).length;
   const measure = (n: number) => {
-    const payload = buildPayload(
-      graph,
-      valid.request,
-      valid.focus,
-      pool.slice(0, n).map((candidate) => byId.get(candidate.nodeId)!),
+    const nodes = pool
+      .slice(0, n)
+      .map((candidate) => byId.get(candidate.nodeId)!);
+    const payload = buildPayload(graph, valid.request, valid.focus, nodes);
+    // Bytes of the exact input evaluate() records, so a packed bag is never
+    // rejected later for size (non-ASCII text weighs more per token).
+    const bytes = Buffer.byteLength(
+      JSON.stringify(requestInput(graph, valid.focusNode, nodes, payload)),
+      "utf8",
     );
     const state = estimateTokens(JSON.stringify(payload.state));
     const questions = questionTexts(payload.decisions).map(estimateTokens);
@@ -234,6 +238,7 @@ function pack(
       state,
       longest: Math.max(0, ...questions),
       output: questions.length * OUTPUT_TOKENS_PER_QUESTION,
+      bytes,
     };
   };
   const fits = (n: number, soft: boolean) => {
@@ -242,6 +247,7 @@ function pack(
       cost.state + cost.longest <=
         JEV_LIMITS.stateAndLongestQuestionTokens * HEADROOM &&
       cost.input + cost.output <= JEV_LIMITS.totalTokens * HEADROOM &&
+      cost.bytes <= JEV_LIMITS.payloadBytes &&
       (!soft || cost.input <= TARGET_INPUT_TOKENS)
     );
   };
@@ -483,6 +489,30 @@ function buildPayload(
   return { state, decisions, labels, assertions, captures };
 }
 
+// The recorded evaluation input: what Jev is sent, plus the audit copy.
+function requestInput(
+  graph: Graph,
+  focusNode: Node | undefined,
+  candidateNodes: readonly Node[],
+  payload: Pick<
+    ReturnType<typeof buildPayload>,
+    "state" | "decisions" | "assertions" | "captures"
+  >,
+) {
+  return {
+    basedOnRevision: graph.revision,
+    promptVersion: PROMPT_VERSION,
+    requestedModel: REQUESTED_MODEL,
+    state: payload.state,
+    decisions: payload.decisions,
+    audit: {
+      nodes: [...(focusNode ? [focusNode] : []), ...candidateNodes],
+      assertions: payload.assertions,
+      captures: payload.captures,
+    },
+  };
+}
+
 function questionTexts(decisions: Record<string, Decision.Any>) {
   return Object.values(decisions).map((decision) => JSON.stringify(decision));
 }
@@ -499,20 +529,16 @@ function prepare(graph: Graph, raw: unknown, retrieval: DiscoveryResult) {
     focus,
     candidateNodes,
   );
-  const input = Schema.decodeUnknownSync(Schema.Json)({
-    basedOnRevision: graph.revision,
-    promptVersion: PROMPT_VERSION,
-    requestedModel: REQUESTED_MODEL,
-    state,
-    decisions,
-    audit: {
-      nodes: [...(focusNode ? [focusNode] : []), ...candidateNodes],
+  const input = Schema.decodeUnknownSync(Schema.Json)(
+    requestInput(graph, focusNode, candidateNodes, {
+      state,
+      decisions,
       assertions,
       captures,
-    },
-  });
+    }),
+  );
   const serialized = JSON.stringify(input);
-  if (Buffer.byteLength(serialized, "utf8") > 128_000)
+  if (Buffer.byteLength(serialized, "utf8") > JEV_LIMITS.payloadBytes)
     throw new DiscoveryError({
       message:
         "Evaluation evidence exceeds the 128 KB request budget; no evidence was silently dropped.",

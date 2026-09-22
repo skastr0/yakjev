@@ -528,3 +528,27 @@ describe("token-budget packing", () => {
     expect(only.candidates.map((c) => c.nodeId)).toEqual(["m001", "m002"]);
   });
 });
+
+test("multi-byte text is packed by bytes too, so evaluate() accepts the bag", async () => {
+  // 4-byte characters: few tokens per character, many bytes.
+  const heavy = "🌱".repeat(1900);
+  const nodes = Array.from({ length: 40 }, (_, i) =>
+    node(`g${i.toString().padStart(2, "0")}`, `Garden task ${i}`, heavy),
+  );
+  const g = graph([node("focus", "Garden task"), ...nodes]);
+  const request = { query: "", focusNodeId: "focus" };
+  const bag = discover(g, request);
+  expect(bag.candidates.length).toBeGreaterThan(0);
+  expect(bag.candidates.length).toBeLessThan(40);
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* makeDiscovery(null);
+      return yield* service.evaluate(g, request);
+    }),
+  );
+  // Unavailable (no key) rather than an oversized-evidence error.
+  expect(result.status).toBe("unavailable");
+  expect(result.candidates.map((c) => c.nodeId)).toEqual(
+    bag.candidates.map((c) => c.nodeId),
+  );
+});
