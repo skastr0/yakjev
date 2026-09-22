@@ -136,7 +136,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
       return { x: box.left + point.x, y: box.top + point.y };
     }
 
-    function fit() {
+    function fit(duration?: number) {
       const sigma = renderer.current;
       if (!sigma) return;
       const points = graph.current.nodes().map((id) => ({
@@ -151,7 +151,14 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         y: [bounds.y[0] - padY, bounds.y[1] + padY],
       });
       const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-      void sigma.getCamera().reset({ duration: reduced ? 0 : 180 });
+      void sigma.getCamera().reset({
+        duration: reduced ? 0 : (duration ?? 180),
+      });
+    }
+
+    function layoutUnit() {
+      const sigma = renderer.current;
+      return sigma ? graphUnitsPerPixel(sigma) : 1;
     }
 
     useImperativeHandle(ref, () => ({
@@ -214,7 +221,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
       positions.current = rememberLayout(
         positions.current,
         latest.current.data,
-        renderer.current?.getCamera().getState().ratio ?? 1,
+        layoutUnit(),
       );
       syncGraph(
         graph.current,
@@ -299,6 +306,22 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           },
         });
         renderer.current = sigma;
+        fit(0);
+        const fitted = graphUnitsPerPixel(sigma);
+        if (fitted > 1.05) {
+          positions.current = rememberLayout(
+            new Map(),
+            latest.current.data,
+            fitted,
+          );
+          syncGraph(
+            graph.current,
+            latest.current.data,
+            positions.current,
+            blendedColors(latest.current.data, latest.current.paint),
+          );
+          fit(0);
+        }
         fit();
         let frame = 0;
         sigma.getCamera().on("updated", () => {
@@ -619,11 +642,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     useEffect(() => {
       const wasEmpty = graph.current.order === 0;
       const before = new Map(positions.current);
-      const after = rememberLayout(
-        before,
-        props.data,
-        renderer.current?.getCamera().getState().ratio ?? 1,
-      );
+      const after = rememberLayout(before, props.data, layoutUnit());
       const moves = layoutMoves(before, after, props.data);
       const display = new Map(after);
       if (!reduceMotion.current) {
@@ -883,7 +902,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             {announcement}
           </p>
         )}
-        <button className="graph-fit" type="button" onClick={fit}>
+        <button className="graph-fit" type="button" onClick={() => fit()}>
           Fit
         </button>
         {renderError && (
@@ -1140,6 +1159,13 @@ function pixelsPerUnit(sigma: Sigma) {
   const step = sigma.graphToViewport({ x: 1, y: 0 });
   const scale = Math.hypot(step.x - origin.x, step.y - origin.y);
   return scale > 1e-6 ? scale : 1;
+}
+
+function graphUnitsPerPixel(sigma: Sigma) {
+  const origin = sigma.graphToViewport({ x: 0, y: 0 });
+  const step = sigma.graphToViewport({ x: 100, y: 0 });
+  const pixels = Math.hypot(step.x - origin.x, step.y - origin.y);
+  return pixels > 1e-6 ? 100 / pixels : 1;
 }
 
 function dragAnnouncement(ghosts: readonly Ghost[]) {
