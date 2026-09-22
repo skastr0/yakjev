@@ -291,6 +291,72 @@ const probes: Probe[] = [
     draft: { title: "Schedule a dentist appointment" },
     expected: [],
   },
+  // Harder probes: cross-project keyword traps, long descriptions, and
+  // partial mid-typing drafts. Keeps the headline metrics honest.
+  {
+    name: "trap-canvas",
+    // "canvas" collides with y-ghosts; a painting frame is not software.
+    draft: { title: "Stretch the canvas over the wooden frame" },
+    expected: [],
+  },
+  {
+    name: "trap-book-club",
+    // "book" and "read" collide with the writing project; a club is not it.
+    draft: { title: "Pick the September book club read" },
+    expected: [],
+  },
+  {
+    name: "trap-puppy",
+    // "train" collides with the couch-to-5k plan; a puppy is not training.
+    draft: { title: "Train the puppy to heel on walks" },
+    expected: [],
+  },
+  {
+    name: "trap-run-numbers",
+    // "run" collides with f-5k and y-eval; budgeting is neither.
+    draft: { title: "Run the numbers for next quarter's budget" },
+    expected: [],
+  },
+  {
+    name: "long-description",
+    draft: {
+      title: "Double-dig the new bed and work in compost",
+      description:
+        "Before spring planting, loosen the soil two spades deep in the newest raised bed, wheel over two barrows of finished compost from the pile by the fence, and turn it through the top layer so the tomatoes start in rich ground.",
+    },
+    expected: [{ nodeId: "g-beds" }, { nodeId: "g-compost" }],
+  },
+  {
+    name: "mid-typing-two-words",
+    // Typed mid-way; the preview fires at >=3 chars, so partial text is real.
+    draft: { title: "Buy running" },
+    expected: [{ nodeId: "f-shoes" }],
+  },
+  {
+    name: "mid-typing-fragment",
+    draft: { title: "Order tomato and" },
+    expected: [{ nodeId: "g-seeds" }],
+  },
+  {
+    name: "paraphrase-hard",
+    draft: { title: "Sketch out the argument's dependencies for the chapter" },
+    expected: [{ nodeId: "b-graph", same: true }],
+  },
+  {
+    name: "paraphrase-referrals",
+    draft: { title: "Get editor referrals from two colleagues" },
+    expected: [{ nodeId: "b-editor", same: true }],
+  },
+  {
+    name: "benefits-warmup",
+    draft: { title: "Jog slowly for ten minutes before interval days" },
+    expected: [{ nodeId: "f-plan" }],
+  },
+  {
+    name: "clean-negative-errand",
+    draft: { title: "Renew the car insurance" },
+    expected: [],
+  },
 ];
 
 // ---------------------------------------------------------------------------
