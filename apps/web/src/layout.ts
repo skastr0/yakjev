@@ -224,11 +224,183 @@ export function placeNewcomer(
   };
 }
 
+// What a node occupies on screen: its disc and the label to its right, plus
+// half the breathing gap on every side. Discs and labels are drawn at a fixed
+// screen size, so `unit` (graph units per screen pixel, the camera ratio)
+// converts them. Long titles are capped so one essay-length label cannot
+// shove a whole neighbourhood aside.
+type Box = { left: number; right: number; top: number; bottom: number };
+const DISC = 16;
+const GAP = 6;
+const LABEL_CAP = 48;
+
+function boxAt(point: Point, title: string, unit: number): Box {
+  const pad = GAP / 2;
+  return {
+    left: point.x - (DISC + pad) * unit,
+    right:
+      point.x +
+      (14 + Math.min(title.length, LABEL_CAP) * LABEL_CHAR + pad) * unit,
+    top: point.y - (DISC + pad) * unit,
+    bottom: point.y + (DISC + pad) * unit,
+  };
+}
+
+function overlapArea(a: Box, b: Box) {
+  const x = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+  const y = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+  return x > 0 && y > 0 ? x * y : 0;
+}
+
+export function overlaps(
+  points: ReadonlyMap<string, Point>,
+  titles: ReadonlyMap<string, string>,
+  unit = 1,
+): [string, string][] {
+  const ids = [...points.keys()].sort();
+  const boxes = ids.map((id) =>
+    boxAt(points.get(id)!, titles.get(id) ?? "", unit),
+  );
+  const found: [string, string][] = [];
+  for (let i = 0; i < ids.length; i++)
+    for (let j = i + 1; j < ids.length; j++)
+      if (overlapArea(boxes[i]!, boxes[j]!) > 0) found.push([ids[i]!, ids[j]!]);
+  return found;
+}
+
+// Boxes bucketed on a coarse grid, so a spot is checked against its
+// surroundings instead of the whole graph.
+const CELL = 96;
+function occupancy(unit: number) {
+  const size = CELL * unit;
+  const grid = new Map<string, Box[]>();
+  const cells = (box: Box, visit: (key: string) => void) => {
+    for (
+      let cx = Math.floor(box.left / size);
+      cx <= Math.floor(box.right / size);
+      cx++
+    )
+      for (
+        let cy = Math.floor(box.top / size);
+        cy <= Math.floor(box.bottom / size);
+        cy++
+      )
+        visit(`${cx}:${cy}`);
+  };
+  return {
+    add(box: Box) {
+      cells(box, (key) => {
+        const bucket = grid.get(key);
+        if (bucket) bucket.push(box);
+        else grid.set(key, [box]);
+      });
+    },
+    cost(box: Box) {
+      const seen = new Set<Box>();
+      let total = 0;
+      cells(box, (key) => {
+        for (const other of grid.get(key) ?? []) {
+          if (seen.has(other)) continue;
+          seen.add(other);
+          total += overlapArea(box, other);
+        }
+      });
+      return total;
+    },
+  };
+}
+type Occupancy = ReturnType<typeof occupancy>;
+
+const RING = 24;
+
+// The nearest spot to `wanted` where the node and its label clear everything
+// occupied, searched ring by ring in a fixed order. When nothing within reach
+// is free, the spot that overlaps least.
+function nearestFree(
+  wanted: Point,
+  title: string,
+  occupied: Occupancy,
+  reach: number,
+  unit: number,
+): { point: Point; clear: boolean } {
+  let best = { point: wanted, cost: Infinity };
+  const ring = RING * unit;
+  for (let radius = 0; radius <= reach * unit; radius += ring) {
+    const steps =
+      radius === 0 ? 1 : Math.max(8, Math.round((2 * Math.PI * radius) / ring));
+    for (let step = 0; step < steps; step++) {
+      // Start straight below and go round: stacking reads well next to
+      // labels that run sideways.
+      const theta = Math.PI / 2 + (step * 2 * Math.PI) / steps;
+      const point = {
+        x: wanted.x + Math.cos(theta) * radius,
+        y: wanted.y + Math.sin(theta) * radius,
+      };
+      const cost = occupied.cost(boxAt(point, title, unit));
+      if (cost === 0) return { point, clear: true };
+      if (cost < best.cost) best = { point, cost };
+    }
+  }
+  return { point: best.point, clear: false };
+}
+
+const NEWCOMER_REACH = 360;
+const FAR_REACH = 4000;
+
+// The first map has no mental map to keep yet: nodes settle from the centre
+// outward, each at the free spot nearest its force-directed position.
+function settleAll(
+  points: ReadonlyMap<string, Point>,
+  titles: ReadonlyMap<string, string>,
+  unit: number,
+): Map<string, Point> {
+  const order = [...points.entries()].sort(
+    ([a, pa], [b, pb]) =>
+      Math.hypot(pa.x, pa.y) - Math.hypot(pb.x, pb.y) || (a < b ? -1 : 1),
+  );
+  const occupied = occupancy(unit);
+  const next = new Map<string, Point>();
+  for (const [id, point] of order) {
+    const title = titles.get(id) ?? "";
+    const { point: spot } = nearestFree(
+      point,
+      title,
+      occupied,
+      FAR_REACH,
+      unit,
+    );
+    next.set(id, spot);
+    occupied.add(boxAt(spot, title, unit));
+  }
+  return next;
+}
+
+// Existing nodes whose position differs between two layouts: what the canvas
+// should animate after a relaxation.
+export function shifted(
+  previous: ReadonlyMap<string, Point>,
+  next: ReadonlyMap<string, Point>,
+): string[] {
+  const moved: string[] = [];
+  for (const [id, point] of previous) {
+    const now = next.get(id);
+    if (now && (now.x !== point.x || now.y !== point.y)) moved.push(id);
+  }
+  return moved.sort();
+}
+
+// `unit` is graph units per screen pixel (the camera ratio when the change
+// arrives); labels are cleared at that zoom.
 export function rememberLayout(
   previous: ReadonlyMap<string, Point>,
   graph: Graph,
+  unit = 1,
 ): Map<string, Point> {
-  if (previous.size === 0 && graph.nodes.length > 0) return placeGraph(graph);
+  const titles = new Map(graph.nodes.map((node) => [node.id, node.title]));
+  const boxOf = (id: string, point: Point) =>
+    boxAt(point, titles.get(id) ?? "", unit);
+  if (previous.size === 0 && graph.nodes.length > 0)
+    return settleAll(placeGraph(graph), titles, unit);
   const next = new Map(previous);
   const obstacles: { x: number; y: number; label: string }[] = [];
   for (const node of graph.nodes) {
@@ -254,12 +426,40 @@ export function rememberLayout(
       if (suggestion.source === node.id) consider(suggestion.target);
       if (suggestion.target === node.id) consider(suggestion.source);
     }
-    const spot = placeNewcomer(node.id, neighbors, existing, {
+    const wanted = placeNewcomer(node.id, neighbors, existing, {
       label: node.title,
       obstacles,
     });
+    const occupied = occupancy(unit);
+    for (const [id, point] of next) occupied.add(boxOf(id, point));
+    const { point: spot, clear } = nearestFree(
+      wanted,
+      node.title,
+      occupied,
+      NEWCOMER_REACH,
+      unit,
+    );
     next.set(node.id, spot);
     obstacles.push({ ...spot, label: node.title });
+    if (clear) continue;
+    // No free spot nearby: the newcomer stays, and only the nodes it lands
+    // on step to their own nearest free spot.
+    const box = boxOf(node.id, spot);
+    const crowd = [...next.keys()]
+      .filter(
+        (id) =>
+          id !== node.id && overlapArea(box, boxOf(id, next.get(id)!)) > 0,
+      )
+      .sort();
+    const rest = occupancy(unit);
+    for (const [id, point] of next)
+      if (!crowd.includes(id)) rest.add(boxOf(id, point));
+    for (const id of crowd) {
+      const title = titles.get(id) ?? "";
+      const moved = nearestFree(next.get(id)!, title, rest, FAR_REACH, unit);
+      next.set(id, moved.point);
+      rest.add(boxOf(id, moved.point));
+    }
   }
   return next;
 }

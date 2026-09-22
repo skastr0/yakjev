@@ -9,6 +9,8 @@ import {
   placeGraph,
   rememberLayout,
   labelContains,
+  overlaps,
+  shifted,
   type Point,
 } from "./layout";
 
@@ -220,5 +222,79 @@ describe("placeGraph", () => {
     expect(Math.hypot(train.x - gym.x, train.y - gym.y)).toBeLessThanOrEqual(
       220,
     );
+  });
+});
+
+describe("arrivals settle without overlap", () => {
+  const TITLES = [
+    "Feed the sourdough starter",
+    "Train for the spring marathon",
+    "Write a marathon training plan",
+    "Write acceptance tests for the graph",
+    "Buy running shoes",
+    "Get a running watch for pacing",
+    "Bake sourdough bread",
+    "Deploy yakjev to Railway",
+  ];
+  const titleOf = (i: number) => `${TITLES[i % TITLES.length]} ${i}`;
+  const titlesOf = (graph: Graph) =>
+    new Map(graph.nodes.map((item) => [item.id, item.title]));
+
+  test.each([1, 1.6])(
+    "forty live arrivals leave no disc or label overlapping at %p units per pixel",
+    (unit) => {
+      let nodes = [node("n0", { title: titleOf(0) })];
+      let edges: Edge[] = [];
+      let layout = rememberLayout(new Map(), snapshot(nodes, edges), unit);
+      for (let i = 1; i <= 40; i++) {
+        const id = `n${i}`;
+        nodes = [...nodes, node(id, { title: titleOf(i) })];
+        // Most arrivals attach to the same few hubs, the crowded case.
+        edges = [...edges, edge(`e${i}`, id, `n${(i * 7) % Math.min(i, 4)}`)];
+        const graph = snapshot(nodes, edges);
+        const next = rememberLayout(layout, graph, unit);
+        expect(overlaps(next, titlesOf(graph), unit)).toEqual([]);
+        // Only nodes the newcomer landed on may step aside.
+        const spot = new Map([[id, next.get(id)!]]);
+        for (const moved of shifted(layout, next)) {
+          spot.set(moved, layout.get(moved)!);
+          expect(overlaps(spot, titlesOf(graph), unit).length).toBeGreaterThan(
+            0,
+          );
+          spot.delete(moved);
+        }
+        layout = next;
+      }
+    },
+  );
+
+  test("a newcomer whose spot is free moves nobody", () => {
+    const first = rememberLayout(
+      new Map(),
+      snapshot([node("a", { title: "Bake sourdough bread" })]),
+    );
+    const graph = snapshot(
+      [
+        node("a", { title: "Bake sourdough bread" }),
+        node("b", { title: "Feed the sourdough starter" }),
+      ],
+      [edge("ab", "b", "a")],
+    );
+    const next = rememberLayout(first, graph);
+    expect(shifted(first, next)).toEqual([]);
+    expect(overlaps(next, titlesOf(graph))).toEqual([]);
+  });
+
+  test("the first layout is clear and deterministic", () => {
+    const nodes = Array.from({ length: 24 }, (_, i) =>
+      node(`n${i}`, { title: titleOf(i) }),
+    );
+    const edges = nodes
+      .slice(1)
+      .map((item, i) => edge(`e${i}`, item.id, `n${i % 3}`));
+    const graph = snapshot(nodes, edges);
+    const layout = rememberLayout(new Map(), graph);
+    expect(overlaps(layout, titlesOf(graph))).toEqual([]);
+    expect(rememberLayout(new Map(), graph)).toEqual(layout);
   });
 });

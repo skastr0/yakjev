@@ -5,16 +5,16 @@ import {
   type Graph,
   type Node,
 } from "@yakjev/protocol";
-import { placeGraph, rememberLayout } from "./layout";
+import { overlaps, placeGraph, rememberLayout, shifted } from "./layout";
 
 const provenance = {
   actor: { id: "synthetic", channel: "browser" as const },
   at: "2026-09-22T00:00:00Z",
   revision: 1,
 };
-const node = (id: string): Node => ({
+const node = (id: string, title = id): Node => ({
   id,
-  title: id,
+  title,
   description: "",
   project: "",
   status: "idea",
@@ -71,4 +71,37 @@ test("placeGraph stays under 250ms at 200 nodes and newcomers leave it untouched
   );
   expect(grown.size).toBe(COUNT + 1);
   for (const { id } of nodes) expect(grown.get(id)).toEqual(placed.get(id));
+});
+
+test("settling 200 long-titled nodes and 20 live arrivals stays fast and clear", () => {
+  const titled = nodes.map((item, i) =>
+    node(item.id, `Write the acceptance tests for intention ${i}`),
+  );
+  const titles = (graph: Graph) =>
+    new Map(graph.nodes.map((item) => [item.id, item.title]));
+  let graph = snapshot(titled, chain);
+  const started = performance.now();
+  let layout = rememberLayout(new Map(), graph);
+  const first = performance.now() - started;
+  expect(overlaps(layout, titles(graph))).toEqual([]);
+  let slowest = 0;
+  let moved = 0;
+  for (let i = 0; i < 20; i++) {
+    const id = `new${i}`;
+    graph = snapshot(
+      [...graph.nodes, node(id, `Train for the spring marathon ${i}`)],
+      [...graph.edges, edge(`x${i}`, id, `n${(i * 37) % COUNT}`)],
+    );
+    const at = performance.now();
+    const next = rememberLayout(layout, graph);
+    slowest = Math.max(slowest, performance.now() - at);
+    moved += shifted(layout, next).length;
+    layout = next;
+  }
+  console.log(
+    `first layout at ${COUNT} nodes: ${first.toFixed(1)}ms; slowest arrival: ${slowest.toFixed(1)}ms; neighbours moved over 20 arrivals: ${moved}`,
+  );
+  expect(overlaps(layout, titles(graph))).toEqual([]);
+  expect(first).toBeLessThan(400);
+  expect(slowest).toBeLessThan(50);
 });
