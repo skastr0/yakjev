@@ -340,6 +340,37 @@ test("suggestions are separate; relevant freshness, atomic acceptance, rejection
   ).rejects.toMatchObject({ code: "Conflict" });
 });
 
+test("explicit acceptance can reframe an existing assertion without deleting its rationale", async () => {
+  const { store, run, send } = await fixture();
+  await send(capture);
+  await send({
+    type: "suggestion.record",
+    suggestion: {
+      ...suggestion("optional", "a", "b", 1),
+      relation: "benefits_from",
+    },
+  });
+  await send({
+    type: "suggestion.decide",
+    id: "optional",
+    decision: "accept",
+    rationale: "I can proceed without this preparation",
+  });
+  const graph = await run(store.read);
+  expect(graph.edges).toHaveLength(2);
+  expect(graph.edges[0]).toMatchObject({
+    id: "ab",
+    relation: "benefits_from",
+    assertion: { rationale: "a allegedly requires b" },
+    correction: { rationale: "I can proceed without this preparation" },
+    suggestionId: "optional",
+  });
+  expect(graph.suggestions[0]?.status).toBe("accepted");
+  expect(
+    (await run(neighborhood(graph, "a", "outgoing", true))).blockingEdges,
+  ).toEqual([]);
+});
+
 test("layout patches and archived source references survive edits, taxonomy cannot drop live types", async () => {
   const { store, run, send } = await fixture();
   await send(capture);

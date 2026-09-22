@@ -314,18 +314,46 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
             "Conflict",
             "Suggestion is stale; explicitly reframe or evaluate again",
           );
-        yield* addEdge({
-          id: suggestion.id,
-          source: suggestion.source,
-          target: suggestion.target,
-          relation: suggestion.relation,
-          rationale: command.rationale,
-        });
-        edges = edges.map((edge) =>
-          edge.id === suggestion.id
-            ? { ...edge, suggestionId: suggestion.id }
-            : edge,
+        const existing = edges.find(
+          (edge) =>
+            edge.source === suggestion.source &&
+            edge.target === suggestion.target,
         );
+        if (existing) {
+          // Accept is an explicit, revision-checked correction, not inference applying itself.
+          const correction = {
+            relation: suggestion.relation,
+            rationale: command.rationale,
+            state: "asserted" as const,
+            provenance,
+          };
+          edges = edges.map((edge) =>
+            edge.id === existing.id
+              ? {
+                  ...edge,
+                  relation: correction.relation,
+                  rationale: correction.rationale,
+                  state: correction.state,
+                  correction,
+                  updated: provenance,
+                  suggestionId: suggestion.id,
+                }
+              : edge,
+          );
+        } else {
+          yield* addEdge({
+            id: suggestion.id,
+            source: suggestion.source,
+            target: suggestion.target,
+            relation: suggestion.relation,
+            rationale: command.rationale,
+          });
+          edges = edges.map((edge) =>
+            edge.id === suggestion.id
+              ? { ...edge, suggestionId: suggestion.id }
+              : edge,
+          );
+        }
       }
       suggestions = suggestions.map((item) =>
         item.id === suggestion.id
