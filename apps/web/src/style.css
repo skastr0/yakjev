@@ -659,6 +659,89 @@ summary {
   flex: none;
   border-radius: 999px;
 }
+.jev-context {
+  position: relative;
+}
+.topbar nav .jev-context-toggle {
+  color: var(--jev);
+}
+.jev-context-toggle[data-set="true"]::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--jev);
+  vertical-align: middle;
+}
+.jev-context-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(400px, calc(100vw - 32px));
+  padding: 14px;
+  background: #fffcf6;
+  border: 1px solid #c4ccbe;
+  border-radius: 8px;
+  box-shadow: 0 16px 40px #203d3530;
+}
+.jev-context-panel p {
+  margin: 0 0 6px;
+}
+.jev-context-lead {
+  color: var(--jev);
+  font-weight: 550;
+}
+.jev-context-panel textarea {
+  display: block;
+  width: 100%;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid #c9cfc2;
+  border-radius: 5px;
+  background: #fffdf8;
+  font-size: 13px;
+  line-height: 1.45;
+  resize: vertical;
+}
+.jev-context-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.jev-context-foot .jev-note {
+  flex: 1;
+  margin: 0;
+}
+/* The panel sits inside the topbar nav, whose bare-button reset would
+   otherwise hide Save. */
+.topbar nav .jev-context-panel button.primary {
+  background: #284e40;
+  border-color: #284e40;
+  color: #fffdf5;
+}
+.topbar nav .jev-context-panel button.primary:disabled {
+  opacity: 0.4;
+}
+.jev-context-count {
+  color: #7d8a80;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.jev-context-count[data-over="true"] {
+  color: #b03a2e;
+}
+@media (max-width: 850px) {
+  .jev-context-panel {
+    position: fixed;
+    top: 112px;
+    left: 16px;
+    right: 16px;
+    width: auto;
+  }
+}
 .graph-legend {
   display: flex;
   gap: 10px 14px;
