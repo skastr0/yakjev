@@ -101,6 +101,11 @@ export class Auth extends Context.Service<
             yield* bearer(headers);
             return { id, channel: "browser" } satisfies Actor;
           }
+          if (!headers.cookie)
+            return yield* new AuthError({
+              code: "Unauthorized",
+              message: "Owner authentication required",
+            });
           yield* checkOrigin(headers, mutation);
           const value = headers.cookie
             ?.split(";")

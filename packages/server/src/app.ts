@@ -8,7 +8,14 @@ import {
   HttpServerResponse,
 } from "effect/unstable/http";
 import { Auth, type AuthOptions } from "./auth";
+import {
+  discover,
+  Discovery,
+  DiscoveryError,
+  DiscoveryLive,
+} from "./discovery";
 import { DomainError, neighborhood, searchNodes } from "./domain";
+import { Evaluations } from "./evaluation";
 import { Store, storeLayer } from "./store";
 
 const headers = {
@@ -16,7 +23,7 @@ const headers = {
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
   "Content-Security-Policy":
-    "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
 };
 const json = (body: unknown, status = 200) =>
   HttpServerResponse.jsonUnsafe(body, { status });
@@ -56,12 +63,16 @@ export interface AppOptions extends AuthOptions {
   readonly listenPort?: number;
 }
 
-export function createApp(options: AppOptions) {
+export function createApp(
+  options: AppOptions,
+  discoveryLayer: Layer.Layer<Discovery, unknown> = DiscoveryLive,
+) {
   const origin = new URL(options.origin);
   const routes = HttpRouter.use(
     Effect.fnUntraced(function* (router) {
       const store = yield* Store;
       const auth = yield* Auth;
+      const evaluations = yield* Evaluations;
       const handle = Effect.fn("Http.handle")(
         function* () {
           const request = yield* HttpServerRequest.HttpServerRequest;
@@ -78,7 +89,7 @@ export function createApp(options: AppOptions) {
             return json({
               service: "yakjev",
               status: "ok",
-              stage: "scaffold",
+              stage: "graph",
               storage: "sqlite",
             } satisfies Health);
           }
@@ -115,6 +126,8 @@ export function createApp(options: AppOptions) {
             return json({ actor });
           if (url.pathname === "/api/commands" && request.method === "POST")
             return json(yield* store.execute(actor, yield* bodyJson));
+          if (url.pathname === "/api/evaluations" && request.method === "POST")
+            return json(yield* evaluations.evaluate(actor, yield* bodyJson));
           if (request.method !== "GET")
             return json(
               { error: "Invalid", message: "Method not allowed" },
@@ -123,6 +136,38 @@ export function createApp(options: AppOptions) {
           if (url.pathname === "/api/graph") return json(yield* store.read);
           if (url.pathname === "/api/export")
             return json(yield* store.exportGraph);
+          if (url.pathname === "/api/discovery") {
+            const graph = yield* store.read;
+            const request = {
+              query: url.searchParams.get("query") ?? "",
+              ...(url.searchParams.has("focusNodeId")
+                ? { focusNodeId: url.searchParams.get("focusNodeId")! }
+                : {}),
+              ...(url.searchParams.has("includeNodeIds")
+                ? {
+                    includeNodeIds: url.searchParams
+                      .get("includeNodeIds")!
+                      .split(","),
+                  }
+                : {}),
+            };
+            return json(
+              yield* Effect.try({
+                try: () => discover(graph, request),
+                catch: () =>
+                  new DiscoveryError({ message: "Invalid discovery request" }),
+              }),
+            );
+          }
+          if (url.pathname.startsWith("/api/evaluations/")) {
+            const segment = yield* Effect.try(() =>
+              decodeURIComponent(
+                url.pathname.slice("/api/evaluations/".length),
+              ),
+            ).pipe(Effect.mapError(invalid));
+            const id = yield* Schema.decodeUnknownEffect(Id)(segment);
+            return json(yield* store.evaluation(id));
+          }
           if (url.pathname === "/api/search")
             return json(
               searchNodes(yield* store.read, url.searchParams.get("q") ?? ""),
@@ -171,14 +216,14 @@ export function createApp(options: AppOptions) {
               Effect.fnUntraced(function* (cursor) {
                 // Recheck expiry while streaming. Durable bounded polling has no subscribe/read gap.
                 yield* auth.browser(request.headers, false);
-                const entries = yield* store.history(cursor, 100);
+                const entries = yield* store.events(cursor);
                 if (entries.length === 0) {
                   yield* Effect.sleep("1 second");
                   return [": keepalive\n\n", cursor] as const;
                 }
                 const messages = entries
                   .map(
-                    ({ command: _, ...receipt }) =>
+                    (receipt) =>
                       `id: ${receipt.revision}\nevent: change\ndata: ${JSON.stringify(receipt)}\n\n`,
                   )
                   .join("");
@@ -231,6 +276,13 @@ export function createApp(options: AppOptions) {
                 503,
               ),
             ),
+          DiscoveryError: () =>
+            Effect.succeed(
+              json(
+                { error: "Invalid", message: "Invalid discovery request" },
+                400,
+              ),
+            ),
           SchemaError: () =>
             Effect.succeed(
               json({ error: "Invalid", message: "Invalid request" }, 400),
@@ -248,7 +300,14 @@ export function createApp(options: AppOptions) {
   const app = HttpRouter.toWebHandler(
     routes.pipe(
       Layer.provide(
-        Layer.mergeAll(storeLayer(options.databasePath), Auth.layer(options)),
+        Layer.mergeAll(
+          Auth.layer(options),
+          Evaluations.layer.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(storeLayer(options.databasePath), discoveryLayer),
+            ),
+          ),
+        ),
       ),
       Layer.provide(HttpServer.layerServices),
       Layer.provide(BunServices.layer),

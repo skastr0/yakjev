@@ -125,7 +125,11 @@ export const EvaluationInput = Schema.Struct({
   result: Schema.Json,
 });
 export const Evaluation = Schema.Struct({
-  ...EvaluationInput.fields,
+  id: Id,
+  inputHash: Title,
+  basedOnRevision: Revision,
+  taxonomyVersion: Revision,
+  status: Schema.Literals(["succeeded", "failed", "unavailable"]),
   provenance: Provenance,
 });
 export const Graph = Schema.Struct({
@@ -203,6 +207,20 @@ export const CommandResult = Schema.Struct({
   replayed: Schema.Boolean,
 });
 export type CommandResult = typeof CommandResult.Type;
+export const EvaluationRequest = Schema.Struct({
+  requestId: Id,
+  expectedRevision: Revision,
+  query: Schema.String.check(Schema.isMaxLength(2000)),
+  focusNodeId: Schema.optionalKey(Id),
+  includeNodeIds: Schema.optionalKey(
+    Schema.Array(Id).check(Schema.isMaxLength(24)),
+  ),
+});
+export type EvaluationRequest = typeof EvaluationRequest.Type;
+export const EvaluationResult = Schema.Struct({
+  ...CommandResult.fields,
+  evaluationId: Id,
+});
 export const HistoryEntry = Schema.Struct({
   ...Receipt.fields,
   command: Command,

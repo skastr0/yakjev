@@ -75,6 +75,56 @@ export class Store extends Context.Service<Store>()("@yakjev/Store", {
       },
       Effect.mapError((cause) => new StorageError({ cause })),
     );
+    const events = Effect.fn("Store.events")(
+      function* (after: number) {
+        const rows =
+          yield* sql`SELECT receipt FROM graph_history WHERE revision > ${after} ORDER BY revision LIMIT 100`;
+        return yield* Effect.forEach(rows, (row) =>
+          Schema.decodeUnknownEffect(ReceiptJson)(row.receipt),
+        );
+      },
+      Effect.mapError((cause) => new StorageError({ cause })),
+    );
+    const findRequest = Effect.fn("Store.findRequest")(
+      function* (actor: Actor, requestId: string) {
+        const rows =
+          yield* sql`SELECT entry FROM graph_history WHERE actor_id = ${actor.id} AND request_id = ${requestId}`;
+        return rows[0]
+          ? yield* Schema.decodeUnknownEffect(HistoryJson)(rows[0].entry)
+          : null;
+      },
+      Effect.mapError((cause) => new StorageError({ cause })),
+    );
+    const evaluation = Effect.fn("Store.evaluation")(
+      function* (id: string) {
+        const rows =
+          yield* sql`SELECT entry FROM graph_history WHERE json_extract(entry, '$.command.evaluation.id') = ${id} LIMIT 1`;
+        if (!rows[0])
+          return yield* new DomainError({
+            code: "NotFound",
+            message: "Unknown evaluation",
+          });
+        const entry = yield* Schema.decodeUnknownEffect(HistoryJson)(
+          rows[0].entry,
+        );
+        if (entry.command.type !== "evaluation.record")
+          return yield* new DomainError({
+            code: "NotFound",
+            message: "Unknown evaluation",
+          });
+        return {
+          ...entry.command.evaluation,
+          provenance: {
+            actor: entry.actor,
+            at: entry.at,
+            revision: entry.revision,
+          },
+        };
+      },
+      Effect.mapError((cause) =>
+        cause instanceof DomainError ? cause : new StorageError({ cause }),
+      ),
+    );
     const exportGraph = sql
       .withTransaction(
         Effect.gen(function* () {
@@ -201,6 +251,9 @@ export class Store extends Context.Service<Store>()("@yakjev/Store", {
     return {
       read,
       history,
+      events,
+      evaluation,
+      findRequest,
       execute,
       exportGraph,
       check: read.pipe(Effect.asVoid),

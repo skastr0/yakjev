@@ -5,7 +5,7 @@ export * from "./graph";
 export const Health = Schema.Struct({
   service: Schema.Literal("yakjev"),
   status: Schema.Literal("ok"),
-  stage: Schema.Literal("scaffold"),
+  stage: Schema.Literal("graph"),
   storage: Schema.Literal("sqlite"),
 });
 

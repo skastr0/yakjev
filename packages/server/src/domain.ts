@@ -8,7 +8,7 @@ import {
   type Provenance,
   type SuggestionInput,
 } from "@yakjev/protocol";
-import { Data, Effect } from "effect";
+import { Data, Effect, Schema } from "effect";
 
 export class DomainError extends Data.TaggedError("DomainError")<{
   readonly code: "Invalid" | "NotFound" | "Conflict";
@@ -275,7 +275,21 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
         );
       if (evaluations.some((item) => item.id === evaluation.id))
         return yield* fail("Conflict", "Evaluation already exists");
-      evaluations.push({ ...evaluation, provenance });
+      const { status } = yield* Schema.decodeUnknownEffect(
+        Schema.Struct({
+          status: Schema.Literals(["succeeded", "failed", "unavailable"]),
+        }),
+      )(evaluation.result).pipe(
+        Effect.mapError(
+          () =>
+            new DomainError({
+              code: "Invalid",
+              message: "Evaluation requires a status",
+            }),
+        ),
+      );
+      const { result: _, ...summary } = evaluation;
+      evaluations.push({ ...summary, status, provenance });
       for (const suggestion of command.suggestions) {
         if (
           suggestion.evaluationId !== evaluation.id ||
