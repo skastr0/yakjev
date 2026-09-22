@@ -618,7 +618,7 @@ function useDragConnect(
       current.phase = "commit";
       current.nearby = nearby;
       window.clearTimeout(current.timer);
-      const missing = unjudgedIds(nearby, new Set(current.held.keys()));
+      const missing = unjudgedIds(nearby, answeredIds(current));
       if (missing.length) await ask(current, missing);
       else await current.chain;
       const data = graphRef.current;
@@ -653,6 +653,13 @@ function useDragConnect(
 
 function alive(current: Session) {
   return current.phase !== "dead" && !current.abort.signal.aborted;
+}
+
+function answeredIds(current: Session) {
+  const ids = new Set<string>();
+  for (const [id, slot] of current.held)
+    if (slot.kind !== "retry") ids.add(id);
+  return ids;
 }
 
 function judgmentsOf(current: Session) {
