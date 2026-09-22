@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import type { Command, Graph, Node } from "@yakjev/protocol";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Command, Graph, Node, Preview } from "@yakjev/protocol";
 import {
   addRelation,
   assertEdge,
@@ -12,13 +12,26 @@ import {
 } from "./graph-commands";
 import { safeSourceHref, type Selection } from "./graph-model";
 import { PALETTE } from "./blend";
+import {
+  captureWithJev,
+  confidenceText,
+  connections,
+  JEV_RATIONALE,
+  jevOrigin,
+  relationLabel,
+  typingGhosts,
+  useDraftPreview,
+  usePairPreview,
+  type Ghost,
+} from "./jev";
 
 export type Mode =
   | { kind: "create"; x: number; y: number }
   | { kind: "node"; id: string }
   | { kind: "edge"; id: string }
   | { kind: "suggestion"; id: string }
-  | { kind: "assert"; source: string; target: string };
+  // preview: Jev's judgment of the pair when the canvas already has one.
+  | { kind: "assert"; source: string; target: string; preview?: Preview };
 
 type Execute = (command: Command, revision: number) => Promise<boolean>;
 type Point = { x: number; y: number };
@@ -34,7 +47,7 @@ export function GraphEditor({
   onCreated,
   onAsserted,
   onFocus,
-  onAskJev,
+  onGhosts,
   focused,
   paint,
   onPaint,
@@ -47,7 +60,10 @@ export function GraphEditor({
   onCreated: (id: string) => void;
   onAsserted: (id: string) => void;
   onFocus: (id: string) => void;
-  onAskJev: (id: string) => void;
+  // Links Jev will make for the intention being typed; [] when none.
+  onGhosts?: (ghosts: Ghost[]) => void;
+  // Removed; kept optional until main.tsx stops passing it.
+  onAskJev?: (id: string) => void;
   focused: boolean;
   paint: Readonly<Record<string, string>>;
   onPaint: (id: string, color: string) => void;
@@ -63,11 +79,13 @@ export function GraphEditor({
     >
       {mode.kind === "create" && (
         <Create
-          revision={graph.revision}
+          graph={graph}
+          at={{ x: mode.x, y: mode.y }}
           execute={execute}
           onClose={onClose}
           onCreated={onCreated}
           onPaint={onPaint}
+          onGhosts={onGhosts}
         />
       )}
       {mode.kind === "node" && (
@@ -77,7 +95,6 @@ export function GraphEditor({
           execute={execute}
           focused={focused}
           onFocus={onFocus}
-          onAskJev={onAskJev}
           onClose={onClose}
           color={paint[mode.id] ?? null}
           onPaint={onPaint}
@@ -101,9 +118,11 @@ export function GraphEditor({
       )}
       {mode.kind === "assert" && (
         <AssertCard
+          key={`${mode.source}>${mode.target}`}
           graph={graph}
           source={mode.source}
           target={mode.target}
+          preview={mode.preview}
           execute={execute}
           onAsserted={onAsserted}
         />
@@ -113,28 +132,46 @@ export function GraphEditor({
 }
 
 function Create({
-  revision,
+  graph,
+  at,
   execute,
   onClose,
   onCreated,
   onPaint,
+  onGhosts,
 }: {
-  revision: number;
+  graph: Graph;
+  at: Point;
   execute: Execute;
   onClose: () => void;
   onCreated: (id: string) => void;
   onPaint: (id: string, color: string) => void;
+  onGhosts: ((ghosts: Ghost[]) => void) | undefined;
 }) {
   const [title, setTitle] = useState("");
   const [color, setColor] = useState<string>(PALETTE[0].hex);
+  const draft = useDraftPreview(title, graph.revision);
+  const text = title.trim();
+  const shown = text.length >= 3 ? draft.result : null;
+  const links = useMemo(
+    () => connections(shown?.preview ?? null, graph),
+    [shown, graph],
+  );
+  const ghosts = useMemo(
+    () => typingGhosts(links, graph, at),
+    [links, graph, at.x, at.y],
+  );
+  useEffect(() => onGhosts?.(ghosts), [ghosts, onGhosts]);
+  useEffect(() => () => onGhosts?.([]), [onGhosts]);
   return (
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        const built = captureIntention(title);
+        const built = captureWithJev(title, draft.result, graph);
         if (!built) return;
-        void execute(built.command, revision).then((ok) => {
+        void execute(built.command, graph.revision).then((ok) => {
           if (!ok) return;
+          onGhosts?.([]);
           onPaint(built.nodeId, color);
           onCreated(built.nodeId);
         });
@@ -152,7 +189,62 @@ function Create({
         }}
       />
       <Swatches value={color} onChange={setColor} />
+      {text.length >= 3 && (
+        <WarmingUp
+          graph={graph}
+          links={links}
+          loading={draft.loading || shown?.text !== text}
+          status={draft.failed ? "failed" : (shown?.preview.status ?? null)}
+        />
+      )}
     </form>
+  );
+}
+
+// What Jev will connect the typed intention to, live.
+function WarmingUp({
+  graph,
+  links,
+  loading,
+  status,
+}: {
+  graph: Graph;
+  links: ReturnType<typeof connections>;
+  loading: boolean;
+  status: Preview["status"] | null;
+}) {
+  const title = (id: string) =>
+    graph.nodes.find((node) => node.id === id)?.title ?? id;
+  const note =
+    status === "unavailable" || status === "failed"
+      ? "Jev is offline · it will connect after create"
+      : links.length > 0
+        ? null
+        : loading || status !== "succeeded"
+          ? "Jev is reading…"
+          : "Nothing to connect yet";
+  return (
+    <div className="jev-live" data-loading={loading} aria-live="polite">
+      <span className="jev-pulse" aria-hidden="true" />
+      {note ? (
+        <p className="jev-note">{note}</p>
+      ) : (
+        <ul className="jev-links" aria-label="Jev will connect">
+          {links.map((link) => (
+            <li key={link.nodeId} data-same={link.same}>
+              <span className="jev-direction" aria-hidden="true">
+                {link.direction === "candidate_to_focus" ? "←" : "→"}
+              </span>
+              <span className="jev-relation">{relationLabel(graph, link)}</span>
+              <span className="jev-title">{title(link.nodeId)}</span>
+              <span className="jev-confidence">
+                {confidenceText(link.confidence)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -162,7 +254,6 @@ function NodeCard({
   execute,
   focused,
   onFocus,
-  onAskJev,
   onClose,
   color,
   onPaint,
@@ -172,7 +263,6 @@ function NodeCard({
   execute: Execute;
   focused: boolean;
   onFocus: (id: string) => void;
-  onAskJev: (id: string) => void;
   onClose: () => void;
   color: string | null;
   onPaint: (id: string, color: string) => void;
@@ -299,9 +389,6 @@ function NodeCard({
         <button type="button" onClick={() => onFocus(node.id)}>
           {focused ? "Whole graph" : "Neighborhood"}
         </button>
-        <button type="button" onClick={() => onAskJev(node.id)}>
-          Ask Jev
-        </button>
         <button
           type="button"
           className="text-button"
@@ -347,6 +434,16 @@ function EdgeCard({
       <p className="editor-claim">
         {title(edge.source)} → {title(edge.target)}
       </p>
+      {edge.origin && (
+        <p className="jev-origin">
+          Jev
+          {edge.origin.same ? " · same intention" : ""}
+          {edge.origin.confidence !== null
+            ? ` · ${confidenceText(edge.origin.confidence)}`
+            : ""}
+          <span> · fix it and Jev learns</span>
+        </p>
+      )}
       <RelationChoices
         graph={graph}
         selected={edge.relation}
@@ -427,32 +524,112 @@ function AssertCard({
   graph,
   source,
   target,
+  preview,
   execute,
   onAsserted,
 }: {
   graph: Graph;
   source: string;
   target: string;
+  preview: Preview | undefined;
   execute: Execute;
   onAsserted: (id: string) => void;
 }) {
   const [rationale, setRationale] = useState("");
   const [adding, setAdding] = useState(false);
   const [label, setLabel] = useState("");
+  const jev = usePairPreview(source, target, preview);
+  // A pair the owner removed before is not Jev's to pre-select.
+  const judgment =
+    jev.judgment?.relation && !jev.judgment.suppressed ? jev.judgment : null;
+  const jevReversed = judgment?.direction === "candidate_to_focus";
+  // null follows Jev; a choice by the owner overrides it.
+  const [reversed, setReversed] = useState<boolean | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
+  const flipped = reversed ?? jevReversed;
+  const from = flipped ? target : source;
+  const to = flipped ? source : target;
+  const selected = picked ?? judgment?.relation ?? null;
+  const connect = useRef<HTMLButtonElement>(null);
+  // Enter accepts Jev's pre-selection once it arrives.
+  useEffect(() => {
+    if (selected && !(document.activeElement instanceof HTMLInputElement))
+      connect.current?.focus();
+  }, [selected !== null]);
   const title = (id: string) =>
     graph.nodes.find((node) => node.id === id)?.title ?? id;
   const choose = (relation: string) => {
-    const built = assertEdge(source, target, relation, rationale);
-    void execute(built.command, graph.revision).then((ok) => {
+    const built = assertEdge(from, to, relation, rationale);
+    // Jev decided the edge only when the owner kept its whole judgment.
+    const command =
+      judgment &&
+      jev.preview &&
+      relation === judgment.relation &&
+      flipped === jevReversed &&
+      !rationale.trim() &&
+      built.command.type === "edge.put"
+        ? {
+            ...built.command,
+            edge: {
+              ...built.command.edge,
+              rationale: JEV_RATIONALE,
+              origin: jevOrigin(jev.preview, judgment),
+            },
+          }
+        : built.command;
+    void execute(command, graph.revision).then((ok) => {
       if (ok) onAsserted(built.edgeId);
     });
   };
   return (
     <div>
       <p className="editor-claim">
-        {title(source)} → {title(target)}
+        {title(from)} → {title(to)}
       </p>
-      <RelationChoices graph={graph} selected={null} onChoose={choose} />
+      <div className="jev-live" data-loading={jev.loading} aria-live="polite">
+        <span className="jev-pulse" aria-hidden="true" />
+        <p className="jev-note">
+          {jev.loading
+            ? "Jev is reading…"
+            : judgment
+              ? `Jev · ${relationLabel(graph, judgment)}${
+                  confidenceText(judgment.confidence)
+                    ? ` · ${confidenceText(judgment.confidence)}`
+                    : ""
+                }`
+              : jev.preview?.status === "succeeded"
+                ? "Jev sees no relation"
+                : "Jev is offline"}
+        </p>
+      </div>
+      <RelationChoices
+        graph={graph}
+        selected={selected}
+        onChoose={(relation) => {
+          setPicked(relation);
+          choose(relation);
+        }}
+      />
+      <div className="chip-row">
+        <button
+          type="button"
+          ref={connect}
+          className="primary"
+          disabled={!selected}
+          onClick={() => {
+            if (selected) choose(selected);
+          }}
+        >
+          Connect
+        </button>
+        <button
+          type="button"
+          aria-label="Swap direction"
+          onClick={() => setReversed(!flipped)}
+        >
+          ⇄ Swap
+        </button>
+      </div>
       {adding ? (
         <input
           autoFocus
