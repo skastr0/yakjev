@@ -760,21 +760,45 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             const to = overlayPoint(arrival.target);
             if (!from || !to) return null;
             const d = `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
+            const sourceColor = nodePaint(arrival.source);
+            const targetColor = nodePaint(arrival.target);
             return (
               <g key={arrival.id} className="jev-arrive">
-                <path className="jev-arrive-glow" d={d} pathLength={1} />
-                <path className="jev-arrive-draw" d={d} pathLength={1} />
+                <path
+                  className="jev-arrive-glow"
+                  d={d}
+                  pathLength={1}
+                  fill="none"
+                  stroke="#e7eedf"
+                  strokeWidth={10}
+                />
+                <path
+                  className="jev-arrive-draw"
+                  d={d}
+                  pathLength={1}
+                  fill="none"
+                  stroke="#668477"
+                  strokeWidth={2}
+                />
                 <circle
                   className="jev-arrive-ring"
                   cx={from.x}
                   cy={from.y}
-                  r={14}
+                  r={20}
+                  fill="none"
+                  stroke={sourceColor}
+                  strokeWidth={6}
+                  opacity={0.45}
                 />
                 <circle
                   className="jev-arrive-ring"
                   cx={to.x}
                   cy={to.y}
-                  r={14}
+                  r={20}
+                  fill="none"
+                  stroke={targetColor}
+                  strokeWidth={6}
+                  opacity={0.45}
                 />
               </g>
             );
@@ -822,6 +846,12 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         </p>
       </div>
     );
+
+    function nodePaint(id: string) {
+      if (!graph.current.hasNode(id)) return "#2c84ff";
+      const color = graph.current.getNodeAttribute(id, "color");
+      return typeof color === "string" && color ? color : "#2c84ff";
+    }
 
     function overlayPoint(end: Ghost["from"]): Point | null {
       const shellBox = shell.current?.getBoundingClientRect();
