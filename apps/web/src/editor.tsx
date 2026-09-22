@@ -13,13 +13,18 @@ import {
 import { safeSourceHref, type Selection } from "./graph-model";
 import { PALETTE } from "./blend";
 import {
+  announceLearned,
   captureWithJev,
   confidenceText,
   connections,
+  correctJev,
   JEV_RATIONALE,
+  jevEdgesOf,
   jevOrigin,
+  labelOf,
   relationLabel,
   typingGhosts,
+  unlinkJev,
   useDraftPreview,
   usePairPreview,
   type Ghost,
@@ -385,6 +390,7 @@ function NodeCard({
           onChange={(event) => setSource(event.target.value)}
         />
       </form>
+      <JevConnected graph={graph} id={node.id} execute={execute} />
       <div className="chip-row">
         <button type="button" onClick={() => onFocus(node.id)}>
           {focused ? "Whole graph" : "Neighborhood"}
@@ -401,6 +407,56 @@ function NodeCard({
           Remove
         </button>
       </div>
+    </div>
+  );
+}
+
+// What Jev connected this node to, each undone with one tap.
+function JevConnected({
+  graph,
+  id,
+  execute,
+}: {
+  graph: Graph;
+  id: string;
+  execute: Execute;
+}) {
+  const links = jevEdgesOf(graph, id);
+  if (links.length === 0) return null;
+  const title = (nodeId: string) =>
+    graph.nodes.find((node) => node.id === nodeId)?.title ?? nodeId;
+  return (
+    <div className="jev-connected">
+      <p className="jev-note">Jev connected</p>
+      <ul className="jev-links">
+        {links.map(({ edge, other, outgoing }) => (
+          <li key={edge.id} data-same={edge.origin?.same === true}>
+            <span className="jev-direction" aria-hidden="true">
+              {outgoing ? "→" : "←"}
+            </span>
+            <span className="jev-relation">
+              {edge.origin?.same ? "same" : labelOf(graph, edge.relation)}
+            </span>
+            <span className="jev-title">{title(other)}</span>
+            <button
+              type="button"
+              className="jev-unlink-one"
+              aria-label={`Not related: ${title(other)}`}
+              title="Not related"
+              onClick={() => {
+                void execute(unlinkJev(edge.id), graph.revision).then((ok) => {
+                  if (ok)
+                    announceLearned(
+                      "Jev learned · it won’t connect these again",
+                    );
+                });
+              }}
+            >
+              ×
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -429,26 +485,57 @@ function EdgeCard({
   const apply = (patch: Parameters<typeof reframeEdge>[1]) => {
     void execute(reframeEdge(edge, patch), graph.revision);
   };
+  const correct = (relation: string) => {
+    const was = labelOf(graph, edge.relation);
+    void execute(
+      correctJev(edge, relation, rationale, graph),
+      graph.revision,
+    ).then((ok) => {
+      if (ok)
+        announceLearned(
+          `Jev learned · ${labelOf(graph, relation)}, not ${was}`,
+        );
+    });
+  };
   return (
     <div>
       <p className="editor-claim">
         {title(edge.source)} → {title(edge.target)}
       </p>
       {edge.origin && (
-        <p className="jev-origin">
-          Jev
-          {edge.origin.same ? " · same intention" : ""}
-          {edge.origin.confidence !== null
-            ? ` · ${confidenceText(edge.origin.confidence)}`
-            : ""}
-          <span> · fix it and Jev learns</span>
-        </p>
+        <div className="jev-fix">
+          <p className="jev-origin">
+            Jev
+            {edge.correction
+              ? " · corrected by you"
+              : `${edge.origin.same ? " · same intention" : ""}${
+                  edge.origin.confidence !== null
+                    ? ` · ${confidenceText(edge.origin.confidence)}`
+                    : ""
+                }`}
+          </p>
+          <button
+            type="button"
+            className="jev-unlink"
+            onClick={() => {
+              void execute(unlinkJev(edge.id), graph.revision).then((ok) => {
+                if (!ok) return;
+                announceLearned("Jev learned · it won’t connect these again");
+                onClose();
+              });
+            }}
+          >
+            Not related
+          </button>
+        </div>
       )}
       <RelationChoices
         graph={graph}
         selected={edge.relation}
         onChoose={(relation) => {
-          if (relation !== edge.relation) apply({ relation, rationale });
+          if (relation === edge.relation) return;
+          if (edge.origin) correct(relation);
+          else apply({ relation, rationale });
         }}
       />
       {adding ? (
@@ -504,17 +591,19 @@ function EdgeCard({
         >
           {edge.state === "disputed" ? "Assert" : "Dispute"}
         </button>
-        <button
-          type="button"
-          className="text-button"
-          onClick={() => {
-            void execute(removeEdge(edge.id), graph.revision).then((ok) => {
-              if (ok) onClose();
-            });
-          }}
-        >
-          Remove
-        </button>
+        {!edge.origin && (
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => {
+              void execute(removeEdge(edge.id), graph.revision).then((ok) => {
+                if (ok) onClose();
+              });
+            }}
+          >
+            Remove
+          </button>
+        )}
       </div>
     </div>
   );

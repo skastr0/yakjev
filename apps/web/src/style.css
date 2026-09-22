@@ -1,4 +1,5 @@
 :root {
+  --jev: #6f52ed;
   font-family: "Avenir Next", Avenir, system-ui, sans-serif;
   color: #203d35;
   background: #f5f2e9;
@@ -416,7 +417,6 @@ summary {
   align-items: center;
 }
 .jev-live {
-  --jev: #6f52ed;
   display: flex;
   gap: 8px;
   align-items: flex-start;
@@ -510,6 +510,82 @@ summary {
 .jev-origin span {
   color: #7d8a80;
   font-weight: normal;
+}
+.jev-fix {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 0 4px;
+}
+.jev-fix .jev-origin {
+  margin: 0;
+}
+.jev-unlink {
+  min-height: 26px;
+  padding: 2px 10px;
+  font-size: 12px;
+  border-color: #6f52ed55;
+  color: #6f52ed;
+  background: #fffcf6;
+}
+.jev-unlink:hover:not(:disabled) {
+  background: #6f52ed;
+  border-color: #6f52ed;
+  color: #fffdf5;
+}
+.jev-connected {
+  margin: 8px 0 2px;
+  padding-top: 8px;
+  border-top: 1px solid #e4e6dc;
+}
+.jev-connected .jev-links li {
+  align-items: center;
+}
+.jev-unlink-one {
+  flex: none;
+  min-height: 20px;
+  width: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: #7d8a80;
+  line-height: 1;
+}
+.jev-unlink-one:hover:not(:disabled) {
+  background: #6f52ed1f;
+  border: 0;
+  color: #6f52ed;
+}
+.jev-learned {
+  position: fixed;
+  left: 50%;
+  bottom: 56px;
+  z-index: 40;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: #6f52ed;
+  color: #fffdf5;
+  font-size: 13px;
+  box-shadow: 0 8px 24px #6f52ed40;
+  pointer-events: none;
+  animation: jev-learned 2.2s ease both;
+}
+@keyframes jev-learned {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+  10%,
+  80% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -4px);
+  }
 }
 .graph-legend {
   display: flex;

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type {
   Command,
+  Edge,
   EdgeInput,
   Graph,
   JevOrigin,
@@ -102,10 +103,7 @@ export function relationLabel(
   judgment: PreviewJudgment,
 ) {
   if (judgment.same) return "same";
-  const relation = graph.taxonomy.relations.find(
-    (item) => item.id === judgment.relation,
-  );
-  return relation?.label ?? judgment.relation ?? "";
+  return judgment.relation ? labelOf(graph, judgment.relation) : "";
 }
 
 export function typingGhosts(
@@ -120,6 +118,73 @@ export function typingGhosts(
     label: relationLabel(graph, judgment),
     kind: "typing",
   }));
+}
+
+// The owner says Jev was wrong about this pair. The server suppresses it and
+// feeds the removal back to Jev as a correction.
+export function unlinkJev(id: string): Command {
+  return {
+    type: "edge.remove",
+    id,
+    suppress: true,
+    rationale: "Not related, per the owner.",
+  };
+}
+
+// A new relation for a Jev edge. Keeps an owner-written rationale; replaces
+// Jev's boilerplate with what was corrected.
+export function correctJev(
+  edge: Edge,
+  relation: string,
+  rationale: string,
+  graph: Pick<Graph, "taxonomy">,
+): Command {
+  const own = rationale.trim();
+  return {
+    type: "edge.reframe",
+    id: edge.id,
+    relation,
+    rationale:
+      own && own !== JEV_RATIONALE
+        ? own
+        : `Corrected from ${labelOf(graph, edge.relation)}.`,
+    state: edge.state,
+  };
+}
+
+// This node's connections that Jev made, with the node on the other end.
+export function jevEdgesOf(graph: Pick<Graph, "edges">, id: string) {
+  return graph.edges.flatMap((edge) =>
+    edge.origin && (edge.source === id || edge.target === id)
+      ? [
+          {
+            edge,
+            other: edge.source === id ? edge.target : edge.source,
+            outgoing: edge.source === id,
+          },
+        ]
+      : [],
+  );
+}
+
+export function labelOf(graph: Pick<Graph, "taxonomy">, relation: string) {
+  return (
+    graph.taxonomy.relations.find((item) => item.id === relation)?.label ??
+    relation
+  );
+}
+
+// A brief confirmation that outlives the card that caused it (a removed edge
+// closes its card at once).
+export function announceLearned(message: string) {
+  if (typeof document === "undefined") return;
+  document.querySelector(".jev-learned")?.remove();
+  const toast = document.createElement("div");
+  toast.className = "jev-learned";
+  toast.setAttribute("role", "status");
+  toast.textContent = message;
+  document.body.append(toast);
+  setTimeout(() => toast.remove(), 2200);
 }
 
 export type DraftPreview = { text: string; preview: Preview };

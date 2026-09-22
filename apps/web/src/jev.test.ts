@@ -10,8 +10,11 @@ import {
   captureWithJev,
   confidenceText,
   connections,
+  correctJev,
   jevEdge,
+  jevEdgesOf,
   typingGhosts,
+  unlinkJev,
 } from "./jev";
 
 const graph = {
@@ -153,4 +156,53 @@ test("typing ghosts start at the create point and label the relation", () => {
 test("confidence reads as a whole percent", () => {
   expect(confidenceText(0.824)).toBe("82%");
   expect(confidenceText(null)).toBe("");
+});
+
+describe("fixing Jev", () => {
+  const edge = {
+    id: "e1",
+    source: "n",
+    target: "a",
+    relation,
+    rationale: "Connected by Jev.",
+    state: "asserted",
+    origin: { model: "jev-test", promptVersion: "p1", confidence: 0.5 },
+  } as never;
+  const other = initialTaxonomy.relations[1]!;
+
+  test("not related removes and suppresses the pair", () => {
+    const command = unlinkJev("e1");
+    expect(command).toMatchObject({
+      type: "edge.remove",
+      id: "e1",
+      suppress: true,
+    });
+    expect(() => Schema.decodeUnknownSync(Command)(command)).not.toThrow();
+  });
+
+  test("a new relation names what it corrected", () => {
+    const command = correctJev(edge, other.id, "Connected by Jev.", graph);
+    expect(command).toEqual({
+      type: "edge.reframe",
+      id: "e1",
+      relation: other.id,
+      rationale: `Corrected from ${initialTaxonomy.relations[0]!.label}.`,
+      state: "asserted",
+    });
+    expect(
+      correctJev(edge, other.id, "Flights come first", graph),
+    ).toMatchObject({ rationale: "Flights come first" });
+  });
+
+  test("lists only Jev's edges touching the node", () => {
+    const plain = { ...(edge as object), id: "e2", origin: undefined };
+    const elsewhere = { ...(edge as object), id: "e3", source: "b" };
+    const list = jevEdgesOf({ edges: [edge, plain, elsewhere] } as never, "a");
+    expect(
+      list.map((item) => [item.edge.id, item.other, item.outgoing]),
+    ).toEqual([
+      ["e1", "n", false],
+      ["e3", "b", false],
+    ]);
+  });
 });
