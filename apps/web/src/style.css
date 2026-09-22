@@ -390,6 +390,16 @@ summary {
   border-color: #284e40;
   color: #fffdf5;
 }
+.chip-row .swatch {
+  width: 22px;
+  min-height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+}
+.swatch[aria-pressed="true"] {
+  border-color: #203d35;
+}
 .chip-row button[data-blocking="true"][aria-pressed="true"] {
   background: #8a4e2e;
   border-color: #8a4e2e;

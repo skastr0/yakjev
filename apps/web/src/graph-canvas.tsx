@@ -16,6 +16,7 @@ import {
 } from "sigma/rendering";
 import type { Graph } from "@yakjev/protocol";
 import { rememberLayout } from "./layout";
+import { blendedColors } from "./blend";
 import {
   layoutBounds,
   nodeColor,
@@ -36,6 +37,7 @@ type Props = {
   hidden: ReadonlySet<string> | null;
   matches: ReadonlySet<string> | null;
   focusId: string | null;
+  paint: Readonly<Record<string, string>>;
   onSelect: (selection: Selection) => void;
   onCreate: (at: Point) => void;
   onLink: (source: string, target: string) => void;
@@ -383,12 +385,14 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         .join("\n");
       const grew = ids !== seenIds.current;
       seenIds.current = ids;
+      recolor(graph.current, props.data, props.paint);
+      renderer.current?.refresh();
       if (
         renderer.current &&
         ((wasEmpty && graph.current.order > 0) || (grew && !clusterFillsView()))
       )
         fit();
-    }, [props.data]);
+    }, [props.data, props.paint]);
 
     return (
       <div className="graph-shell">
@@ -440,3 +444,15 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     );
   },
 );
+
+function recolor(
+  target: MultiDirectedGraph,
+  data: Graph,
+  paint: Readonly<Record<string, string>>,
+) {
+  const colors = blendedColors(data, paint);
+  for (const [id, color] of colors.nodes)
+    if (target.hasNode(id)) target.setNodeAttribute(id, "color", color);
+  for (const [id, color] of colors.edges)
+    if (target.hasEdge(id)) target.setEdgeAttribute(id, "color", color);
+}

@@ -11,6 +11,7 @@ import {
   updateNode,
 } from "./graph-commands";
 import { safeSourceHref, type Selection } from "./graph-model";
+import { PALETTE } from "./blend";
 
 export type Mode =
   | { kind: "create"; x: number; y: number }
@@ -35,6 +36,8 @@ export function GraphEditor({
   onFocus,
   onAskJev,
   focused,
+  paint,
+  onPaint,
 }: {
   graph: Graph;
   mode: Mode;
@@ -46,6 +49,8 @@ export function GraphEditor({
   onFocus: (id: string) => void;
   onAskJev: (id: string) => void;
   focused: boolean;
+  paint: Readonly<Record<string, string>>;
+  onPaint: (id: string, color: string) => void;
 }) {
   if (!anchor) return null;
   const style = placeCard(anchor, mode.kind);
@@ -62,6 +67,7 @@ export function GraphEditor({
           execute={execute}
           onClose={onClose}
           onCreated={onCreated}
+          onPaint={onPaint}
         />
       )}
       {mode.kind === "node" && (
@@ -73,6 +79,8 @@ export function GraphEditor({
           onFocus={onFocus}
           onAskJev={onAskJev}
           onClose={onClose}
+          color={paint[mode.id] ?? null}
+          onPaint={onPaint}
         />
       )}
       {mode.kind === "edge" && (
@@ -109,13 +117,16 @@ function Create({
   execute,
   onClose,
   onCreated,
+  onPaint,
 }: {
   revision: number;
   execute: Execute;
   onClose: () => void;
   onCreated: (id: string) => void;
+  onPaint: (id: string, color: string) => void;
 }) {
   const [title, setTitle] = useState("");
+  const [color, setColor] = useState<string>(PALETTE[0].hex);
   return (
     <form
       onSubmit={(event) => {
@@ -123,7 +134,9 @@ function Create({
         const built = captureIntention(title);
         if (!built) return;
         void execute(built.command, revision).then((ok) => {
-          if (ok) onCreated(built.nodeId);
+          if (!ok) return;
+          onPaint(built.nodeId, color);
+          onCreated(built.nodeId);
         });
       }}
     >
@@ -138,6 +151,7 @@ function Create({
           if (event.key === "Escape") onClose();
         }}
       />
+      <Swatches value={color} onChange={setColor} />
     </form>
   );
 }
@@ -150,6 +164,8 @@ function NodeCard({
   onFocus,
   onAskJev,
   onClose,
+  color,
+  onPaint,
 }: {
   graph: Graph;
   id: string;
@@ -158,6 +174,8 @@ function NodeCard({
   onFocus: (id: string) => void;
   onAskJev: (id: string) => void;
   onClose: () => void;
+  color: string | null;
+  onPaint: (id: string, color: string) => void;
 }) {
   const node = graph.nodes.find((item) => item.id === id);
   const [title, setTitle] = useState(node?.title ?? "");
@@ -230,6 +248,7 @@ function NodeCard({
           </button>
         ))}
       </div>
+      <Swatches value={color} onChange={(hex) => onPaint(node.id, hex)} />
       {node.sources.length > 0 && (
         <ul className="source-links">
           {node.sources.map((item, index) => {
@@ -551,6 +570,30 @@ function RelationChoices({
         >
           {relation.label}
         </button>
+      ))}
+    </div>
+  );
+}
+
+function Swatches({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (hex: string) => void;
+}) {
+  return (
+    <div className="chip-row" role="group" aria-label="Color">
+      {PALETTE.map((swatch) => (
+        <button
+          key={swatch.id}
+          type="button"
+          className="swatch"
+          aria-label={swatch.id}
+          aria-pressed={value === swatch.hex}
+          style={{ background: swatch.hex }}
+          onClick={() => onChange(swatch.hex)}
+        />
       ))}
     </div>
   );

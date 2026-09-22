@@ -4,6 +4,7 @@ import { errorMessage, request } from "./api";
 import { GraphCanvas, type CanvasHandle } from "./graph-canvas";
 import { GraphEditor, type Mode } from "./editor";
 import { searchNodes, visibleGraph } from "./graph-model";
+import { readPaint, writePaint } from "./blend";
 import { useGraph } from "./use-graph";
 import "./style.css";
 
@@ -21,6 +22,7 @@ function App() {
   const [focusId, setFocusId] = useState<string | null>(null);
   const [viewTick, setViewTick] = useState(0);
   const [evaluating, setEvaluating] = useState(false);
+  const [paint, setPaint] = useState(readPaint);
   // A new object every render makes the canvas re-apply layout on camera ticks.
   const view = useMemo(
     () => (graph ? visibleGraph(graph, showArchived) : null),
@@ -356,6 +358,7 @@ function App() {
             hidden={hidden}
             matches={matchIds}
             focusId={focusId}
+            paint={paint}
             onView={() => {
               if (mode) setViewTick((value) => value + 1);
             }}
@@ -392,6 +395,10 @@ function App() {
               onAsserted={(id) => setMode({ kind: "edge", id })}
               onFocus={toggleFocus}
               onAskJev={(id) => void askJev(id)}
+              paint={paint}
+              onPaint={(id, color) =>
+                setPaint((current) => writePaint(current, id, color))
+              }
             />
           )}
         </div>
