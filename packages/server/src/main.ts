@@ -25,16 +25,40 @@ if (
 ) {
   throw new Error("YAKJEV_ORIGIN must be a bare origin, HTTPS in production");
 }
+const devAuth = process.env.YAKJEV_DEV_AUTH === "true";
+if (
+  devAuth &&
+  (process.env.NODE_ENV === "production" ||
+    !["127.0.0.1", "localhost"].includes(origin.hostname))
+) {
+  throw new Error("YAKJEV_DEV_AUTH requires a non-production loopback origin");
+}
+const ownerToken = devAuth
+  ? "synthetic-yakjev-owner-token-local-only"
+  : process.env.YAKJEV_OWNER_TOKEN;
+if (!ownerToken || ownerToken.length < 32) {
+  throw new Error(
+    "Set YAKJEV_OWNER_TOKEN (at least 32 characters), or explicitly enable synthetic YAKJEV_DEV_AUTH locally",
+  );
+}
 const dataDir = resolve(root, process.env.YAKJEV_DATA_DIR ?? ".data");
 await mkdir(dataDir, { recursive: true, mode: 0o700 });
 const app = createApp({
   databasePath: `${dataDir}/yakjev.sqlite`,
   origin: origin.origin,
   webRoot: `${root}/apps/web/dist`,
+  ownerToken,
+  ownerId: process.env.YAKJEV_OWNER_ID ?? "owner",
+  listenPort: port,
 });
 await app.ready();
-const server = Bun.serve({ hostname: "127.0.0.1", port, fetch: app.fetch });
-console.log(`yakjev scaffold listening on http://127.0.0.1:${server.port}`);
+const server = Bun.serve({
+  hostname: "127.0.0.1",
+  port,
+  maxRequestBodySize: 1024 * 1024,
+  fetch: app.fetch,
+});
+console.log(`yakjev listening on loopback port ${server.port}`);
 let stopping = false;
 async function stop() {
   if (stopping) return;

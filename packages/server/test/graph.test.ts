@@ -1,0 +1,386 @@
+import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import {
+  type Actor,
+  type Command,
+  type CommandRequest,
+  type SuggestionInput,
+} from "@yakjev/protocol";
+import { Effect, ManagedRuntime } from "effect";
+import { neighborhood } from "../src/domain";
+import { Store, storeLayer } from "../src/store";
+
+const cleanups: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+});
+const actor: Actor = { id: "owner", channel: "mcp" };
+const node = (id: string, title = id) => ({
+  id,
+  title,
+  description: "Concise context",
+  project: "synthetic",
+  status: "idea" as const,
+  sources: [{ uri: `https://example.test/${id}`, label: "Canonical source" }],
+});
+const edge = (
+  id: string,
+  source: string,
+  target: string,
+  relation = "requires",
+) => ({
+  id,
+  source,
+  target,
+  relation,
+  rationale: `${source} allegedly requires ${target}`,
+});
+const capture: Command = {
+  type: "capture",
+  capture: {
+    id: "capture",
+    text: "A claimed chain, not verified facts",
+    nodeIds: ["a", "b", "c"],
+    sources: [{ uri: "https://example.test/session", label: "Session" }],
+  },
+  nodes: [node("a"), node("b"), node("c")],
+  edges: [edge("ab", "a", "b"), edge("bc", "b", "c")],
+};
+const suggestion = (
+  id: string,
+  source: string,
+  target: string,
+  basedOnRevision: number,
+): SuggestionInput => ({
+  id,
+  source,
+  target,
+  basedOnRevision,
+  taxonomyVersion: 1,
+  relation: "requires",
+  rationale: "Synthetic uncertain judgment",
+  confidence: 0.8,
+  evidence: [],
+  model: "fixture",
+  promptVersion: "1",
+});
+async function fixture() {
+  const dir = await mkdtemp(`${tmpdir()}/yakjev-graph-`);
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+  const path = `${dir}/graph.sqlite`;
+  const open = async () => {
+    const runtime = ManagedRuntime.make(storeLayer(path));
+    cleanups.push(() => runtime.dispose());
+    const store = await runtime.runPromise(
+      Effect.gen(function* () {
+        return yield* Store;
+      }),
+    );
+    const run = runtime.runPromise;
+    const send = async (
+      command: Command,
+      requestId: string = crypto.randomUUID(),
+      expectedRevision?: number,
+    ) =>
+      run(
+        store.execute(actor, {
+          requestId,
+          expectedRevision:
+            expectedRevision ?? (await run(store.read)).revision,
+          command,
+        }),
+      );
+    return { runtime, store, run, send };
+  };
+  return { ...(await open()), open, path };
+}
+
+test("asymmetric direction, cycles, non-blocking claims and diamonds remain distinct", async () => {
+  const { store, run, send } = await fixture();
+  await send(capture);
+  let graph = await run(store.read);
+  expect(
+    (await run(neighborhood(graph, "c", "outgoing", true))).nodes.map(
+      (item) => item.id,
+    ),
+  ).toEqual(["c"]);
+  expect(
+    (await run(neighborhood(graph, "c", "incoming", true))).nodes.map(
+      (item) => item.id,
+    ),
+  ).toEqual(["a", "b", "c"]);
+  await send({ type: "edge.put", edge: edge("ac", "a", "c") });
+  graph = await run(store.read);
+  expect(
+    (await run(neighborhood(graph, "a", "outgoing", true))).cycleDetected,
+  ).toBe(false);
+  await send({ type: "edge.put", edge: edge("ca", "c", "a") });
+  const cycle = await run(
+    neighborhood(await run(store.read), "a", "outgoing", true),
+  );
+  expect(cycle.cycleDetected).toBe(true);
+  expect(cycle.nodes).toHaveLength(3);
+  expect(cycle.edges).toHaveLength(4);
+  await send({
+    type: "edge.reframe",
+    id: "ab",
+    relation: "benefits_from",
+    rationale: "Optional preparation",
+    state: "asserted",
+  });
+  graph = await run(store.read);
+  expect(
+    (await run(neighborhood(graph, "a", "outgoing", true))).blockingEdges,
+  ).not.toContain("ab");
+  expect(
+    graph.edges.find((item) => item.id === "ab")?.assertion.rationale,
+  ).toBe("a allegedly requires b");
+});
+
+test("capture rollback and injected SQLite journal failure leave graph and revision unchanged", async () => {
+  const { store, run, send, path } = await fixture();
+  await expect(
+    send({ ...capture, edges: [edge("bad", "a", "missing")] }),
+  ).rejects.toMatchObject({ _tag: "DomainError", code: "NotFound" });
+  expect((await run(store.read)).revision).toBe(0);
+  expect((await run(store.read)).nodes).toHaveLength(0);
+  const db = new Database(path);
+  try {
+    db.exec(
+      "CREATE TRIGGER reject_journal BEFORE INSERT ON graph_history BEGIN SELECT RAISE(ABORT, 'injected failure'); END",
+    );
+    await expect(send(capture)).rejects.toMatchObject({ _tag: "StorageError" });
+    expect((await run(store.read)).revision).toBe(0);
+    expect(await run(store.history(0, 100))).toEqual([]);
+    db.exec("DROP TRIGGER reject_journal");
+  } finally {
+    db.close();
+  }
+  await send(capture);
+  expect((await run(store.read)).nodes).toHaveLength(3);
+});
+
+test("concurrent revisions, actor-scoped durable replay and altered-payload conflicts", async () => {
+  const { store, run, send, runtime, open } = await fixture();
+  const input: CommandRequest = {
+    requestId: "lost-response",
+    expectedRevision: 0,
+    command: capture,
+  };
+  const first = await run(store.execute(actor, input));
+  const races = await Promise.allSettled([
+    send({ type: "node.put", node: node("d") }, "race1", 1),
+    send({ type: "node.put", node: node("e") }, "race2", 1),
+  ]);
+  expect(races.filter((item) => item.status === "fulfilled")).toHaveLength(1);
+  expect(
+    races.find((item) => item.status === "rejected")?.reason,
+  ).toMatchObject({ code: "Conflict", currentRevision: 2 });
+  expect(await run(store.execute(actor, input))).toEqual({
+    receipt: first.receipt,
+    replayed: true,
+  });
+  await expect(
+    run(store.execute(actor, { ...input, expectedRevision: 2 })),
+  ).rejects.toMatchObject({ code: "Conflict" });
+  await run(
+    store.execute(
+      { id: "other-owner-fixture", channel: "browser" },
+      {
+        requestId: "lost-response",
+        expectedRevision: 2,
+        command: { type: "node.put", node: node("other") },
+      },
+    ),
+  );
+  const before = await run(store.exportGraph);
+  await runtime.dispose();
+  const reopened = await open();
+  expect(await reopened.run(reopened.store.exportGraph)).toEqual(before);
+  expect(await reopened.run(reopened.store.execute(actor, input))).toEqual({
+    receipt: first.receipt,
+    replayed: true,
+  });
+  expect((await reopened.run(reopened.store.read)).revision).toBe(3);
+});
+
+test("reframes preserve all history, undo is monotonic, stale undo cannot erase an intervening edit", async () => {
+  const { store, run, send } = await fixture();
+  await send(capture);
+  await send({
+    type: "edge.reframe",
+    id: "ab",
+    relation: "benefits_from",
+    rationale: "First correction",
+    state: "asserted",
+  });
+  await send({
+    type: "edge.reframe",
+    id: "ab",
+    relation: "related_to",
+    rationale: "Second correction",
+    state: "disputed",
+  });
+  await expect(send({ type: "undo", revision: 2 })).rejects.toMatchObject({
+    code: "Conflict",
+  });
+  await send({ type: "undo", revision: 3 });
+  expect((await run(store.read)).edges[0]?.rationale).toBe("First correction");
+  await send({ type: "undo", revision: 4 });
+  expect((await run(store.read)).edges[0]?.rationale).toBe("Second correction");
+  const history = await run(store.history(0, 100));
+  expect(history.map((entry) => entry.revision)).toEqual([1, 2, 3, 4, 5]);
+  expect(history[1]?.command).toMatchObject({ rationale: "First correction" });
+  expect(history[2]?.command).toMatchObject({ rationale: "Second correction" });
+  await expect(
+    send({ type: "edge.put", edge: edge("new-id", "a", "b") }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+  await expect(
+    send({
+      type: "suggestion.record",
+      suggestion: suggestion("reinstate", "b", "a", 5),
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+});
+
+test("suggestions are separate; relevant freshness, atomic acceptance, rejection suppression and batch recording", async () => {
+  const { store, run, send } = await fixture();
+  await send(capture);
+  await send({
+    type: "suggestion.record",
+    suggestion: suggestion("s1", "a", "c", 1),
+  });
+  expect((await run(store.read)).edges).toHaveLength(2);
+  await send({ type: "node.put", node: node("unrelated") });
+  expect((await run(store.read)).suggestions[0]?.status).toBe("pending");
+  await send({
+    type: "suggestion.decide",
+    id: "s1",
+    decision: "accept",
+    rationale: "Explicit acceptance",
+  });
+  let graph = await run(store.read);
+  expect(graph.revision).toBe(4);
+  expect(graph.edges.find((item) => item.id === "s1")).toMatchObject({
+    suggestionId: "s1",
+    updated: { revision: 4 },
+  });
+  expect(graph.suggestions[0]).toMatchObject({
+    status: "accepted",
+    decision: { revision: 4 },
+  });
+  await expect(
+    send({
+      type: "suggestion.decide",
+      id: "s1",
+      decision: "accept",
+      rationale: "again",
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+  await send({
+    type: "suggestion.record",
+    suggestion: suggestion("s2", "c", "b", 4),
+  });
+  await send({ type: "node.put", node: node("b", "Changed endpoint") });
+  expect((await run(store.read)).suggestions[1]?.status).toBe("superseded");
+  await expect(
+    send({
+      type: "suggestion.decide",
+      id: "s2",
+      decision: "accept",
+      rationale: "stale",
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+  await send({
+    type: "evaluation.record",
+    evaluation: {
+      id: "eval",
+      inputHash: "fixture-hash",
+      basedOnRevision: 6,
+      taxonomyVersion: 1,
+      result: { status: "succeeded" },
+    },
+    suggestions: [
+      {
+        ...suggestion("s3", "unrelated", "a", 6),
+        evaluationId: "eval",
+        inputHash: "fixture-hash",
+      },
+      {
+        ...suggestion("s4", "unrelated", "b", 6),
+        evaluationId: "eval",
+        inputHash: "fixture-hash",
+      },
+    ],
+  });
+  await send({
+    type: "suggestion.decide",
+    id: "s3",
+    decision: "reject",
+    rationale: "Not useful",
+  });
+  await send({
+    type: "suggestion.decide",
+    id: "s4",
+    decision: "accept",
+    rationale: "Useful",
+  });
+  graph = await run(store.read);
+  expect(graph.evaluations).toHaveLength(1);
+  expect(graph.suggestions.find((item) => item.id === "s4")?.status).toBe(
+    "accepted",
+  );
+  await expect(
+    send({
+      type: "suggestion.record",
+      suggestion: suggestion("s5", "a", "unrelated", 9),
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+});
+
+test("layout patches and archived source references survive edits, taxonomy cannot drop live types", async () => {
+  const { store, run, send } = await fixture();
+  await send(capture);
+  await send({
+    type: "layout.set",
+    positions: [{ id: "a", x: -21, y: 7, pinned: true }],
+  });
+  await send({
+    type: "layout.set",
+    positions: [{ id: "b", x: 18, y: -100, pinned: false }],
+  });
+  await send({
+    type: "node.put",
+    node: { ...node("a", "Archived idea"), status: "archived" },
+  });
+  const graph = await run(store.read);
+  expect(graph.nodes[0]?.position).toEqual({ x: -21, y: 7, pinned: true });
+  expect(graph.nodes[1]?.position).toEqual({ x: 18, y: -100, pinned: false });
+  expect(graph.captures[0]?.nodeIds).toContain("a");
+  expect(graph.nodes[0]?.sources[0]?.uri).toBe("https://example.test/a");
+  await expect(
+    send({
+      type: "layout.set",
+      positions: [{ id: "missing", x: 1, y: 2, pinned: false }],
+    }),
+  ).rejects.toMatchObject({ code: "NotFound" });
+  await expect(
+    send({
+      type: "taxonomy.replace",
+      relations: graph.taxonomy.relations.filter(
+        (relation) => relation.id !== "requires",
+      ),
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+  await send({
+    type: "taxonomy.replace",
+    relations: graph.taxonomy.relations.map((relation) => ({
+      ...relation,
+      definition: `${relation.definition} User criteria.`,
+    })),
+  });
+  expect((await run(store.read)).taxonomy.version).toBe(2);
+  expect((await run(store.read)).edges).toHaveLength(2);
+});

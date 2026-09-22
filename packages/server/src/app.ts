@@ -1,83 +1,318 @@
-import { Health } from "@yakjev/protocol";
-import { Effect, ManagedRuntime, Schema } from "effect";
+import { BunServices } from "@effect/platform-bun";
+import { Health, Id, Revision } from "@yakjev/protocol";
+import { Effect, Layer, Schema, Stream } from "effect";
+import {
+  HttpRouter,
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http";
+import { Auth, type AuthOptions } from "./auth";
+import { DomainError, neighborhood, searchNodes } from "./domain";
 import { Store, storeLayer } from "./store";
 
-const health = Effect.gen(function* () {
-  const store = yield* Store;
-  yield* store.check;
-  return Schema.decodeUnknownSync(Health)({
-    service: "yakjev",
-    status: "ok",
-    stage: "scaffold",
-    storage: "sqlite",
-  });
+const headers = {
+  "Cache-Control": "no-store",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+  "Content-Security-Policy":
+    "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+};
+const json = (body: unknown, status = 200) =>
+  HttpServerResponse.jsonUnsafe(body, { status });
+const statusFor = {
+  Invalid: 400,
+  Unauthorized: 401,
+  Forbidden: 403,
+  NotFound: 404,
+  Conflict: 409,
+};
+const invalid = () =>
+  new DomainError({ code: "Invalid", message: "Invalid request" });
+const numberParam = (value: string | null, fallback: number) =>
+  value === null
+    ? Effect.succeed(fallback)
+    : Schema.decodeUnknownEffect(Revision)(
+        /^\d+$/.test(value) ? Number(value) : NaN,
+      ).pipe(Effect.mapError(invalid));
+const bodyJson = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  if (
+    !request.headers["content-type"]
+      ?.toLowerCase()
+      .startsWith("application/json")
+  )
+    return yield* invalid();
+  const text = yield* request.text;
+  if (text.length > 1024 * 1024) return yield* invalid();
+  return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
+    text,
+  );
 });
 
-export function createApp(options: {
-  databasePath: string;
-  origin: string;
-  webRoot: string;
-}) {
-  const runtime = ManagedRuntime.make(storeLayer(options.databasePath));
-  const origin = new URL(options.origin);
-  const headers = {
-    "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
-    "Content-Security-Policy":
-      "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
-  };
+export interface AppOptions extends AuthOptions {
+  readonly databasePath: string;
+  readonly webRoot: string;
+  readonly listenPort?: number;
+}
 
-  return {
-    ready: () => runtime.runPromise(health),
-    close: () => runtime.dispose(),
-    async fetch(request: Request): Promise<Response> {
-      const url = new URL(request.url);
-      // Reject DNS rebinding. Loopback health probes carry no application data.
-      const host = request.headers.get("host") ?? url.host;
-      const loopbackProbe =
-        url.pathname === "/healthz" &&
-        (host === "127.0.0.1:3210" || host === "localhost:3210");
-      if (host !== origin.host && !loopbackProbe) {
-        return new Response("Forbidden host", { status: 403, headers });
-      }
-      const requestOrigin = request.headers.get("origin");
-      if (requestOrigin && requestOrigin !== origin.origin) {
-        return new Response("Forbidden origin", { status: 403, headers });
-      }
-      if (request.method !== "GET" && request.method !== "HEAD") {
-        return new Response("Method not allowed", {
-          status: 405,
-          headers: { ...headers, Allow: "GET, HEAD" },
-        });
-      }
-      if (url.pathname === "/healthz") {
-        return runtime.runPromise(
-          health.pipe(
-            Effect.map((body) => Response.json(body, { headers })),
-            Effect.catchTag("StorageError", () =>
-              Effect.succeed(
-                Response.json(
-                  { status: "unavailable" },
-                  { status: 503, headers },
+export function createApp(options: AppOptions) {
+  const origin = new URL(options.origin);
+  const routes = HttpRouter.use(
+    Effect.fnUntraced(function* (router) {
+      const store = yield* Store;
+      const auth = yield* Auth;
+      const handle = Effect.fn("Http.handle")(
+        function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const url = yield* Effect.try(
+            () => new URL(request.url, origin),
+          ).pipe(Effect.mapError(invalid));
+          if (url.pathname === "/healthz") {
+            if (request.method !== "GET" && request.method !== "HEAD")
+              return json(
+                { error: "Invalid", message: "Method not allowed" },
+                405,
+              );
+            yield* store.check;
+            return json({
+              service: "yakjev",
+              status: "ok",
+              stage: "scaffold",
+              storage: "sqlite",
+            } satisfies Health);
+          }
+          if (url.pathname === "/api/session" && request.method === "POST") {
+            const body = yield* bodyJson.pipe(
+              Effect.flatMap(
+                Schema.decodeUnknownEffect(
+                  Schema.Struct({
+                    token: Schema.String.check(Schema.isMaxLength(4096)),
+                  }),
                 ),
               ),
+            );
+            const cookie = yield* auth.login(request.headers, body.token);
+            return HttpServerResponse.setHeader(
+              json({ authenticated: true }),
+              "set-cookie",
+              cookie,
+            );
+          }
+          if (url.pathname === "/api/session" && request.method === "DELETE") {
+            const cookie = yield* auth.logout(request.headers);
+            return HttpServerResponse.setHeader(
+              json({ authenticated: false }),
+              "set-cookie",
+              cookie,
+            );
+          }
+          const actor = yield* auth.browser(
+            request.headers,
+            request.method !== "GET" && request.method !== "HEAD",
+          );
+          if (url.pathname === "/api/session" && request.method === "GET")
+            return json({ actor });
+          if (url.pathname === "/api/commands" && request.method === "POST")
+            return json(yield* store.execute(actor, yield* bodyJson));
+          if (request.method !== "GET")
+            return json(
+              { error: "Invalid", message: "Method not allowed" },
+              405,
+            );
+          if (url.pathname === "/api/graph") return json(yield* store.read);
+          if (url.pathname === "/api/export")
+            return json(yield* store.exportGraph);
+          if (url.pathname === "/api/search")
+            return json(
+              searchNodes(yield* store.read, url.searchParams.get("q") ?? ""),
+            );
+          if (url.pathname === "/api/history") {
+            const after = yield* numberParam(url.searchParams.get("after"), 0);
+            const limit = yield* numberParam(
+              url.searchParams.get("limit"),
+              100,
+            );
+            return json(yield* store.history(after, limit));
+          }
+          if (url.pathname === "/api/neighborhood") {
+            const id = yield* Schema.decodeUnknownEffect(Id)(
+              url.searchParams.get("id"),
+            );
+            const direction = yield* Schema.decodeUnknownEffect(
+              Schema.Literals(["outgoing", "incoming", "both"]),
+            )(url.searchParams.get("direction") ?? "outgoing");
+            const blocking = yield* Schema.decodeUnknownEffect(
+              Schema.Literals(["true", "false"]),
+            )(url.searchParams.get("blocking") ?? "false");
+            return json(
+              yield* neighborhood(
+                yield* store.read,
+                id,
+                direction,
+                blocking === "true",
+              ),
+            );
+          }
+          if (url.pathname === "/api/events") {
+            const after = yield* numberParam(
+              request.headers["last-event-id"] ?? url.searchParams.get("after"),
+              0,
+            );
+            const graph = yield* store.read;
+            if (after > graph.revision)
+              return yield* new DomainError({
+                code: "Conflict",
+                message: "Event cursor is ahead of this graph; reload snapshot",
+                currentRevision: graph.revision,
+              });
+            const events = Stream.unfold(
+              after,
+              Effect.fnUntraced(function* (cursor) {
+                // Recheck expiry while streaming. Durable bounded polling has no subscribe/read gap.
+                yield* auth.browser(request.headers, false);
+                const entries = yield* store.history(cursor, 100);
+                if (entries.length === 0) {
+                  yield* Effect.sleep("1 second");
+                  return [": keepalive\n\n", cursor] as const;
+                }
+                const messages = entries
+                  .map(
+                    ({ command: _, ...receipt }) =>
+                      `id: ${receipt.revision}\nevent: change\ndata: ${JSON.stringify(receipt)}\n\n`,
+                  )
+                  .join("");
+                return [
+                  messages,
+                  entries[entries.length - 1]!.revision,
+                ] as const;
+              }),
+            );
+            return HttpServerResponse.stream(
+              Stream.concat(Stream.make(": connected\n\n"), events).pipe(
+                Stream.encodeText,
+              ),
+              {
+                contentType: "text/event-stream",
+                headers: {
+                  "cache-control": "no-cache, no-transform",
+                  "x-accel-buffering": "no",
+                },
+              },
+            );
+          }
+          return json({ error: "NotFound", message: "Not found" }, 404);
+        },
+        Effect.catchTags({
+          DomainError: (error) =>
+            Effect.succeed(
+              json(
+                {
+                  error: error.code,
+                  message: error.message,
+                  ...(error.currentRevision === undefined
+                    ? {}
+                    : { currentRevision: error.currentRevision }),
+                },
+                statusFor[error.code],
+              ),
             ),
-          ),
-        );
+          AuthError: (error) =>
+            Effect.succeed(
+              json(
+                { error: error.code, message: error.message },
+                statusFor[error.code],
+              ),
+            ),
+          StorageError: () =>
+            Effect.succeed(
+              json(
+                { error: "StorageError", message: "Storage unavailable" },
+                503,
+              ),
+            ),
+          SchemaError: () =>
+            Effect.succeed(
+              json({ error: "Invalid", message: "Invalid request" }, 400),
+            ),
+          HttpServerError: () =>
+            Effect.succeed(
+              json({ error: "Invalid", message: "Invalid request" }, 400),
+            ),
+        }),
+      );
+      yield* router.add("*", "/api/*", handle());
+      yield* router.add("*", "/healthz", handle());
+    }),
+  );
+  const app = HttpRouter.toWebHandler(
+    routes.pipe(
+      Layer.provide(
+        Layer.mergeAll(storeLayer(options.databasePath), Auth.layer(options)),
+      ),
+      Layer.provide(HttpServer.layerServices),
+      Layer.provide(BunServices.layer),
+    ),
+    { disableLogger: true },
+  );
+  const error = (message: string, status: number) =>
+    Response.json(
+      { error: status === 400 ? "Invalid" : "Forbidden", message },
+      { status, headers },
+    );
+  const fetch = async (request: Request): Promise<Response> => {
+    try {
+      const url = new URL(request.url);
+      const host = request.headers.get("host") ?? url.host;
+      const port = options.listenPort ?? 3210;
+      const loopbackProbe =
+        url.pathname === "/healthz" &&
+        (host === `127.0.0.1:${port}` || host === `localhost:${port}`);
+      if (host !== origin.host && !loopbackProbe)
+        return error("Forbidden host", 403);
+      if (
+        request.headers.has("origin") &&
+        request.headers.get("origin") !== origin.origin
+      )
+        return error("Forbidden origin", 403);
+      if (url.pathname === "/healthz" || url.pathname.startsWith("/api/")) {
+        const response = await app.handler(request);
+        const secured = new Headers(response.headers);
+        for (const [key, value] of Object.entries(headers))
+          if (!secured.has(key)) secured.set(key, value);
+        return new Response(response.body, {
+          status: response.status,
+          headers: secured,
+        });
       }
-      // Serve only the built entrypoint and flat Vite assets; never repo files or data.
+      // Only built UI assets are public. Every data read and stream requires auth.
       const relative =
         url.pathname === "/"
           ? "index.html"
           : /^\/assets\/[a-zA-Z0-9_-]+\.(js|css|svg|woff2)$/.test(url.pathname)
             ? url.pathname.slice(1)
             : undefined;
-      if (relative) {
+      if (relative && (request.method === "GET" || request.method === "HEAD")) {
         const file = Bun.file(`${options.webRoot}/${relative}`);
-        if (await file.exists()) return new Response(file, { headers });
+        if (await file.exists())
+          return new Response(request.method === "HEAD" ? null : file, {
+            headers,
+          });
       }
       return new Response("Not found", { status: 404, headers });
+    } catch {
+      // Never let Bun's fallback page expose stack traces or source snippets.
+      return error("Invalid request", 400);
+    }
+  };
+  return {
+    fetch,
+    close: app.dispose,
+    ready: async () => {
+      const response = await fetch(new Request(`${origin.origin}/healthz`));
+      if (response.status !== 200)
+        throw new Error("Yakjev initialization failed");
+      return Schema.decodeUnknownSync(Health)(await response.json());
     },
   };
 }

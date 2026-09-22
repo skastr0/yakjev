@@ -18,6 +18,7 @@ async function fixture() {
     databasePath: `${dir}/graph.sqlite`,
     webRoot: `${dir}/web`,
     origin: "https://yakjev.example.ts.net",
+    ownerToken: "synthetic-owner-test-token-with-40-characters",
   };
   const app = createApp(options);
   cleanups.push(() => app.close());
