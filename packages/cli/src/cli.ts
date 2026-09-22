@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   CommandRequest,
   EvaluationRequest,
+  PreviewRequest,
   type Graph,
 } from "@yakjev/protocol";
 import { Effect, Schema } from "effect";
@@ -30,6 +31,8 @@ Usage:
   yakjev evaluate <json|@file|->      EvaluationRequest {requestId,
                                       expectedRevision, query, focusNodeId?,
                                       includeNodeIds?}
+  yakjev preview <json|@file|->       Jev's live read, writes nothing:
+                                      {draft: {title}} or {focusNodeId}
   yakjev doctor                       resolve config, check health and auth
   yakjev capabilities                 list commands and read views
   yakjev schema [name]                field reference per command type or view
@@ -207,11 +210,13 @@ const capabilities = {
   ],
   discovery: "yakjev discover {query, focusNodeId?, includeNodeIds?}",
   evaluation: "yakjev evaluate {requestId, expectedRevision, query, ...}",
+  preview: "yakjev preview {draft: {title, description?}} | {focusNodeId}",
   notes: [
     "Commands are revision-checked; read graph.revision first.",
     "Re-sending an identical requestId replays its receipt; a changed payload conflicts.",
     "node.remove needs removeEdges:true to cascade incident edges.",
     "edge.remove suppress defaults on for corrected or disputed edges.",
+    "Captures are connected by Jev in the background unless autoConnect:false.",
   ],
 };
 
@@ -340,6 +345,16 @@ const main = async (): Promise<void> => {
         ok(
           "evaluate",
           await request(requireServer(args), "POST", "/api/evaluations", body),
+        ),
+      );
+      return;
+    }
+    case "preview": {
+      const body = decode(PreviewRequest, await readJsonArg(rest[0]));
+      writeJson(
+        ok(
+          "preview",
+          await request(requireServer(args), "POST", "/api/jev/preview", body),
         ),
       );
       return;

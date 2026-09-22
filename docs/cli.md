@@ -38,7 +38,7 @@ Success is one JSON object on stdout:
 { "ok": true, "command": "read graph", "data": {} }
 ```
 
-`command` is `read <view>`, `command`, `discover`, `evaluate`, `doctor`, `capabilities`, `schema`, or `version`.
+`command` is `read <view>`, `command`, `discover`, `evaluate`, `preview`, `doctor`, `capabilities`, `schema`, or `version`.
 
 Failure is one JSON object on stderr and exit 1:
 
@@ -173,3 +173,11 @@ bun run packages/cli/src/cli.ts -- capabilities
 ```
 
 `schema` returns the same payload as `capabilities`: read views, command names, and the notes that commands are revision-checked, requestId replay is exact, `node.remove` cascades only with `removeEdges: true`, and `edge.remove` suppress defaults on for corrected or disputed edges.
+
+## Preview
+
+`Evaluations.preview`, the same operation as `POST /api/jev/preview` and MCP `graph_preview`. Jev's read of a draft or node: relatedness, same intention, relation, direction, and whether Jev would connect it. Writes nothing. Captures are connected by Jev in the background anyway; preview first to spot an intention that already exists.
+
+```sh
+bun run packages/cli/src/cli.ts -- preview '{"draft":{"title":"Ship yakjev to production"}}'
+```
