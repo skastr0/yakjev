@@ -115,7 +115,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           y: graph.current.getNodeAttribute(id, "y") as number,
         });
         const size =
-          (graph.current.getNodeAttribute(id, "size") as number) || 9;
+          (graph.current.getNodeAttribute(id, "size") as number) || 12;
         const distance = Math.hypot(point.x - x, point.y - y);
         if (distance <= size + 14 && distance < best.distance) {
           best.id = id;
@@ -145,7 +145,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             nodes: [
               DEFAULT_STYLES.nodes,
               {
-                size: 9,
+                size: 12,
                 labelColor: "#203d35",
                 labelSize: 13,
                 labelPosition: (attributes) => {
@@ -345,11 +345,49 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
       );
     }, [props.selection, props.hidden, props.matches, props.data]);
 
+    const seenIds = useRef("");
+
+    function clusterFillsView() {
+      const sigma = renderer.current;
+      const box = container.current;
+      if (!sigma || !box || graph.current.order === 0) return true;
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      graph.current.forEachNode((id) => {
+        const point = sigma.graphToViewport({
+          x: graph.current.getNodeAttribute(id, "x") as number,
+          y: graph.current.getNodeAttribute(id, "y") as number,
+        });
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x);
+        maxY = Math.max(maxY, point.y);
+      });
+      const width = box.clientWidth;
+      const height = box.clientHeight;
+      const inside =
+        minX > 48 && minY > 48 && maxX < width - 80 && maxY < height - 48;
+      const fills = maxX - minX > width * 0.28 || maxY - minY > height * 0.28;
+      return inside && fills;
+    }
+
     useEffect(() => {
       const wasEmpty = graph.current.order === 0;
       positions.current = rememberLayout(positions.current, props.data);
       syncGraph(graph.current, props.data, positions.current);
-      if (wasEmpty && graph.current.order > 0 && renderer.current) fit();
+      const ids = props.data.nodes
+        .map((node) => node.id)
+        .sort()
+        .join("\n");
+      const grew = ids !== seenIds.current;
+      seenIds.current = ids;
+      if (
+        renderer.current &&
+        ((wasEmpty && graph.current.order > 0) || (grew && !clusterFillsView()))
+      )
+        fit();
     }, [props.data]);
 
     return (

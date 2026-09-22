@@ -129,7 +129,7 @@ export function syncGraph(
       x: position.x,
       y: position.y,
       label: node.title,
-      size: 9,
+      size: 12,
       color: nodeColor(node.status),
       fixed: placed ? false : (node.position?.pinned ?? false),
       status: node.status,
