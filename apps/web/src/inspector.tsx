@@ -412,7 +412,7 @@ function EdgeInspector({
         graph={graph}
         execute={execute}
         pending={pending}
-        edgeId={edge.id}
+        edge={edge}
       />
     </>
   );
@@ -526,8 +526,8 @@ export function HistoryPanel({
   graph,
   execute,
   pending,
-  edgeId,
-}: EditorProps & { edgeId?: string }) {
+  edge,
+}: EditorProps & { edge?: Edge }) {
   const [entries, setEntries] = useState<readonly HistoryEntry[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -554,13 +554,22 @@ export function HistoryPanel({
   const shown = entries
     .filter(
       (entry) =>
-        !edgeId ||
+        !edge ||
         (entry.command.type === "edge.put" &&
-          entry.command.edge.id === edgeId) ||
+          entry.command.edge.id === edge.id) ||
         (entry.command.type === "edge.reframe" &&
-          entry.command.id === edgeId) ||
+          entry.command.id === edge.id) ||
+        (entry.command.type === "edge.remove" &&
+          (entry.command.id === edge.id ||
+            (entry.command.source === edge.source &&
+              entry.command.target === edge.target))) ||
+        (entry.command.type === "node.remove" &&
+          entry.command.removeEdges === true &&
+          entry.command.ids.some(
+            (id) => id === edge.source || id === edge.target,
+          )) ||
         (entry.command.type === "capture" &&
-          entry.command.edges.some((edge) => edge.id === edgeId)) ||
+          entry.command.edges.some((item) => item.id === edge.id)) ||
         entry.command.type === "undo",
     )
     .reverse();

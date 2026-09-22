@@ -600,6 +600,71 @@ test("edge.remove keeps suppression for corrected edges and supersedes pending p
   expect((await run(store.read)).suggestions).toHaveLength(count);
 });
 
+test("node.remove cascade keeps suppression for disputed edges and protects re-registered pairs", async () => {
+  const { store, run, send } = await fixture();
+  await send(capture);
+  await send({
+    type: "edge.reframe",
+    id: "ab",
+    relation: "benefits_from",
+    rationale: "Optional preparation",
+    state: "disputed",
+  });
+  await send({
+    type: "edge.reframe",
+    id: "bc",
+    relation: "requires",
+    rationale: "disputed but same type",
+    state: "disputed",
+  });
+  // One cascade drops two disputed edges; both get tombstones and their ids
+  // cannot collide inside one revision.
+  await send({
+    type: "node.remove",
+    ids: ["b"],
+    removeEdges: true,
+    rationale: "captured in error",
+  });
+  let graph = await run(store.read);
+  expect(graph.edges).toHaveLength(0);
+  expect(graph.nodes.map((item) => item.id)).toEqual(["a", "c"]);
+  const tombstones = graph.suggestions.filter((item) =>
+    item.id.startsWith("suppressed-"),
+  );
+  expect(tombstones.map((item) => item.id).sort()).toEqual([
+    "suppressed-r4-ab",
+    "suppressed-r4-bc",
+  ]);
+  expect(
+    tombstones.find((item) => item.id === "suppressed-r4-ab"),
+  ).toMatchObject({
+    status: "rejected",
+    source: "a",
+    target: "b",
+    relation: "benefits_from",
+    model: "actor-suppression",
+    promptVersion: "node.remove",
+    rationale: "captured in error",
+  });
+  // Re-registering a node id does not reopen the pair for machine inference.
+  await send({ type: "node.put", node: node("b") });
+  await expect(
+    send({
+      type: "suggestion.record",
+      suggestion: suggestion("again-ab", "a", "b", 5),
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+  await expect(
+    send({
+      type: "suggestion.record",
+      suggestion: suggestion("again-cb", "c", "b", 5),
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+  // An explicit assertion still wins over suppression.
+  await send({ type: "edge.put", edge: edge("ab2", "a", "b") });
+  expect((await run(store.read)).edges.map((item) => item.id)).toEqual(["ab2"]);
+});
+
 test("capture.remove drops only the record and layout.set clears positions", async () => {
   const { store, run, send } = await fixture();
   await send(capture);

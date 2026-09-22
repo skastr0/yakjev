@@ -122,6 +122,44 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
       updated: provenance,
     });
   });
+  // Removing an edge can leave suppression behind: a rejected record for the
+  // pair keeps machine inference from silently restoring a deliberate removal.
+  // Tombstones are rejected records, never pending, so missing endpoints do
+  // not supersede them — protection survives re-registered node ids.
+  const suppressPair = (
+    removed: Edge,
+    via: "edge.remove" | "node.remove",
+    idSuffix: string,
+    rationale: string | undefined,
+  ) => {
+    const pair = (item: { source: string; target: string }) =>
+      (item.source === removed.source && item.target === removed.target) ||
+      (item.source === removed.target && item.target === removed.source);
+    const alreadySuppressed =
+      edges.some((edge) => pair(edge) && edge.correction !== null) ||
+      suggestions.some(
+        (suggestion) => pair(suggestion) && suggestion.status === "rejected",
+      );
+    if (alreadySuppressed) return;
+    suggestions.push({
+      id: `suppressed-r${provenance.revision}${idSuffix}`,
+      source: removed.source,
+      target: removed.target,
+      relation: removed.relation,
+      rationale:
+        rationale ??
+        `Suppressed when edge ${removed.id} (${removed.source}→${removed.target}) was removed`,
+      confidence: null,
+      evidence: [],
+      model: "actor-suppression",
+      promptVersion: via,
+      taxonomyVersion: taxonomy.version,
+      basedOnRevision: graph.revision,
+      status: "rejected",
+      provenance,
+      decision: provenance,
+    });
+  };
   const recordSuggestion = Effect.fnUntraced(function* (
     input: SuggestionInput,
   ) {
@@ -223,6 +261,11 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
         (edge) => !(removed.has(edge.source) || removed.has(edge.target)),
       );
       nodes = nodes.filter((node) => !removed.has(node.id));
+      // Cascaded corrections and disputes keep their suppression, same as
+      // edge.remove's default; plain cascaded assertions leave no trace.
+      for (const edge of incident)
+        if (edge.correction !== null || edge.state === "disputed")
+          suppressPair(edge, "node.remove", `-${edge.id}`, command.rationale);
       break;
     }
     case "edge.put":
@@ -264,40 +307,12 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
           ? { ...suggestion, status: "superseded" as const }
           : suggestion,
       );
-      const pair = (item: { source: string; target: string }) =>
-        (item.source === removed.source && item.target === removed.target) ||
-        (item.source === removed.target && item.target === removed.source);
       // Corrected or disputed claims keep their suppression once the edge that
       // carried it is gone; plain assertions stay removable without a trace.
       const suppress =
         command.suppress ??
         (removed.correction !== null || removed.state === "disputed");
-      const alreadySuppressed =
-        edges.some((edge) => pair(edge) && edge.correction !== null) ||
-        suggestions.some(
-          (suggestion) => pair(suggestion) && suggestion.status === "rejected",
-        );
-      if (suppress && !alreadySuppressed) {
-        // One rejected record per removal revision; provenance names the actor.
-        suggestions.push({
-          id: `suppressed-r${provenance.revision}`,
-          source: removed.source,
-          target: removed.target,
-          relation: removed.relation,
-          rationale:
-            command.rationale ??
-            `Suppressed when edge ${removed.id} (${removed.source}→${removed.target}) was removed`,
-          confidence: null,
-          evidence: [],
-          model: "actor-suppression",
-          promptVersion: "edge.remove",
-          taxonomyVersion: taxonomy.version,
-          basedOnRevision: graph.revision,
-          status: "rejected",
-          provenance,
-          decision: provenance,
-        });
-      }
+      if (suppress) suppressPair(removed, "edge.remove", "", command.rationale);
       break;
     }
     case "edge.reframe": {
