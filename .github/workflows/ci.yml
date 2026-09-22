@@ -18,7 +18,7 @@ jobs:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
       - run: bun run verify
-      - run: bash -n .agents/setup .agents/resume deploy/entrypoint.sh
+      - run: bash -n .agents/setup .agents/resume deploy/entrypoint.sh deploy/tests/resume.sh
       - name: Build deployment image (never publish or enroll)
         run: docker build -t yakjev:ci .
       - name: Fresh image refuses to run without deployment configuration
