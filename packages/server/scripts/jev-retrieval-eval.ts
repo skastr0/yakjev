@@ -2,9 +2,11 @@ import { initialTaxonomy, type Graph } from "@yakjev/protocol";
 import { Effect } from "effect";
 import { shortlist } from "../src/discovery.ts";
 import {
+  hybridRetrieval,
   lexicalRetrieval,
   Retrieval,
   RetrievalLive,
+  type EmbeddingClient,
   type RetrievalService,
 } from "../src/retrieval.ts";
 
@@ -98,12 +100,30 @@ const evaluate = async (name: string, retrieval: RetrievalService) => {
   return recall;
 };
 await evaluate("lexical", lexicalRetrieval);
+// Deterministic semantic fixture exercises the full rank-and-pack path at
+// 1,000 nodes without a provider credential. It proves retrieval plumbing,
+// not the quality of any particular embedding model.
+const scriptedEmbeddings: EmbeddingClient = {
+  embed: async (texts) =>
+    texts.map((value) => {
+      const index = cases.findIndex(
+        ({ query, title }) => value.includes(query) || value.includes(title),
+      );
+      return index < 0
+        ? [0, 0, 0, 1]
+        : [0, 1, 2, 3].map((_, dimension) => (dimension === index ? 1 : 0));
+    }),
+};
+const scriptedRecall = await evaluate(
+  "scripted-hybrid",
+  hybridRetrieval(scriptedEmbeddings, { budgetMs: 5_000 }),
+);
 const live = await Effect.runPromise(
   Effect.gen(function* () {
     return yield* Retrieval;
   }).pipe(Effect.provide(RetrievalLive)),
 );
-const recall = await evaluate("live", live);
+const liveRecall = await evaluate("live", live);
 const floorArg = process.argv.find((value) =>
   value.startsWith("--min-recall="),
 );
@@ -111,5 +131,14 @@ if (floorArg) {
   const floor = Number(floorArg.slice("--min-recall=".length));
   if (!Number.isFinite(floor) || floor < 0 || floor > 1)
     throw new Error("--min-recall must be between 0 and 1");
-  if (recall < floor) process.exitCode = 1;
+  if (scriptedRecall < floor) process.exitCode = 1;
+}
+const liveFloorArg = process.argv.find((value) =>
+  value.startsWith("--live-min-recall="),
+);
+if (liveFloorArg) {
+  const floor = Number(liveFloorArg.slice("--live-min-recall=".length));
+  if (!Number.isFinite(floor) || floor < 0 || floor > 1)
+    throw new Error("--live-min-recall must be between 0 and 1");
+  if (liveRecall < floor) process.exitCode = 1;
 }
