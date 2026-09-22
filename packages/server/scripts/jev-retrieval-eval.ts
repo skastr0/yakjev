@@ -1,5 +1,12 @@
 import { initialTaxonomy, type Graph } from "@yakjev/protocol";
-import { discover } from "../src/discovery.ts";
+import { Effect } from "effect";
+import { shortlist } from "../src/discovery.ts";
+import {
+  lexicalRetrieval,
+  Retrieval,
+  RetrievalLive,
+  type RetrievalService,
+} from "../src/retrieval.ts";
 
 // Cheap shortlist check: no provider key, network, or persistent graph needed.
 // The distractors deliberately share words with each query while the intended
@@ -60,27 +67,43 @@ const graph: Graph = {
   taxonomy: initialTaxonomy,
 };
 
-const results = cases.map(({ query, id }) => {
-  const started = performance.now();
-  const result = discover(graph, { query });
-  const ranked = result.candidates.map((candidate) => candidate.nodeId);
-  return {
-    query,
-    expected: id,
-    found: ranked.includes(id),
-    rank: ranked.indexOf(id) + 1 || null,
-    considered: result.coverage.considered,
-    eligible: result.coverage.eligible,
-    truncated: result.coverage.truncated,
-    strategy: result.coverage.strategy,
-    elapsedMs: Math.round((performance.now() - started) * 10) / 10,
-  };
-});
-const recall = results.filter((result) => result.found).length / results.length;
-console.table(results);
-console.log(
-  `Large-graph candidate recall: ${recall.toFixed(3)} (${nodes.length} nodes)`,
+const evaluate = async (name: string, retrieval: RetrievalService) => {
+  const results = await Promise.all(
+    cases.map(async ({ query, id }) => {
+      const started = performance.now();
+      const result = await Effect.runPromise(
+        shortlist(graph, { query }, retrieval),
+      );
+      const ranked = result.candidates.map((candidate) => candidate.nodeId);
+      return {
+        retrieval: name,
+        query,
+        expected: id,
+        found: ranked.includes(id),
+        rank: ranked.indexOf(id) + 1 || null,
+        considered: result.coverage.considered,
+        eligible: result.coverage.eligible,
+        strategy: result.coverage.strategy,
+        estimatedTokens: result.coverage.estimatedTokens,
+        elapsedMs: Math.round((performance.now() - started) * 10) / 10,
+      };
+    }),
+  );
+  const recall =
+    results.filter((result) => result.found).length / results.length;
+  console.table(results);
+  console.log(
+    `${name} large-graph candidate recall: ${recall.toFixed(3)} (${nodes.length} nodes)`,
+  );
+  return recall;
+};
+await evaluate("lexical", lexicalRetrieval);
+const live = await Effect.runPromise(
+  Effect.gen(function* () {
+    return yield* Retrieval;
+  }).pipe(Effect.provide(RetrievalLive)),
 );
+const recall = await evaluate("live", live);
 const floorArg = process.argv.find((value) =>
   value.startsWith("--min-recall="),
 );
