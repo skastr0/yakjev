@@ -15,7 +15,7 @@ import {
   pathLoop,
 } from "sigma/rendering";
 import type { Graph } from "@yakjev/protocol";
-import { placeGraph } from "./layout";
+import { rememberLayout } from "./layout";
 import { nodeColor, syncGraph, type Selection } from "./graph-model";
 
 export type Point = { x: number; y: number };
@@ -58,6 +58,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
       moved: boolean;
     } | null>(null);
     const suppressClick = useRef(false);
+    const positions = useRef(new Map<string, { x: number; y: number }>());
     const [renderError, setRenderError] = useState("");
 
     function clientAnchor(id: string): Point | null {
@@ -115,7 +116,11 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
 
     useEffect(() => {
       if (!container.current) return;
-      applyLayout(graph.current, latest.current.data);
+      positions.current = rememberLayout(
+        positions.current,
+        latest.current.data,
+      );
+      syncGraph(graph.current, latest.current.data, positions.current);
       try {
         const sigma = new Sigma(graph.current, container.current, {
           primitives: {
@@ -148,7 +153,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
                   drawn.order <= 40 ? "visible" : "auto",
                 labelBackgroundColor: "#f5f2e9",
                 labelBackgroundPadding: 4,
-                cursor: "pointer",
+                cursor: "grab",
               },
               {
                 whenState: "isHighlighted",
@@ -176,7 +181,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           settings: {
             autoRescale: false,
             itemSizesReference: "screen",
-            enableNodeDrag: false,
+            enableNodeDrag: true,
             enableEdgeEvents: true,
             renderEdgeLabels: true,
             nodeLabelEvents: "extend",
@@ -223,8 +228,32 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           if (!(original instanceof MouseEvent)) return;
           latest.current.onCreate({ x: original.clientX, y: original.clientY });
         });
-        sigma.on("downNode", ({ node, event }) => {
-          link.current = { source: node, x: event.x, y: event.y, moved: false };
+        sigma.on("nodeDragStart", (payload) => {
+          const shift =
+            payload.event.original instanceof MouseEvent &&
+            payload.event.original.shiftKey;
+          if (!shift) return;
+          payload.preventSigmaDefault();
+          link.current = {
+            source: payload.node,
+            x: payload.event.x,
+            y: payload.event.y,
+            moved: false,
+          };
+        });
+        sigma.on("nodeDrag", ({ node }) => {
+          if (link.current) return;
+          positions.current.set(node, {
+            x: graph.current.getNodeAttribute(node, "x") as number,
+            y: graph.current.getNodeAttribute(node, "y") as number,
+          });
+        });
+        sigma.on("nodeDragEnd", ({ node }) => {
+          if (link.current) return;
+          positions.current.set(node, {
+            x: graph.current.getNodeAttribute(node, "x") as number,
+            y: graph.current.getNodeAttribute(node, "y") as number,
+          });
         });
         sigma.on("moveBody", ({ event }) => {
           const current = link.current;
@@ -273,12 +302,6 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     }, []);
 
     useEffect(() => {
-      const wasEmpty = graph.current.order === 0;
-      applyLayout(graph.current, props.data);
-      if (wasEmpty && graph.current.order > 0) fit();
-    }, [props.data]);
-
-    useEffect(() => {
       const sigma = renderer.current;
       if (!sigma) return;
       graph.current.forEachNode((id) => {
@@ -312,17 +335,11 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     }, [props.selection, props.hidden, props.matches, props.data]);
 
     useEffect(() => {
-      const sigma = renderer.current;
-      if (!sigma || !props.focusId || !graph.current.hasNode(props.focusId))
-        return;
-      const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-      const next = {
-        x: graph.current.getNodeAttribute(props.focusId, "x") as number,
-        y: graph.current.getNodeAttribute(props.focusId, "y") as number,
-      };
-      if (reduced) sigma.getCamera().setState(next);
-      else void sigma.getCamera().animate(next, { duration: 180 });
-    }, [props.focusId, props.data]);
+      const wasEmpty = graph.current.order === 0;
+      positions.current = rememberLayout(positions.current, props.data);
+      syncGraph(graph.current, props.data, positions.current);
+      if (wasEmpty && graph.current.order > 0 && renderer.current) fit();
+    }, [props.data]);
 
     return (
       <div className="graph-shell">
@@ -330,7 +347,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           ref={container}
           className="graph-canvas"
           role="application"
-          aria-label="Intention graph. Double-click to capture. Drag from one node to another to connect. Click an arrow to reframe it."
+          aria-label="Intention graph. Double-click to capture. Drag a node to move it. Shift-drag between nodes to connect. Click an arrow to reframe it."
           data-revision={props.data.revision}
         />
         <svg className="link-band" aria-hidden="true">
@@ -349,7 +366,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           <div className="canvas-message">
             <h2>Capture an intention.</h2>
             <p>
-              Double-click the canvas. Drag between nodes to say how they
+              Double-click the canvas. Drag a node to move it. Shift-drag to
               connect.
             </p>
             <button
@@ -367,14 +384,10 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           </div>
         )}
         <p className="graph-hint">
-          Double-click captures · drag between nodes connects · click an arrow
-          reframes · / finds · ⌘Z undoes
+          Drag moves · shift-drag connects · double-click captures · click an
+          arrow reframes · / finds · ⌘Z undoes
         </p>
       </div>
     );
   },
 );
-
-function applyLayout(target: MultiDirectedGraph, data: Graph) {
-  syncGraph(target, data, placeGraph(data));
-}
