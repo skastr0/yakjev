@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Command, Graph, Receipt } from "@yakjev/protocol";
 import {
   ApiFailure,
@@ -8,6 +8,7 @@ import {
   sendCommand,
   snapshot,
 } from "./api";
+import { applyOptimistic } from "./optimistic";
 
 export function useGraph() {
   const [graph, setGraph] = useState<Graph | null>(null);
@@ -19,6 +20,12 @@ export function useGraph() {
   const [pending, setPending] = useState(false);
   const [lastEdit, setLastEdit] = useState<Receipt | null>(null);
   const [session, setSession] = useState(0);
+  // Edits sent but not yet confirmed, shown on top of the last snapshot so the
+  // graph answers at once instead of after two network round trips.
+  const [inFlight, setInFlight] = useState<
+    ReadonlyArray<{ key: number; command: Command }>
+  >([]);
+  const flightKey = useRef(0);
   const current = useRef<Graph | null>(null);
   const queue = useRef<
     Array<{ command: Command; resolve: (saved: boolean) => void }>
@@ -158,7 +165,13 @@ export function useGraph() {
   const execute = useCallback(
     (command: Command, _expectedRevision: number) =>
       new Promise<boolean>((resolve) => {
-        queue.current.push({ command, resolve });
+        const key = ++flightKey.current;
+        setInFlight((items) => [...items, { key, command }]);
+        const land = (saved: boolean) => {
+          setInFlight((items) => items.filter((item) => item.key !== key));
+          resolve(saved);
+        };
+        queue.current.push({ command, resolve: land });
         if (draining.current) return;
         draining.current = true;
         setPending(true);
@@ -208,8 +221,17 @@ export function useGraph() {
       setError(errorMessage(cause));
     }
   }
+  const shown = useMemo(
+    () =>
+      graph &&
+      inFlight.reduce(
+        (view, item) => applyOptimistic(view, item.command),
+        graph,
+      ),
+    [graph, inFlight],
+  );
   return {
-    graph,
+    graph: shown,
     connection,
     error,
     notice,
