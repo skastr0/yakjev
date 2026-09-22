@@ -106,8 +106,7 @@ export const lexicalRetrieval: RetrievalService = {
   rank: (input) => Effect.succeed(lexicalRank(input)),
 };
 
-// text-embedding-3-small cosines for a real paraphrase sit well above this.
-// Below it, a zero-overlap node stays coverage and the packer can drop it.
+// Below this cosine a zero-overlap node stays coverage and the packer can drop it.
 const SEMANTIC_FLOOR = 0.4;
 // First rank waits this long, then returns lexical order. The embedding
 // requests keep running. A cold 1,000-node graph is about 11 sequential
@@ -115,9 +114,13 @@ const SEMANTIC_FLOOR = 0.4;
 export const EMBED_BUDGET_MS = 250;
 // One embeddings request at a time, this many texts. Not parallel.
 export const EMBED_BATCH = 96;
-const EMBED_MODEL = "text-embedding-3-small";
-// Same OpenAI-compatible embeddings route Quasar and Tether use. The key is
-// SYNTHETIC_API_KEY. SYNTHETIC_OPENAI_BASE_URL overrides the host.
+// Quasar's Synthetic profile: nomic via the OpenAI-compatible route, with the
+// query and document prefixes that model expects. SYNTHETIC_API_KEY is the
+// bearer token. SYNTHETIC_OPENAI_BASE_URL overrides the host.
+const EMBED_MODEL = "hf:nomic-ai/nomic-embed-text-v1.5";
+const EMBED_DIMENSIONS = 768;
+const QUERY_PREFIX = "search_query: ";
+const DOCUMENT_PREFIX = "search_document: ";
 const SYNTHETIC_EMBEDDINGS_BASE = "https://api.synthetic.new/openai/v1";
 // One input's token cap is 8191. Characters stay under that for ordinary text.
 const EMBED_CHARS = 8000;
@@ -223,8 +226,9 @@ function hybridRanker(client: EmbeddingClient, budgetMs: number) {
 
   const rank = async (input: RankInput): Promise<RankedCandidate[]> => {
     const lexical = lexicalRank(input);
-    const focusText = input.focus.text.normalize("NFKC").slice(0, EMBED_CHARS);
-    if (focusText.trim() === "") return lexical;
+    const focusBody = input.focus.text.normalize("NFKC").slice(0, EMBED_CHARS);
+    if (focusBody.trim() === "") return lexical;
+    const focusText = `${QUERY_PREFIX}${focusBody}`;
     const byId = new Map(input.graph.nodes.map((node) => [node.id, node]));
     const hashes = new Map<string, string>();
     const needed: CachedText[] = [
@@ -233,10 +237,11 @@ function hybridRanker(client: EmbeddingClient, budgetMs: number) {
     for (const candidate of lexical) {
       const node = byId.get(candidate.nodeId);
       if (!node) continue;
-      const text = nodeText(node).normalize("NFKC").slice(0, EMBED_CHARS);
+      const body = nodeText(node).normalize("NFKC").slice(0, EMBED_CHARS);
+      const text = `${DOCUMENT_PREFIX}${body}`;
       const hash = contentKey(text);
       hashes.set(node.id, hash);
-      if (text.trim() !== "") needed.push({ hash, text });
+      if (body.trim() !== "") needed.push({ hash, text });
     }
     const missing = needed.filter((item) => !cache.has(item.hash));
     // Cold start embeds every missing text in sequential EMBED_BATCH requests.
@@ -302,7 +307,11 @@ function syntheticEmbeddings(apiKey: string): EmbeddingClient {
           authorization: `Bearer ${apiKey}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({ model: EMBED_MODEL, input: [...texts] }),
+        body: JSON.stringify({
+          model: EMBED_MODEL,
+          input: [...texts],
+          dimensions: EMBED_DIMENSIONS,
+        }),
       });
       if (!response.ok) throw new Error(`embeddings ${response.status}`);
       const body: unknown = await response.json();

@@ -167,7 +167,10 @@ const vectors = new Map<string, readonly number[]>([
 const scripted = (calls: string[][]): EmbeddingClient => ({
   embed: async (texts) => {
     calls.push([...texts]);
-    return texts.map((text) => vectors.get(text) ?? [0, 0]);
+    return texts.map(
+      (text) =>
+        vectors.get(text.replace(/^search_(?:query|document): /, "")) ?? [0, 0],
+    );
   },
 });
 
@@ -227,7 +230,9 @@ describe("hybrid retrieval", () => {
     ]);
     await Effect.runPromise(retrieval.rank({ ...input(), graph: edited }));
     expect(calls).toHaveLength(2);
-    expect(calls[1]).toEqual(["Schedule an oral health examination booked"]);
+    expect(calls[1]).toEqual([
+      "search_document: Schedule an oral health examination booked",
+    ]);
   });
 
   test("a slow embedder returns lexical order and warms the next call", async () => {
