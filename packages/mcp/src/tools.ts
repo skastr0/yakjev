@@ -4,6 +4,7 @@ import {
   EvaluationRequest,
   EvaluationResult,
   type Actor,
+  type Edge,
 } from "@yakjev/protocol";
 import { Effect, Layer, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -34,6 +35,9 @@ export const rejectActorClaims = (input: unknown) =>
     }
   });
 
+const IdParam = Schema.String.check(
+  Schema.isPattern(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/),
+);
 const ReadInput = Schema.Struct({
   view: Schema.Literals([
     "graph",
@@ -42,17 +46,17 @@ const ReadInput = Schema.Struct({
     "neighborhood",
     "export",
     "evaluation",
+    "node",
+    "edge",
   ]),
   after: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   limit: Schema.optionalKey(
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1000 })),
   ),
   query: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2000))),
-  id: Schema.optionalKey(
-    Schema.String.check(
-      Schema.isPattern(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/),
-    ),
-  ),
+  id: Schema.optionalKey(IdParam),
+  source: Schema.optionalKey(IdParam),
+  target: Schema.optionalKey(IdParam),
   direction: Schema.optionalKey(
     Schema.Literals(["outgoing", "incoming", "both"]),
   ),
@@ -62,7 +66,7 @@ const ReadInput = Schema.Struct({
 export const YakjevToolkit = Toolkit.make(
   Tool.make("graph_read", {
     description:
-      "Read the authoritative Yakjev graph. view is graph, history, search, neighborhood, export, or evaluation. Do not send actor, user, role, or channel.",
+      "Read the authoritative Yakjev graph. view is graph (whole snapshot), history (journal entries after/limit), search (query), neighborhood (id, direction, blocking), export (graph + full journal), evaluation (id), node (id), or edge (id, or directed source+target). Do not send actor, user, role, or channel.",
     parameters: ReadInput,
     success: Schema.Unknown,
     failure: ToolFailure,
@@ -75,7 +79,7 @@ export const YakjevToolkit = Toolkit.make(
     .annotate(Tool.Strict, true),
   Tool.make("graph_command", {
     description:
-      "Apply one graph command through the same envelope as POST /api/commands. Exact requestId replay returns the original receipt. A changed payload for that requestId conflicts. Do not send actor, user, role, or channel.",
+      "Apply one graph command through the same envelope as POST /api/commands. Commands: capture (nodes+edges+capture atomically), capture.remove, node.put (set status archived to retire a node without deleting it), node.remove (ids[]; incident edges refuse unless removeEdges:true cascades), edge.put (new pairs only), edge.reframe (correct an existing edge), edge.remove (id or directed source+target; suppress keeps the pair rejected for machine inference and defaults on for corrected or disputed edges), layout.set (positions or {id,clear:true}), taxonomy.replace, suggestion.record, suggestion.decide, evaluation.record, undo (reverts only the current revision; to remove earlier work use the remove commands). Exact requestId replay returns the original receipt; a changed payload for that requestId conflicts. expectedRevision must equal the current graph revision — read it first. Do not send actor, user, role, or channel.",
     parameters: CommandRequest,
     success: CommandResult,
     failure: ToolFailure,
@@ -170,6 +174,58 @@ export const toolkitLayer = (actor: () => Effect.Effect<Actor, ToolFailure>) =>
                 return yield* store
                   .evaluation(input.id)
                   .pipe(Effect.mapError(mapFailure));
+              }
+              case "node": {
+                if (input.id === undefined)
+                  return yield* Effect.fail(invalid("node requires id."));
+                const node = graph.nodes.find((item) => item.id === input.id);
+                if (!node)
+                  return yield* Effect.fail(
+                    new ToolFailure({
+                      error: "NotFound",
+                      message: "Unknown node",
+                    }),
+                  );
+                return node;
+              }
+              case "edge": {
+                let edge: Edge | undefined;
+                if (input.id !== undefined) {
+                  edge = graph.edges.find((item) => item.id === input.id);
+                  if (
+                    edge &&
+                    ((input.source !== undefined &&
+                      edge.source !== input.source) ||
+                      (input.target !== undefined &&
+                        edge.target !== input.target))
+                  )
+                    return yield* Effect.fail(
+                      invalid("id disagrees with the given source or target."),
+                    );
+                } else if (
+                  input.source !== undefined &&
+                  input.target !== undefined
+                ) {
+                  edge = graph.edges.find(
+                    (item) =>
+                      item.source === input.source &&
+                      item.target === input.target,
+                  );
+                } else {
+                  return yield* Effect.fail(
+                    invalid(
+                      "edge requires id or a directed source and target.",
+                    ),
+                  );
+                }
+                if (!edge)
+                  return yield* Effect.fail(
+                    new ToolFailure({
+                      error: "NotFound",
+                      message: "Unknown edge",
+                    }),
+                  );
+                return edge;
               }
             }
           }),

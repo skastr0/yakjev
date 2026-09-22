@@ -38,6 +38,8 @@ export function inferenceSuppressed(
 export function suggestionStale(graph: Graph, suggestion: SuggestionInput) {
   return (
     suggestion.taxonomyVersion !== graph.taxonomy.version ||
+    !graph.nodes.some((node) => node.id === suggestion.source) ||
+    !graph.nodes.some((node) => node.id === suggestion.target) ||
     graph.nodes.some(
       (node) =>
         (node.id === suggestion.source || node.id === suggestion.target) &&
@@ -185,6 +187,12 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
       captures.push({ ...command.capture, provenance });
       break;
     }
+    case "capture.remove": {
+      if (!captures.some((capture) => capture.id === command.id))
+        return yield* fail("NotFound", "Unknown capture");
+      captures = captures.filter((capture) => capture.id !== command.id);
+      break;
+    }
     case "node.put": {
       const old = nodes.find((node) => node.id === command.node.id);
       const node: Node = {
@@ -198,9 +206,100 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
         : [...nodes, node];
       break;
     }
+    case "node.remove": {
+      const missing = command.ids.filter((id) => !nodeExists(id));
+      if (missing.length > 0)
+        return yield* fail("NotFound", `Unknown nodes: ${missing.join(", ")}`);
+      const removed = new Set(command.ids);
+      const incident = edges.filter(
+        (edge) => removed.has(edge.source) || removed.has(edge.target),
+      );
+      if (incident.length > 0 && command.removeEdges !== true)
+        return yield* fail(
+          "Conflict",
+          `Incident edges must be removed first or cascaded: ${incident.map((edge) => edge.id).join(", ")}. Re-send with removeEdges: true.`,
+        );
+      edges = edges.filter(
+        (edge) => !(removed.has(edge.source) || removed.has(edge.target)),
+      );
+      nodes = nodes.filter((node) => !removed.has(node.id));
+      break;
+    }
     case "edge.put":
       yield* addEdge(command.edge);
       break;
+    case "edge.remove": {
+      let found: Edge | undefined;
+      if (command.id !== undefined) {
+        found = edges.find((edge) => edge.id === command.id);
+        if (
+          found &&
+          ((command.source !== undefined && found.source !== command.source) ||
+            (command.target !== undefined && found.target !== command.target))
+        )
+          return yield* fail(
+            "Invalid",
+            "id disagrees with the given source or target",
+          );
+      } else if (command.source !== undefined && command.target !== undefined) {
+        found = edges.find(
+          (edge) =>
+            edge.source === command.source && edge.target === command.target,
+        );
+      } else {
+        return yield* fail(
+          "Invalid",
+          "edge.remove requires an id or a directed source and target",
+        );
+      }
+      if (!found) return yield* fail("NotFound", "Unknown edge");
+      const removed = found;
+      edges = edges.filter((edge) => edge.id !== removed.id);
+      // A pending proposal for exactly this claim dies with it; the reverse
+      // direction and unrelated pairs are untouched.
+      suggestions = suggestions.map((suggestion) =>
+        suggestion.status === "pending" &&
+        suggestion.source === removed.source &&
+        suggestion.target === removed.target
+          ? { ...suggestion, status: "superseded" as const }
+          : suggestion,
+      );
+      const pair = (item: { source: string; target: string }) =>
+        (item.source === removed.source && item.target === removed.target) ||
+        (item.source === removed.target && item.target === removed.source);
+      // Corrected or disputed claims keep their suppression once the edge that
+      // carried it is gone; plain assertions stay removable without a trace.
+      const suppress =
+        command.suppress ??
+        (removed.correction !== null || removed.state === "disputed");
+      const alreadySuppressed =
+        edges.some((edge) => pair(edge) && edge.correction !== null) ||
+        suggestions.some(
+          (suggestion) => pair(suggestion) && suggestion.status === "rejected",
+        );
+      if (suppress && !alreadySuppressed) {
+        // One rejected record per removal revision; provenance names the actor.
+        suggestions.push({
+          id: `suppressed-r${provenance.revision}`,
+          source: removed.source,
+          target: removed.target,
+          relation: removed.relation,
+          rationale:
+            command.rationale ??
+            `Suppressed when edge ${removed.id} (${removed.source}→${removed.target}) was removed`,
+          confidence: null,
+          evidence: [],
+          model: "actor-suppression",
+          promptVersion: "edge.remove",
+          taxonomyVersion: taxonomy.version,
+          basedOnRevision: graph.revision,
+          status: "rejected",
+          provenance,
+          decision: provenance,
+        });
+      }
+      break;
+    }
     case "edge.reframe": {
       if (!edges.some((edge) => edge.id === command.id))
         return yield* fail("NotFound", "Unknown edge");
@@ -227,16 +326,18 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
         return yield* fail("NotFound", "Unknown layout node");
       nodes = nodes.map((node) => {
         const position = command.positions.find((item) => item.id === node.id);
-        return position
-          ? {
-              ...node,
-              position: {
-                x: position.x,
-                y: position.y,
-                pinned: position.pinned,
-              },
-            }
-          : node;
+        if (!position) return node;
+        return {
+          ...node,
+          position:
+            "clear" in position
+              ? null
+              : {
+                  x: position.x,
+                  y: position.y,
+                  pinned: position.pinned,
+                },
+        };
       });
       break;
     }
@@ -365,6 +466,11 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
           : item,
       );
       break;
+    }
+    default: {
+      // New Command members must name their semantics here, never no-op.
+      const exhaustive: never = command;
+      return yield* fail("Invalid", `Unknown command ${exhaustive}`);
     }
   }
   return supersedeSuggestions({

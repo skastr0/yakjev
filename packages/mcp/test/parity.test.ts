@@ -156,3 +156,75 @@ test("MCP capture and a later HTTP command share one SQLite file", async () => {
   );
   expect((await claimed.json()).error.code).toBe(-32602);
 });
+
+test("MCP removes and granular reads run against the same store", async () => {
+  const dir = await mkdtemp(`${tmpdir()}/yakjev-mcp-`);
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+  const { mcp } = await open(`${dir}/graph.sqlite`);
+  const initialized = await mcp({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "parity", version: "0" },
+    },
+  });
+  const session = initialized.headers.get("mcp-session-id")!;
+  const call = (id: number, name: string, args: unknown) =>
+    mcp(
+      {
+        jsonrpc: "2.0",
+        id,
+        method: "tools/call",
+        params: { name, arguments: args },
+      },
+      { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" },
+    );
+
+  const captured = await call(2, "graph_command", capture);
+  expect((await captured.json()).result?.isError).toBe(false);
+  // An intervening edit, like the incident that motivated removals.
+  const layout = await call(3, "graph_command", {
+    requestId: "req-layout",
+    expectedRevision: 1,
+    command: {
+      type: "layout.set",
+      positions: [{ id: "n1", x: 10, y: -4, pinned: true }],
+    },
+  });
+  expect((await layout.json()).result?.isError).toBe(false);
+  const removed = await call(4, "graph_command", {
+    requestId: "req-remove",
+    expectedRevision: 2,
+    command: { type: "node.remove", ids: ["n1"], removeEdges: true },
+  });
+  const removedBody = await removed.json();
+  expect(removedBody.result?.isError).toBe(false);
+  expect(JSON.parse(removedBody.result.content[0].text).receipt.revision).toBe(
+    3,
+  );
+
+  const gone = await call(5, "graph_read", { view: "node", id: "n1" });
+  const goneBody = await gone.json();
+  expect(goneBody.result?.isError).toBe(true);
+  const edgeMiss = await call(6, "graph_read", {
+    view: "edge",
+    source: "n1",
+    target: "n2",
+  });
+  expect((await edgeMiss.json()).result?.isError).toBe(true);
+  const edgeInvalid = await call(7, "graph_read", {
+    view: "edge",
+    source: "n1",
+  });
+  expect((await edgeInvalid.json()).result?.isError).toBe(true);
+
+  // The journal still proves the node existed and who removed it.
+  const history = await call(8, "graph_read", { view: "history" });
+  const entries = JSON.parse((await history.json()).result.content[0].text);
+  expect(entries.map((entry: { type: string }) => entry.type)).toContain(
+    "node.remove",
+  );
+});

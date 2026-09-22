@@ -371,6 +371,265 @@ test("explicit acceptance can reframe an existing assertion without deleting its
   ).toEqual([]);
 });
 
+test("node.remove refuses incident edges, cascades on request and stays undoable", async () => {
+  const { store, run, send } = await fixture();
+  await send(capture);
+  await send({ type: "edge.put", edge: edge("aa", "a", "a") });
+  await send({ type: "node.put", node: node("d") });
+  await send({
+    type: "suggestion.record",
+    suggestion: suggestion("s-ac", "a", "c", 3),
+  });
+  await send({
+    type: "suggestion.record",
+    suggestion: suggestion("s-bd", "b", "d", 4),
+  });
+  await expect(send({ type: "node.remove", ids: ["b"] })).rejects.toMatchObject(
+    {
+      code: "Conflict",
+      message: expect.stringContaining("ab"),
+    },
+  );
+  await expect(send({ type: "node.remove", ids: ["b"] })).rejects.toMatchObject(
+    {
+      code: "Conflict",
+      message: expect.stringContaining("bc"),
+    },
+  );
+  await expect(send({ type: "node.remove", ids: ["a"] })).rejects.toMatchObject(
+    {
+      code: "Conflict",
+      message: expect.stringContaining("aa"),
+    },
+  );
+  await expect(
+    send({ type: "node.remove", ids: ["ghost"] }),
+  ).rejects.toMatchObject({ code: "NotFound" });
+  expect((await run(store.read)).revision).toBe(5);
+
+  await send({
+    type: "node.remove",
+    ids: ["a"],
+    removeEdges: true,
+    rationale: "captured in error",
+  });
+  let graph = await run(store.read);
+  expect(graph.nodes.map((item) => item.id)).toEqual(["b", "c", "d"]);
+  expect(graph.edges.map((item) => item.id)).toEqual(["bc"]);
+  // Captures keep the reference: it is historical provenance, not a live link.
+  expect(graph.captures[0]?.nodeIds).toContain("a");
+  expect(graph.suggestions.find((item) => item.id === "s-ac")?.status).toBe(
+    "superseded",
+  );
+  expect(graph.suggestions.find((item) => item.id === "s-bd")?.status).toBe(
+    "pending",
+  );
+  await expect(
+    send({
+      type: "suggestion.decide",
+      id: "s-ac",
+      decision: "accept",
+      rationale: "stale",
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+
+  // Cascading also removes edges to nodes that stay.
+  await send({ type: "node.remove", ids: ["b", "c"], removeEdges: true });
+  graph = await run(store.read);
+  expect(graph.nodes.map((item) => item.id)).toEqual(["d"]);
+  expect(graph.edges).toHaveLength(0);
+
+  await send({ type: "undo", revision: 7 });
+  graph = await run(store.read);
+  expect(graph.nodes.map((item) => item.id).sort()).toEqual(["b", "c", "d"]);
+  expect(graph.edges.map((item) => item.id)).toEqual(["bc"]);
+  // Undo stamps fresh updated revisions, so surviving pending suggestions go
+  // stale: restored entities are new edits, not a time machine.
+  expect(graph.suggestions.find((item) => item.id === "s-bd")?.status).toBe(
+    "superseded",
+  );
+});
+
+test("edge.remove resolves by id or directed pair and controls re-inference", async () => {
+  const { store, run, send } = await fixture();
+  await send(capture);
+  await expect(
+    send({ type: "edge.remove", id: "ab", source: "c" }),
+  ).rejects.toMatchObject({ code: "Invalid" });
+  await expect(send({ type: "edge.remove" })).rejects.toMatchObject({
+    code: "Invalid",
+  });
+  await expect(
+    send({ type: "edge.remove", source: "a" }),
+  ).rejects.toMatchObject({ code: "Invalid" });
+  await expect(
+    send({ type: "edge.remove", source: "b", target: "a" }),
+  ).rejects.toMatchObject({ code: "NotFound" });
+  await expect(
+    send({ type: "edge.remove", id: "ghost" }),
+  ).rejects.toMatchObject({ code: "NotFound" });
+  expect((await run(store.read)).revision).toBe(1);
+
+  await send({ type: "edge.remove", source: "a", target: "b" });
+  expect((await run(store.read)).edges.map((item) => item.id)).toEqual(["bc"]);
+  expect((await run(store.read)).suggestions).toHaveLength(0);
+  // A plain removal leaves the pair suggestible again.
+  await send({
+    type: "suggestion.record",
+    suggestion: suggestion("re-ab", "a", "b", 2),
+  });
+
+  await send({
+    type: "edge.remove",
+    id: "bc",
+    suppress: true,
+    rationale: "claim was wrong, do not re-propose",
+  });
+  let graph = await run(store.read);
+  expect(graph.edges).toHaveLength(0);
+  expect(
+    graph.suggestions.find((item) => item.id === "suppressed-r4"),
+  ).toMatchObject({
+    status: "rejected",
+    source: "b",
+    target: "c",
+    relation: "requires",
+    model: "actor-suppression",
+    decision: { revision: 4 },
+    basedOnRevision: 3,
+    taxonomyVersion: 1,
+  });
+  await expect(
+    send({
+      type: "suggestion.record",
+      suggestion: suggestion("again-bc", "b", "c", 4),
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+  await expect(
+    send({
+      type: "suggestion.record",
+      suggestion: suggestion("again-cb", "c", "b", 4),
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+  // Suppression blocks inference, never an explicit re-assertion.
+  await send({ type: "edge.put", edge: edge("bc2", "b", "c") });
+  expect((await run(store.read)).edges.map((item) => item.id)).toEqual(["bc2"]);
+});
+
+test("edge.remove keeps suppression for corrected edges and supersedes pending proposals", async () => {
+  const { store, run, send } = await fixture();
+  await send(capture);
+  await send({
+    type: "edge.reframe",
+    id: "ab",
+    relation: "benefits_from",
+    rationale: "Optional preparation",
+    state: "disputed",
+  });
+  await send({
+    type: "suggestion.record",
+    suggestion: suggestion("dup-bc", "b", "c", 2),
+  });
+  await send({ type: "edge.remove", id: "ab" });
+  let graph = await run(store.read);
+  // The dispute lived only on the edge; removal keeps the pair rejected.
+  expect(
+    graph.suggestions.find((item) => item.id === "suppressed-r4"),
+  ).toMatchObject({
+    status: "rejected",
+    source: "a",
+    target: "b",
+    relation: "benefits_from",
+  });
+  await expect(
+    send({
+      type: "suggestion.record",
+      suggestion: suggestion("again-ab", "a", "b", 4),
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+  // The tombstone's relation stays pinned like any referenced type.
+  await expect(
+    send({
+      type: "taxonomy.replace",
+      relations: graph.taxonomy.relations.filter(
+        (relation) => relation.id !== "benefits_from",
+      ),
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+
+  await send({ type: "edge.remove", id: "bc", suppress: false });
+  graph = await run(store.read);
+  expect(graph.suggestions.find((item) => item.id === "dup-bc")?.status).toBe(
+    "superseded",
+  );
+  expect(
+    graph.suggestions.filter((item) => item.id.startsWith("suppressed-")),
+  ).toHaveLength(1);
+  await expect(
+    send({
+      type: "suggestion.decide",
+      id: "dup-bc",
+      decision: "accept",
+      rationale: "already superseded",
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+  await send({
+    type: "suggestion.record",
+    suggestion: suggestion("again-cb", "c", "b", 5),
+  });
+  await send({
+    type: "suggestion.decide",
+    id: "again-cb",
+    decision: "accept",
+    rationale: "reverse direction is a different claim",
+  });
+  graph = await run(store.read);
+  expect(graph.edges.map((item) => item.id)).toEqual(["again-cb"]);
+  // Removing an accepted edge leaves the accepted record as provenance.
+  await send({ type: "edge.remove", source: "c", target: "b" });
+  graph = await run(store.read);
+  expect(graph.edges).toHaveLength(0);
+  expect(graph.suggestions.find((item) => item.id === "again-cb")?.status).toBe(
+    "accepted",
+  );
+
+  // Suppression is idempotent when the pair is already rejected.
+  await send({ type: "edge.put", edge: edge("ab2", "a", "b") });
+  const count = (await run(store.read)).suggestions.length;
+  await send({ type: "edge.remove", id: "ab2", suppress: true });
+  expect((await run(store.read)).suggestions).toHaveLength(count);
+});
+
+test("capture.remove drops only the record and layout.set clears positions", async () => {
+  const { store, run, send } = await fixture();
+  await send(capture);
+  await send({
+    type: "layout.set",
+    positions: [{ id: "a", x: 5, y: 5, pinned: true }],
+  });
+  await send({
+    type: "capture.remove",
+    id: "capture",
+    rationale: "wrong session",
+  });
+  let graph = await run(store.read);
+  expect(graph.captures).toHaveLength(0);
+  expect(graph.nodes).toHaveLength(3);
+  await expect(
+    send({ type: "capture.remove", id: "capture" }),
+  ).rejects.toMatchObject({ code: "NotFound" });
+  // The same capture id is free again; its nodes are already established.
+  await send({ ...capture, nodes: [], edges: [] });
+  expect((await run(store.read)).captures).toHaveLength(1);
+
+  await send({
+    type: "layout.set",
+    positions: [{ id: "a", clear: true }],
+  });
+  graph = await run(store.read);
+  expect(graph.nodes.find((item) => item.id === "a")?.position).toBeNull();
+});
+
 test("layout patches and archived source references survive edits, taxonomy cannot drop live types", async () => {
   const { store, run, send } = await fixture();
   await send(capture);

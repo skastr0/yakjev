@@ -1,7 +1,12 @@
 // MCP parity: the agent surface must expose the same graph as HTTP, with the
 // actor derived from the credential and the channel from the entrypoint.
 import { afterEach, expect, test } from "bun:test";
-import { readGraph, sendCommand, type GraphSnapshot } from "./contract";
+import {
+  history,
+  readGraph,
+  sendCommand,
+  type GraphSnapshot,
+} from "./contract";
 import {
   capture as captureFixture,
   edges as fixtureEdges,
@@ -162,4 +167,124 @@ test("MCP replay is idempotent and a stale revision conflicts without writing", 
   const after = await readGraph(server);
   expect(after.nodes.map((node) => node.id)).not.toContain("stale_mcp_node");
   expect(after.revision).toBe(graph.revision);
+});
+
+test("an agent can remove what it captured even after intervening edits", async () => {
+  server = await startServer();
+  const session = await openSession(server);
+  // The reported incident: a capture, then an intervening layout edit, made
+  // the capture impossible to undo and there was no delete operation.
+  const captured = await callTool(server, session, "graph_command", {
+    requestId: "acceptance-mcp-remove-capture",
+    expectedRevision: 0,
+    command: {
+      type: "capture",
+      capture: captureFixture,
+      nodes: fixtureNodes,
+      edges: fixtureEdges,
+    },
+  });
+  expect(captured.isError).toBeFalsy();
+  await sendCommand(server, 1, {
+    type: "layout.set",
+    positions: [{ id: "jev_skill", x: 12, y: 8, pinned: true }],
+  });
+  const undo = await callTool(server, session, "graph_command", {
+    requestId: "acceptance-mcp-undo-stale",
+    expectedRevision: 2,
+    command: { type: "undo", revision: 1 },
+  });
+  expect(undo.isError).toBe(true);
+
+  // node.remove cascades one wrong node out of the tangle, edges included.
+  const removed = await callTool(server, session, "graph_command", {
+    requestId: "acceptance-mcp-remove-node",
+    expectedRevision: 2,
+    command: {
+      type: "node.remove",
+      ids: ["multi_machine_skills"],
+      removeEdges: true,
+      rationale: "captured in error",
+    },
+  });
+  expect(removed.isError).toBeFalsy();
+  const graph = await readGraph(server);
+  expect(graph.revision).toBe(3);
+  expect(graph.nodes.map((node) => node.id)).not.toContain(
+    "multi_machine_skills",
+  );
+  expect(
+    graph.edges.find((edge) => edge.id === "prism_requires_multi_machine"),
+  ).toBeUndefined();
+  expect(graph.nodes.map((node) => node.id)).toContain(
+    "prism_harness_installs",
+  );
+
+  // MCP sees the same removal and reports the node gone.
+  const gone = await callTool(
+    server,
+    session,
+    "graph_read",
+    { view: "node", id: "multi_machine_skills" },
+    9,
+  );
+  expect(gone.isError).toBe(true);
+  const keeper = await callTool(
+    server,
+    session,
+    "graph_read",
+    { view: "node", id: "jev_skill" },
+    10,
+  );
+  expect(keeper.isError).toBeFalsy();
+  const kept = await callTool(
+    server,
+    session,
+    "graph_read",
+    {
+      view: "edge",
+      source: "skills_in_projects",
+      target: "prism_harness_installs",
+    },
+    11,
+  );
+  expect(kept.isError).toBeFalsy();
+
+  // edge.remove by directed pair plus capture.remove finish the cleanup.
+  const edgeGone = await callTool(server, session, "graph_command", {
+    requestId: "acceptance-mcp-remove-edge",
+    expectedRevision: 3,
+    command: {
+      type: "edge.remove",
+      source: "skills_in_projects",
+      target: "jev_skill",
+      rationale: "mutual claim was wrong",
+    },
+  });
+  expect(edgeGone.isError).toBeFalsy();
+  const capGone = await callTool(server, session, "graph_command", {
+    requestId: "acceptance-mcp-remove-capture-record",
+    expectedRevision: 4,
+    command: {
+      type: "capture.remove",
+      id: "capture_worked_example",
+      rationale: "captured in error",
+    },
+  });
+  expect(capGone.isError).toBeFalsy();
+
+  const final = await readGraph(server);
+  expect(final.captures).toHaveLength(0);
+  expect(final.edges.map((edge) => edge.id)).not.toContain(
+    "skills_in_projects_requires_jev_skill",
+  );
+  // The journal still proves every removal happened and who commanded it.
+  const entries = await history(server);
+  expect(entries.map((entry) => entry.command.type)).toEqual(
+    expect.arrayContaining(["node.remove", "edge.remove", "capture.remove"]),
+  );
+  expect(
+    entries.find((entry) => entry.command.type === "node.remove")?.actor
+      ?.channel,
+  ).toBe("mcp");
 });

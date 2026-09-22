@@ -150,9 +150,35 @@ export const Command = Schema.Union([
     nodes: Schema.Array(NodeInput).check(Schema.isMaxLength(100)),
     edges: Schema.Array(EdgeInput).check(Schema.isMaxLength(200)),
   }),
+  // The capture record leaves the graph; nodes and edges it created stay.
+  // History still holds the original command, so removal loses no provenance.
+  Schema.Struct({
+    type: Schema.Literal("capture.remove"),
+    id: Id,
+    rationale: Schema.optionalKey(ShortText),
+  }),
   Schema.Struct({ type: Schema.Literal("node.put"), node: NodeInput }),
+  // Nodes leave the active graph; the journal still records them and their
+  // sources. Incident edges refuse removal unless removeEdges cascades.
+  Schema.Struct({
+    type: Schema.Literal("node.remove"),
+    ids: Schema.Array(Id).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+    removeEdges: Schema.optionalKey(Schema.Boolean),
+    rationale: Schema.optionalKey(ShortText),
+  }),
   // New assertions only. An existing pair must be explicitly reframed.
   Schema.Struct({ type: Schema.Literal("edge.put"), edge: EdgeInput }),
+  // Resolve by id or by directed source+target pair. suppress decides whether
+  // the pair stays rejected for machine inference; corrected or disputed edges
+  // keep their suppression by default because it dies with the edge otherwise.
+  Schema.Struct({
+    type: Schema.Literal("edge.remove"),
+    id: Schema.optionalKey(Id),
+    source: Schema.optionalKey(Id),
+    target: Schema.optionalKey(Id),
+    suppress: Schema.optionalKey(Schema.Boolean),
+    rationale: Schema.optionalKey(ShortText),
+  }),
   Schema.Struct({
     type: Schema.Literal("edge.reframe"),
     id: Id,
@@ -163,7 +189,10 @@ export const Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("layout.set"),
     positions: Schema.Array(
-      Schema.Struct({ id: Id, ...Position.fields }),
+      Schema.Union([
+        Schema.Struct({ id: Id, ...Position.fields }),
+        Schema.Struct({ id: Id, clear: Schema.Literal(true) }),
+      ]),
     ).check(Schema.isMaxLength(1000)),
   }),
   Schema.Struct({

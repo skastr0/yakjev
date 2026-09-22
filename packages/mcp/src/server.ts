@@ -33,7 +33,7 @@ export const mcpLayer = (options: { readonly origin: string }) =>
         name: "yakjev",
         version: "0.0.1",
         instructions:
-          "Yakjev graph. Tools: graph_read, graph_command, graph_discover, graph_evaluate. Actor is the authenticated owner on the mcp channel. Do not send actor, user, role, or channel.",
+          "Yakjev graph. Tools: graph_read, graph_command, graph_discover, graph_evaluate. graph_command carries every mutation, including node.remove, edge.remove, and capture.remove for deleting current-state entities. Actor is the authenticated owner on the mcp channel. Do not send actor, user, role, or channel.",
         path: "/mcp",
         protocols: [McpProtocol.v2025_06_18, McpProtocol.v2025_03_26],
         allowedOrigins: [options.origin],
