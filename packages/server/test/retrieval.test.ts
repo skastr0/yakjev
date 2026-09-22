@@ -519,4 +519,70 @@ describe("RetrievalLive Synthetic adapter", () => {
       else process.env.SYNTHETIC_OPENAI_BASE_URL = previousBase;
     }
   });
+
+  test("a hung embeddings request aborts and a 401 is not retried", async () => {
+    const previousKey = process.env.SYNTHETIC_API_KEY;
+    const previousTimeout = process.env.SYNTHETIC_EMBEDDING_TIMEOUT_MS;
+    const previousFetch = globalThis.fetch;
+    process.env.SYNTHETIC_API_KEY = "synthetic-timeout-key";
+    process.env.SYNTHETIC_EMBEDDING_TIMEOUT_MS = "40";
+    let aborts = 0;
+    globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        const abort = () => {
+          aborts += 1;
+          reject(
+            Object.assign(new Error("timed out"), { name: "TimeoutError" }),
+          );
+        };
+        if (init?.signal?.aborted) abort();
+        else init?.signal?.addEventListener("abort", abort, { once: true });
+      })) as typeof fetch;
+    const focus = node("focus", "Arrange a routine teeth checkup", "");
+    const rankInput = {
+      graph: graph([
+        focus,
+        node("paraphrase", "Schedule an oral health examination", ""),
+      ]),
+      focus: { id: "focus" as const, text: textOf(focus) },
+      explicit: new Set<string>(),
+      only: false,
+    };
+    try {
+      const ranked = await Effect.runPromise(
+        Effect.gen(function* () {
+          const retrieval = yield* Retrieval;
+          return yield* retrieval.rank(rankInput);
+        }).pipe(Effect.provide(RetrievalLive)),
+      );
+      expect(
+        ranked.every((candidate) => candidate.semanticScore === null),
+      ).toBe(true);
+      for (let attempt = 0; aborts < 2 && attempt < 40; attempt += 1)
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(aborts).toBe(2);
+
+      let denied = 0;
+      process.env.SYNTHETIC_API_KEY = "synthetic-denied-key";
+      globalThis.fetch = (async () => {
+        denied += 1;
+        return new Response("no", { status: 401 });
+      }) as unknown as typeof fetch;
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const retrieval = yield* Retrieval;
+          return yield* retrieval.rank(rankInput);
+        }).pipe(Effect.provide(RetrievalLive)),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(denied).toBe(1);
+    } finally {
+      globalThis.fetch = previousFetch;
+      if (previousKey === undefined) delete process.env.SYNTHETIC_API_KEY;
+      else process.env.SYNTHETIC_API_KEY = previousKey;
+      if (previousTimeout === undefined)
+        delete process.env.SYNTHETIC_EMBEDDING_TIMEOUT_MS;
+      else process.env.SYNTHETIC_EMBEDDING_TIMEOUT_MS = previousTimeout;
+    }
+  });
 });

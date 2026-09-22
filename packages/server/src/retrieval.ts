@@ -132,6 +132,10 @@ const DOCUMENT_PREFIX = "search_document: ";
 const SYNTHETIC_EMBEDDINGS_BASE = "https://api.synthetic.new/openai/v1";
 // One input's token cap is 8191. Characters stay under that for ordinary text.
 const EMBED_CHARS = 8000;
+// A 96-text batch usually returns in well under this. A hung socket must not
+// consume the whole warm window.
+const EMBED_TIMEOUT_MS = 20_000;
+const EMBED_ATTEMPTS = 2;
 
 export interface EmbeddingClient {
   readonly embed: (
@@ -168,33 +172,64 @@ interface CachedText {
 function hybridRanker(client: EmbeddingClient, budgetMs: number) {
   const cache = new Map<string, readonly number[]>();
   const inflight = new Map<string, Promise<void>>();
+  const pauseUntil = new Map<string, number>();
+  const strikes = new Map<string, number>();
+  const hold = (items: readonly CachedText[]) => {
+    const now = Date.now();
+    for (const item of items) {
+      const strike = (strikes.get(item.hash) ?? 0) + 1;
+      strikes.set(item.hash, strike);
+      pauseUntil.set(item.hash, now + Math.min(20_000, 500 * 2 ** strike));
+    }
+  };
 
   const warm = (items: readonly CachedText[]): Promise<void> => {
+    const now = Date.now();
     const fresh = [
       ...new Map(
         items
           .filter((item) => item.text.length > 0 && !cache.has(item.hash))
+          .filter((item) => (pauseUntil.get(item.hash) ?? 0) <= now)
           .filter((item) => !inflight.has(item.hash))
           .map((item) => [item.hash, item] as const),
       ).values(),
     ];
     if (fresh.length > 0) {
+      const batches = Math.ceil(fresh.length / EMBED_BATCH);
       const job = (async () => {
         try {
-          for (let start = 0; start < fresh.length; start += EMBED_BATCH) {
+          for (
+            let start = 0, batch = 1;
+            start < fresh.length;
+            start += EMBED_BATCH, batch += 1
+          ) {
             const chunk = fresh.slice(start, start + EMBED_BATCH);
-            const vectors = await client.embed(chunk.map((item) => item.text));
-            if (vectors.length !== chunk.length) throw new Error("shape");
-            for (let index = 0; index < chunk.length; index += 1) {
-              const vector = vectors[index];
-              const item = chunk[index];
-              if (!vector || vector.length === 0 || !item)
-                throw new Error("shape");
-              cache.set(item.hash, vector);
+            const started = performance.now();
+            try {
+              const vectors = await client.embed(
+                chunk.map((item) => item.text),
+              );
+              if (vectors.length !== chunk.length)
+                throw new Error("embeddings shape");
+              for (let index = 0; index < chunk.length; index += 1) {
+                const vector = vectors[index];
+                const item = chunk[index];
+                if (!vector || vector.length === 0 || !item)
+                  throw new Error("embeddings shape");
+                cache.set(item.hash, vector);
+                strikes.delete(item.hash);
+                pauseUntil.delete(item.hash);
+              }
+              console.error(
+                `yakjev embeddings batch ${batch}/${batches} size=${chunk.length} ok elapsedMs=${Math.round(performance.now() - started)} cached=${cache.size}`,
+              );
+            } catch (error) {
+              hold(chunk);
+              console.error(
+                `yakjev embeddings batch ${batch}/${batches} size=${chunk.length} failed ${embedFailure(error)} elapsedMs=${Math.round(performance.now() - started)}`,
+              );
             }
           }
-        } catch {
-          // The caller ranks lexically. Uncached hashes are retried next time.
         } finally {
           for (const item of fresh) inflight.delete(item.hash);
         }
@@ -354,48 +389,98 @@ function syntheticEmbeddingsUrl(): string {
   return `${base.replace(/\/$/, "")}/embeddings`;
 }
 
+function embeddingTimeoutMs(): number {
+  const raw = process.env.SYNTHETIC_EMBEDDING_TIMEOUT_MS?.trim();
+  if (!raw) return EMBED_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : EMBED_TIMEOUT_MS;
+}
+
+// Status only. Provider bodies and error strings can echo a request, so they
+// are not included.
+function embedFailure(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.name === "TimeoutError" || error.name === "AbortError")
+      return "timeout";
+    const http = /^embeddings (\d+)$/.exec(error.message);
+    if (http) return `http ${http[1]}`;
+    if (error.message === "embeddings shape") return "shape";
+  }
+  return "network";
+}
+
+const retryableEmbedFailure = (status: string) =>
+  status === "timeout" ||
+  status === "shape" ||
+  status === "network" ||
+  status === "http 429" ||
+  /^http 5\d\d$/.test(status);
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function syntheticEmbeddings(apiKey: string): EmbeddingClient {
+  const embedOnce = async (texts: readonly string[]) => {
+    const timeoutMs = embeddingTimeoutMs();
+    const response = await fetch(syntheticEmbeddingsUrl(), {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: EMBED_MODEL,
+        input: [...texts],
+        dimensions: EMBED_DIMENSIONS,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) throw new Error(`embeddings ${response.status}`);
+    const body: unknown = await response.json();
+    if (!body || typeof body !== "object" || !("data" in body))
+      throw new Error("embeddings shape");
+    const data = body.data;
+    if (!Array.isArray(data) || data.length !== texts.length)
+      throw new Error("embeddings shape");
+    const ordered: (readonly number[])[] = new Array(texts.length);
+    for (const row of data) {
+      if (!row || typeof row !== "object") throw new Error("embeddings shape");
+      const index = "index" in row ? row.index : undefined;
+      const embedding = "embedding" in row ? row.embedding : undefined;
+      if (
+        typeof index !== "number" ||
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= texts.length ||
+        !Array.isArray(embedding) ||
+        embedding.some((value) => typeof value !== "number")
+      )
+        throw new Error("embeddings shape");
+      ordered[index] = embedding;
+    }
+    if (ordered.some((vector) => !vector)) throw new Error("embeddings shape");
+    return ordered;
+  };
   return {
     embed: async (texts) => {
-      const response = await fetch(syntheticEmbeddingsUrl(), {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${apiKey}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: EMBED_MODEL,
-          input: [...texts],
-          dimensions: EMBED_DIMENSIONS,
-        }),
-      });
-      if (!response.ok) throw new Error(`embeddings ${response.status}`);
-      const body: unknown = await response.json();
-      if (!body || typeof body !== "object" || !("data" in body))
-        throw new Error("embeddings shape");
-      const data = body.data;
-      if (!Array.isArray(data) || data.length !== texts.length)
-        throw new Error("embeddings shape");
-      const ordered: (readonly number[])[] = new Array(texts.length);
-      for (const row of data) {
-        if (!row || typeof row !== "object")
-          throw new Error("embeddings shape");
-        const index = "index" in row ? row.index : undefined;
-        const embedding = "embedding" in row ? row.embedding : undefined;
-        if (
-          typeof index !== "number" ||
-          !Number.isInteger(index) ||
-          index < 0 ||
-          index >= texts.length ||
-          !Array.isArray(embedding) ||
-          embedding.some((value) => typeof value !== "number")
-        )
-          throw new Error("embeddings shape");
-        ordered[index] = embedding;
+      let last: unknown;
+      for (let attempt = 1; attempt <= EMBED_ATTEMPTS; attempt += 1) {
+        const started = performance.now();
+        try {
+          return await embedOnce(texts);
+        } catch (error) {
+          last = error;
+          const status = embedFailure(error);
+          console.error(
+            `yakjev embeddings attempt ${attempt}/${EMBED_ATTEMPTS} size=${texts.length} ${status} elapsedMs=${Math.round(performance.now() - started)}`,
+          );
+          if (attempt < EMBED_ATTEMPTS && retryableEmbedFailure(status)) {
+            await sleep(400 * attempt);
+            continue;
+          }
+          throw last;
+        }
       }
-      if (ordered.some((vector) => !vector))
-        throw new Error("embeddings shape");
-      return ordered;
+      throw last;
     },
   };
 }
