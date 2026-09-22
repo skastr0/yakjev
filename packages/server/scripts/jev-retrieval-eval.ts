@@ -1,6 +1,6 @@
 import { initialTaxonomy, type Graph } from "@yakjev/protocol";
 import { Effect } from "effect";
-import { shortlist } from "../src/discovery.ts";
+import { shortlist, type DiscoveryResult } from "../src/discovery.ts";
 import {
   hybridRetrieval,
   lexicalRetrieval,
@@ -101,17 +101,25 @@ const evaluate = async (name: string, retrieval: RetrievalService) => {
 };
 await evaluate("lexical", lexicalRetrieval);
 // Deterministic semantic fixture exercises the full rank-and-pack path at
-// 1,000 nodes without a provider credential. It proves retrieval plumbing,
-// not the quality of any particular embedding model.
+// 1,000 nodes without a provider credential. The cosine margin mirrors a live
+// Synthetic check (paraphrase .677, word trap .671), so lexical overlap cannot
+// bury a slightly better semantic match below hundreds of traps.
 const scriptedEmbeddings: EmbeddingClient = {
   embed: async (texts) =>
     texts.map((value) => {
-      const index = cases.findIndex(
-        ({ query, title }) => value.includes(query) || value.includes(title),
+      const query = cases.findIndex((item) => value.includes(item.query));
+      const target = cases.findIndex((item) => value.includes(item.title));
+      const trap = cases.findIndex((item) => value.includes(item.trap));
+      const index = query >= 0 ? query : target >= 0 ? target : trap;
+      if (index < 0) return [0, 0, 0, 1];
+      const similarity = query >= 0 ? 1 : target >= 0 ? 0.677 : 0.671;
+      return [0, 1, 2, 3].map((_, dimension) =>
+        dimension === index
+          ? similarity
+          : dimension === 3
+            ? Math.sqrt(1 - similarity ** 2)
+            : 0,
       );
-      return index < 0
-        ? [0, 0, 0, 1]
-        : [0, 1, 2, 3].map((_, dimension) => (dimension === index ? 1 : 0));
     }),
 };
 const scriptedRecall = await evaluate(
@@ -123,7 +131,45 @@ const live = await Effect.runPromise(
     return yield* Retrieval;
   }).pipe(Effect.provide(RetrievalLive)),
 );
-const liveRecall = await evaluate("live", live);
+const liveSmoke = process.argv.includes("--live-smoke");
+const liveRecall = liveSmoke ? null : await evaluate("live", live);
+if (liveSmoke) {
+  if (!process.env.SYNTHETIC_API_KEY?.trim())
+    throw new Error("--live-smoke requires SYNTHETIC_API_KEY");
+  const first = cases[0]!;
+  const smallGraph: Graph = {
+    ...graph,
+    nodes: [makeNode(first.id, first.title), makeNode("word_trap", first.trap)],
+  };
+  const deadline = Date.now() + 30_000;
+  let ranked: DiscoveryResult;
+  do {
+    ranked = await Effect.runPromise(
+      shortlist(smallGraph, { query: first.query }, live),
+    );
+    if (
+      ranked.candidates.every((candidate) => candidate.semanticScore !== null)
+    )
+      break;
+    await Bun.sleep(200);
+  } while (Date.now() < deadline);
+  const target = ranked.candidates.find(
+    (candidate) => candidate.nodeId === first.id,
+  );
+  console.log(
+    `Synthetic live smoke: ${target?.semanticScore !== null && target !== undefined ? "semantic" : "lexical fallback"}; target rank ${ranked.candidates.findIndex((candidate) => candidate.nodeId === first.id) + 1}`,
+  );
+  console.table(
+    ranked.candidates.map(({ nodeId, lexicalScore, semanticScore, score }) => ({
+      nodeId,
+      lexicalScore,
+      semanticScore,
+      score,
+    })),
+  );
+  if (target?.semanticScore === null || target === undefined)
+    process.exitCode = 1;
+}
 const floorArg = process.argv.find((value) =>
   value.startsWith("--min-recall="),
 );
@@ -137,6 +183,8 @@ const liveFloorArg = process.argv.find((value) =>
   value.startsWith("--live-min-recall="),
 );
 if (liveFloorArg) {
+  if (liveRecall === null)
+    throw new Error("--live-min-recall cannot be combined with --live-smoke");
   const floor = Number(liveFloorArg.slice("--live-min-recall=".length));
   if (!Number.isFinite(floor) || floor < 0 || floor > 1)
     throw new Error("--live-min-recall must be between 0 and 1");
