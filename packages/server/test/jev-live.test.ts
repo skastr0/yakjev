@@ -651,3 +651,76 @@ test("on a large graph, a coarse Jev pass lifts a buried paraphrase into the jud
   expect(purposes).toContain("rerank");
   expect(purposes[0]).toBe("preview");
 });
+
+test("a coarse-rated paraphrase survives the no-evidence filter once semantic scores exist", async () => {
+  const nodes = [
+    ...Array.from({ length: 60 }, (_, i) => ({
+      id: `trap${i.toString().padStart(2, "0")}`,
+      title: `Map dependencies for the garden service schedule ${i}`,
+    })),
+    { id: "release", title: "Chart deployment prerequisites" },
+  ];
+  const provenance = {
+    actor: { id: "t", channel: "system" as const },
+    at: "",
+    revision: 0,
+  };
+  const g = {
+    revision: 0,
+    nodes: nodes.map((n) => ({
+      ...n,
+      description: "",
+      project: "",
+      status: "idea" as const,
+      sources: [],
+      position: null,
+      created: provenance,
+      updated: provenance,
+    })),
+    edges: [],
+    captures: [],
+    suggestions: [],
+    evaluations: [],
+    taxonomy: (await import("@yakjev/protocol")).initialTaxonomy,
+  };
+  // Live-like ranking: every trap outranks the paraphrase, which has semantic
+  // scores but no shared words and sits outside the semantic top, so retrieval
+  // tags it "coverage".
+  const retrieval = {
+    rank: () =>
+      Effect.succeed(
+        nodes.map((n, i) => ({
+          nodeId: n.id,
+          score: 1 - i / 100,
+          lexicalScore: n.id === "release" ? 0 : 0.6,
+          semanticScore: n.id === "release" ? 0.58 : 0.62,
+          sharedTokens: n.id === "release" ? [] : ["map"],
+          via:
+            n.id === "release" ? ("coverage" as const) : ("lexical" as const),
+        })),
+      ),
+  };
+  const client = {
+    client: HttpClient.make(() => Effect.die("Unexpected HTTP")),
+    systemOne: (request: any) =>
+      Effect.succeed(
+        judge({
+          "Chart deployment prerequisites": { related: 2, match: true },
+        })(request as Request),
+      ),
+    listModels: () => Effect.succeed({ models: [] }),
+  } as unknown as TypeSafeClient.Service;
+  const bag = await Effect.runPromise(
+    Effect.gen(function* () {
+      const discovery = yield* makeDiscovery(client, 20_000, retrieval);
+      return yield* discovery.shortlist(g, {
+        query: "Map dependencies for the service rollout",
+      });
+    }),
+  );
+  expect(bag.coarse.length).toBeGreaterThan(0);
+  expect(bag.candidates[0]).toMatchObject({
+    nodeId: "release",
+    via: "semantic",
+  });
+});

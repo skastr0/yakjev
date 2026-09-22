@@ -66,6 +66,8 @@ const COARSE_MIN = 48;
 const COARSE_BATCH_TOKENS = 20_000;
 const COARSE_TIMEOUT_MS = 8_000;
 const COARSE_DESCRIPTION = 280;
+// A coarse rating at or above this (0.5 = "same broad area") is evidence.
+const COARSE_EVIDENCE = 0.5;
 // Asks about subject, not wording: with plain relevance Jev rated "Map
 // dependencies for the garden service schedule" above "Chart deployment
 // prerequisites" for "Map dependencies for the service rollout" (1.90 vs
@@ -824,10 +826,17 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
           b.score - a.score ||
           order.get(a.candidate.nodeId)! - order.get(b.candidate.nodeId)!,
       );
+      // Jev rating a node as the same area or work is evidence of meaning:
+      // it must survive the packer's no-evidence filter even when retrieval
+      // found no shared words and ranked it outside its semantic top.
       return {
         ranked: [
           ...explicit,
-          ...scored.map((entry) => entry.candidate),
+          ...scored.map(({ candidate, score }) =>
+            candidate.via === "coverage" && score >= COARSE_EVIDENCE
+              ? { ...candidate, via: "semantic" as const }
+              : candidate,
+          ),
           ...rest.slice(COARSE_WINDOW),
         ],
         calls,
