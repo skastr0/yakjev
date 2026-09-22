@@ -30,7 +30,7 @@ import {
 import { startServer, type ServerHandle } from "../harness";
 import { callTool, openSession } from "../mcp";
 
-const session = "yakjev-accept";
+const session = process.env.AGENT_BROWSER_SESSION ?? "yakjev-accept";
 const artifacts = resolve(import.meta.dir, "../../../.amp/in/artifacts");
 const discover = process.argv.includes("--discover");
 // Run only steps whose name starts with the prefix, e.g. --only=J for the
@@ -1345,6 +1345,7 @@ async function main(): Promise<void> {
         await run(
           "J2 shift-drag pre-selects Jev's relation in the link card",
           async () => {
+            await ab(["press", "Escape"]);
             const before = await readGraph(jevServer);
             if (edgeBetween(before, "seed_beds", "seed_seeds"))
               throw new Error("seed nodes are already connected; bad fixture");
@@ -1356,7 +1357,7 @@ async function main(): Promise<void> {
                 "window.__yakjevCanvas.anchorNode is not exposed; the canvas needs the test hook requested from jev-drag",
               );
             await cdpShiftDrag(from, to);
-            if (!(await waitForSelector(".jev-note", 8_000))) {
+            if (!(await waitForSelector(".graph-editor .jev-note", 8_000))) {
               await screenshot("j2-shift-drag-missed");
               blocked(
                 "synthetic shift-drag did not open the link chooser (see j2-shift-drag-missed.png)",
@@ -1366,7 +1367,7 @@ async function main(): Promise<void> {
             let note = "";
             while (Date.now() < deadline) {
               note = await js<string>(
-                "document.querySelector('.jev-note')?.textContent ?? ''",
+                "document.querySelector('.graph-editor .jev-note')?.textContent ?? ''",
               );
               if (/Jev ·/.test(note) || /no relation|offline/.test(note)) break;
               await Bun.sleep(250);

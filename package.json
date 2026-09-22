@@ -12,6 +12,7 @@
   "scripts": {
     "dev": "bun run --filter '*' dev",
     "build": "bun run --cwd apps/web build",
+    "qa": "bun run build && AGENT_BROWSER_SESSION=jev-qa bun tests/acceptance/browser/run.ts --only=J",
     "start": "bun packages/server/src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test packages apps/web",
