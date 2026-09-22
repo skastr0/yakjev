@@ -53,7 +53,7 @@ const open = async (databasePath: string) => {
         },
         body: JSON.stringify(body),
       }),
-      provideActor(actor) as never,
+      provideActor(actor),
     );
   const httpCommand = (body: unknown) =>
     Effect.runPromise(

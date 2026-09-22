@@ -1,7 +1,6 @@
 import { Context, Effect, Layer } from "effect";
 import { McpProtocol, McpServer } from "effect/unstable/ai";
 import { Auth } from "@yakjev/server/auth";
-import { Evaluations } from "@yakjev/server/evaluation";
 import { invalid } from "./failure.ts";
 import { YakjevToolkit, toolkitLayer } from "./tools.ts";
 
@@ -52,5 +51,3 @@ export const requireBearer = (
     const auth = yield* Auth;
     return yield* auth.bearer(headers);
   });
-
-void Evaluations;

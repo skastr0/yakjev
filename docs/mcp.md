@@ -26,4 +26,4 @@ Actor is `{ id, channel: "mcp" }` from the bearer. Arguments named `actor`, `use
 }
 ```
 
-Workload-identity JWTs are not the first path. Cookie sessions are not accepted on `/mcp`.
+Workload-identity JWTs are not the first path. Cookie sessions are not accepted on `/mcp`. Do not put a real token in this file.
