@@ -7,9 +7,9 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@effect/platform-bun": "4.0.0-rc.117",
     "@yakjev/protocol": "workspace:*",
     "@yakjev/server": "workspace:*",
-    "@effect/platform-bun": "4.0.0-rc.117",
     "effect": "4.0.0-rc.117"
   }
 }

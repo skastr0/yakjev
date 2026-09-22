@@ -7,13 +7,7 @@ import { StorageError } from "@yakjev/server/store";
 export class ToolFailure extends Schema.TaggedError<ToolFailure>()(
   "ToolFailure",
   {
-    error: Schema.Literals([
-      "Invalid",
-      "NotFound",
-      "Conflict",
-      "StorageError",
-      "Unavailable",
-    ]),
+    error: Schema.Literals(["Invalid", "NotFound", "Conflict", "StorageError"]),
     message: Schema.String,
     currentRevision: Schema.optionalKey(Schema.Int),
   },
@@ -34,10 +28,10 @@ export const mapFailure = (
         : { currentRevision: error.currentRevision }),
     });
   }
-  if (error instanceof AuthError) {
+  if (error instanceof DiscoveryError) {
     return new ToolFailure({ error: "Invalid", message: error.message });
   }
-  if (error instanceof DiscoveryError) {
+  if (error instanceof AuthError) {
     return new ToolFailure({ error: "Invalid", message: error.message });
   }
   return new ToolFailure({

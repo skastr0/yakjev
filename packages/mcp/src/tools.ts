@@ -1,7 +1,6 @@
-import { CommandRequest, CommandResult } from "@yakjev/protocol";
+import { CommandRequest, CommandResult, type Actor } from "@yakjev/protocol";
 import { Effect, Layer, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
-import type { Actor } from "@yakjev/protocol";
 import { neighborhood, searchNodes } from "@yakjev/server/domain";
 import {
   discover,
@@ -38,6 +37,9 @@ const ReadInput = Schema.Struct({
     "evaluation",
   ]),
   after: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  limit: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1000 })),
+  ),
   query: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2000))),
   id: Schema.optionalKey(
     Schema.String.check(
@@ -111,14 +113,19 @@ export const toolkitLayer = (actor: () => Effect.Effect<Actor, ToolFailure>) =>
         graph_read: (input) =>
           Effect.gen(function* () {
             yield* rejectActorClaims(input);
-            yield* actor();
+            const who = yield* actor();
+            if (who.channel !== "mcp") {
+              return yield* Effect.fail(
+                invalid("MCP tools require an mcp actor."),
+              );
+            }
             const graph = yield* store.read.pipe(Effect.mapError(mapFailure));
             switch (input.view) {
               case "graph":
                 return graph;
               case "history":
                 return yield* store
-                  .history(input.after ?? 0, 100)
+                  .history(input.after ?? 0, input.limit ?? 100)
                   .pipe(Effect.mapError(mapFailure));
               case "search":
                 return searchNodes(graph, input.query ?? "");
@@ -130,7 +137,7 @@ export const toolkitLayer = (actor: () => Effect.Effect<Actor, ToolFailure>) =>
                 return yield* neighborhood(
                   graph,
                   input.id,
-                  input.direction ?? "both",
+                  input.direction ?? "outgoing",
                   input.blocking ?? false,
                 ).pipe(Effect.mapError(mapFailure));
               case "export":
@@ -158,14 +165,25 @@ export const toolkitLayer = (actor: () => Effect.Effect<Actor, ToolFailure>) =>
           Effect.gen(function* () {
             yield* rejectActorClaims(input);
             yield* rejectActorClaims(input.command);
+            const who = yield* actor();
+            if (who.channel !== "mcp") {
+              return yield* Effect.fail(
+                invalid("MCP tools require an mcp actor."),
+              );
+            }
             return yield* store
-              .execute(yield* actor(), input)
+              .execute(who, input)
               .pipe(Effect.mapError(mapFailure));
           }),
         graph_discover: (input) =>
           Effect.gen(function* () {
             yield* rejectActorClaims(input);
-            yield* actor();
+            const who = yield* actor();
+            if (who.channel !== "mcp") {
+              return yield* Effect.fail(
+                invalid("MCP tools require an mcp actor."),
+              );
+            }
             return yield* runDiscover(
               yield* store.read.pipe(Effect.mapError(mapFailure)),
               input,

@@ -1,7 +1,6 @@
 import { Context, Effect, Layer } from "effect";
 import { McpProtocol, McpServer } from "effect/unstable/ai";
 import { Auth } from "@yakjev/server/auth";
-import { Store } from "@yakjev/server/store";
 import { invalid } from "./failure.ts";
 import { YakjevToolkit, toolkitLayer } from "./tools.ts";
 
@@ -25,7 +24,6 @@ const actorForRequest = () =>
 /**
  * Streamable HTTP POST /mcp on the shared router.
  * Requires HttpRouter, Auth, and Store. Does not open SQLite.
- * The app checks Auth.bearer and passes the actor with provideActor.
  */
 export const mcpLayer = (options: { readonly origin: string }) =>
   McpServer.toolkit(YakjevToolkit).pipe(
@@ -35,7 +33,7 @@ export const mcpLayer = (options: { readonly origin: string }) =>
         name: "yakjev",
         version: "0.0.1",
         instructions:
-          "Yakjev graph. Tools: graph_read, graph_command, graph_discover. Actor is the authenticated owner on the mcp channel. Do not send actor, user, role, or channel. Evaluation uses the shared Evaluations service once mounted.",
+          "Yakjev graph. Tools: graph_read, graph_command, graph_discover. Actor is the authenticated owner on the mcp channel. Do not send actor, user, role, or channel.",
         path: "/mcp",
         protocols: [McpProtocol.v2025_06_18, McpProtocol.v2025_03_26],
         allowedOrigins: [options.origin],
@@ -53,5 +51,3 @@ export const requireBearer = (
     const auth = yield* Auth;
     return yield* auth.bearer(headers);
   });
-
-void Store;

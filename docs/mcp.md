@@ -1,15 +1,16 @@
 # Agent access
 
-MCP calls the server `Store`, `Auth`, and `discover`. It does not open SQLite and does not apply a second rule engine. Amp uses tools only, over Streamable HTTP.
+MCP calls server `Store`, `Auth.bearer`, and `discover`. It does not open SQLite. Amp uses tools only, over Streamable HTTP.
 
 ## Tools
 
 - `graph_read`: `graph`, `history`, `search`, `neighborhood`, `export`, `evaluation`.
 - `graph_command`: same envelope as `POST /api/commands`.
 - `graph_discover`: pure `discover()`. Not semantic search.
-- `graph_evaluate`: will call `Evaluations.evaluate` when that service is mounted. It does not call the provider itself.
 
-Actor is `{ id, channel: "mcp" }` from `Auth.bearer`. Arguments named `actor`, `user`, `role`, or `channel` are rejected.
+Actor is `{ id, channel: "mcp" }` from the bearer. Arguments named `actor`, `user`, `role`, or `channel` are rejected.
+
+`graph_evaluate` is not mounted. It waits on the shared `Evaluations.evaluate` service so replay happens before the provider call.
 
 ## Client
 

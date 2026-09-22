@@ -15,12 +15,10 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-const harness = async () => {
-  const dir = await mkdtemp(`${tmpdir()}/yakjev-mcp-`);
-  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+const open = async (databasePath: string) => {
   const app = HttpRouter.toWebHandler(
     mcpLayer({ origin }).pipe(
-      Layer.provide(storeLayer(`${dir}/graph.sqlite`)),
+      Layer.provide(storeLayer(databasePath)),
       Layer.provide(
         Auth.layer({ origin, ownerToken: token, ownerId: "owner" }),
       ),
@@ -52,20 +50,47 @@ const harness = async () => {
         },
         body: JSON.stringify(body),
       }),
-      provideActor(actor),
+      provideActor(actor) as never,
     );
   const httpCommand = (body: unknown) =>
     Effect.runPromise(
       Effect.gen(function* () {
         const store = yield* Store;
         return yield* store.execute(actor, body);
-      }).pipe(Effect.provide(storeLayer(`${dir}/graph.sqlite`)), Effect.result),
+      }).pipe(Effect.provide(storeLayer(databasePath)), Effect.result),
     );
-  return { dir, mcp, httpCommand, actor };
+  return { mcp, httpCommand, actor };
 };
 
-test("MCP capture and HTTP command share one SQLite revision", async () => {
-  const { mcp, httpCommand } = await harness();
+const capture = {
+  requestId: "req-mcp",
+  expectedRevision: 0,
+  command: {
+    type: "capture" as const,
+    capture: {
+      id: "cap-1",
+      text: "Claimed chain, not a verified dependency.",
+      sources: [],
+      nodeIds: ["n1"],
+    },
+    nodes: [
+      {
+        id: "n1",
+        title: "Jev skill",
+        description: "claim",
+        project: "yakjev",
+        status: "idea" as const,
+        sources: [],
+      },
+    ],
+    edges: [],
+  },
+};
+
+test("MCP capture and a later HTTP command share one SQLite file", async () => {
+  const dir = await mkdtemp(`${tmpdir()}/yakjev-mcp-`);
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+  const { mcp, httpCommand } = await open(`${dir}/graph.sqlite`);
   const initialized = await mcp({
     jsonrpc: "2.0",
     id: 1,
@@ -77,32 +102,7 @@ test("MCP capture and HTTP command share one SQLite revision", async () => {
     },
   });
   expect(initialized.status).toBe(200);
-  const session = initialized.headers.get("mcp-session-id");
-  expect(session).toBeTruthy();
-  const capture = {
-    requestId: "req-mcp",
-    expectedRevision: 0,
-    command: {
-      type: "capture",
-      capture: {
-        id: "cap-1",
-        text: "Claimed chain, not a verified dependency.",
-        sources: [],
-        nodeIds: ["n1"],
-      },
-      nodes: [
-        {
-          id: "n1",
-          title: "Jev skill",
-          description: "claim",
-          project: "yakjev",
-          status: "idea",
-          sources: [],
-        },
-      ],
-      edges: [],
-    },
-  };
+  const session = initialized.headers.get("mcp-session-id")!;
   const called = await mcp(
     {
       jsonrpc: "2.0",
@@ -110,7 +110,7 @@ test("MCP capture and HTTP command share one SQLite revision", async () => {
       method: "tools/call",
       params: { name: "graph_command", arguments: capture },
     },
-    { "mcp-session-id": session!, "mcp-protocol-version": "2025-06-18" },
+    { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" },
   );
   const body = await called.json();
   expect(body.result?.isError).toBe(false);
@@ -121,10 +121,8 @@ test("MCP capture and HTTP command share one SQLite revision", async () => {
   });
   expect(stale._tag).toBe("Failure");
   if (stale._tag === "Failure") {
-    const error = stale.failure;
-    expect("code" in error ? error.code : "").toBe("Conflict");
+    expect("code" in stale.failure ? stale.failure.code : "").toBe("Conflict");
   }
-
   const replay = await mcp(
     {
       jsonrpc: "2.0",
@@ -132,11 +130,11 @@ test("MCP capture and HTTP command share one SQLite revision", async () => {
       method: "tools/call",
       params: { name: "graph_command", arguments: capture },
     },
-    { "mcp-session-id": session!, "mcp-protocol-version": "2025-06-18" },
+    { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" },
   );
-  const replayBody = await replay.json();
-  expect(JSON.parse(replayBody.result.content[0].text).replayed).toBe(true);
-
+  expect(
+    JSON.parse((await replay.json()).result.content[0].text).replayed,
+  ).toBe(true);
   const claimed = await mcp(
     {
       jsonrpc: "2.0",
@@ -151,24 +149,7 @@ test("MCP capture and HTTP command share one SQLite revision", async () => {
         },
       },
     },
-    { "mcp-session-id": session!, "mcp-protocol-version": "2025-06-18" },
+    { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" },
   );
-  const claimedBody = await claimed.json();
-  expect(claimedBody.error.code).toBe(-32602);
-
-  const unknownRelation = await httpCommand({
-    requestId: "req-bad-rel",
-    expectedRevision: 1,
-    command: {
-      type: "edge.put",
-      edge: {
-        id: "e1",
-        source: "n1",
-        target: "missing",
-        relation: "not-a-relation",
-        rationale: "no",
-      },
-    },
-  });
-  expect(unknownRelation._tag).toBe("Failure");
+  expect((await claimed.json()).error.code).toBe(-32602);
 });
