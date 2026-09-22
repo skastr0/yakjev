@@ -16,7 +16,12 @@ import {
   pathLoop,
 } from "sigma/rendering";
 import type { Graph } from "@yakjev/protocol";
-import { rememberLayout } from "./layout";
+import {
+  ASSERTED_DISTANCE,
+  BLOCKING_DISTANCE,
+  rememberLayout,
+  shifted,
+} from "./layout";
 import { blendedColors } from "./blend";
 import {
   DRAG_REACH,
@@ -28,7 +33,6 @@ import {
   visibleSettleDistance,
   type Selection,
 } from "./graph-model";
-import { ASSERTED_DISTANCE, BLOCKING_DISTANCE } from "./layout";
 import { backgroundArrivals, type Ghost } from "./jev";
 
 export type Point = { x: number; y: number };
@@ -210,6 +214,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
       positions.current = rememberLayout(
         positions.current,
         latest.current.data,
+        renderer.current?.getCamera().getState().ratio ?? 1,
       );
       syncGraph(
         graph.current,
@@ -588,15 +593,50 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
       return inside && fills;
     }
 
+    function glideNodes(moves: { id: string; from: Point; to: Point }[]) {
+      cancelAnimationFrame(settleFrame.current);
+      const started = performance.now();
+      const step = (now: number) => {
+        const sigmaNow = renderer.current;
+        if (!sigmaNow) return;
+        const t = Math.min(1, (now - started) / 300);
+        const eased = 1 - (1 - t) ** 3;
+        for (const move of moves) {
+          if (!graph.current.hasNode(move.id)) continue;
+          const x = move.from.x + (move.to.x - move.from.x) * eased;
+          const y = move.from.y + (move.to.y - move.from.y) * eased;
+          graph.current.setNodeAttribute(move.id, "x", x);
+          graph.current.setNodeAttribute(move.id, "y", y);
+          positions.current.set(move.id, { x, y });
+        }
+        sigmaNow.refresh();
+        setOverlayTick((value) => value + 1);
+        if (t < 1) settleFrame.current = requestAnimationFrame(step);
+      };
+      settleFrame.current = requestAnimationFrame(step);
+    }
+
     useEffect(() => {
       const wasEmpty = graph.current.order === 0;
-      positions.current = rememberLayout(positions.current, props.data);
+      const before = new Map(positions.current);
+      const after = rememberLayout(
+        before,
+        props.data,
+        renderer.current?.getCamera().getState().ratio ?? 1,
+      );
+      const moves = layoutMoves(before, after, props.data);
+      const display = new Map(after);
+      if (!reduceMotion.current) {
+        for (const move of moves) display.set(move.id, move.from);
+      }
+      positions.current = display;
       syncGraph(
         graph.current,
         props.data,
         positions.current,
         blendedColors(props.data, props.paint),
       );
+      if (moves.length && !reduceMotion.current) glideNodes(moves);
       const ids = props.data.nodes
         .map((node) => node.id)
         .sort()
@@ -1042,6 +1082,44 @@ const DROP_HINT_STYLE: CSSProperties = {
 
 const labelCanvas =
   typeof document === "undefined" ? null : document.createElement("canvas");
+
+function layoutMoves(
+  before: ReadonlyMap<string, Point>,
+  after: ReadonlyMap<string, Point>,
+  data: Graph,
+) {
+  if (before.size === 0) return [];
+  const moves: { id: string; from: Point; to: Point }[] = [];
+  for (const id of shifted(before, after)) {
+    const from = before.get(id);
+    const to = after.get(id);
+    if (from && to) moves.push({ id, from, to });
+  }
+  for (const [id, to] of after) {
+    if (before.has(id)) continue;
+    const anchor = neighborAnchor(id, data, before);
+    if (anchor) moves.push({ id, from: anchor, to });
+  }
+  return moves;
+}
+
+function neighborAnchor(
+  id: string,
+  data: Graph,
+  placed: ReadonlyMap<string, Point>,
+) {
+  for (const edge of data.edges) {
+    if (edge.source === id) {
+      const point = placed.get(edge.target);
+      if (point) return point;
+    }
+    if (edge.target === id) {
+      const point = placed.get(edge.source);
+      if (point) return point;
+    }
+  }
+  return null;
+}
 
 function labelWidthPx(label: string) {
   const context = labelCanvas?.getContext("2d");
