@@ -14,7 +14,7 @@
     "build": "bun run --cwd apps/web build",
     "start": "bun packages/server/src/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test packages",
+    "test": "bun test packages apps/web",
     "test:deploy": "bash deploy/tests/run.sh && bash deploy/tests/resume.sh",
     "test:acceptance": "bun test tests/acceptance",
     "format": "prettier --write .",
