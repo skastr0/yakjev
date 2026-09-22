@@ -178,4 +178,22 @@ describe("placeGraph", () => {
     expect(between(next, "c", "b")).toBeGreaterThan(40);
     expect(between(next, "c", "a")).toBeGreaterThan(40);
   });
+  test("several newcomers in one snapshot stay near existing nodes without moving them", () => {
+    const first = placeGraph(
+      snapshot([node("a"), node("b")], [edge("ab", "a", "b")]),
+    );
+    const next = rememberLayout(
+      first,
+      snapshot(
+        [node("a"), node("b"), node("c"), node("d"), node("e")],
+        [edge("ab", "a", "b"), edge("ac", "a", "c"), edge("cd", "c", "d")],
+      ),
+    );
+    expect(next.get("a")).toEqual(first.get("a"));
+    expect(next.get("b")).toEqual(first.get("b"));
+    for (const id of ["c", "d", "e"]) {
+      const near = Math.min(between(next, id, "a"), between(next, id, "b"));
+      expect(near).toBeLessThanOrEqual(220);
+    }
+  });
 });

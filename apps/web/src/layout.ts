@@ -155,17 +155,26 @@ export function placeNewcomer(
   const distance = 180;
   if (anchors.length === 0)
     return { x: Math.cos(angle) * distance, y: Math.sin(angle) * distance };
-  let x = 0;
-  let y = 0;
+  let cx = 0;
+  let cy = 0;
   for (const point of anchors) {
-    x += point.x;
-    y += point.y;
+    cx += point.x;
+    cy += point.y;
   }
-  x /= anchors.length;
-  y /= anchors.length;
+  cx /= anchors.length;
+  cy /= anchors.length;
+  let anchor = anchors[0]!;
+  let best = Math.hypot(anchor.x - cx, anchor.y - cy);
+  for (const point of anchors.slice(1)) {
+    const gap = Math.hypot(point.x - cx, point.y - cy);
+    if (gap < best) {
+      best = gap;
+      anchor = point;
+    }
+  }
   return {
-    x: x + Math.cos(angle) * distance,
-    y: y + Math.sin(angle) * distance,
+    x: anchor.x + Math.cos(angle) * distance,
+    y: anchor.y + Math.sin(angle) * distance,
   };
 }
 
@@ -175,11 +184,14 @@ export function rememberLayout(
 ): Map<string, Point> {
   if (previous.size === 0 && graph.nodes.length > 0) return placeGraph(graph);
   const next = new Map(previous);
+  // Anchors and fallback come only from the previous map, so a chain of
+  // newcomers in one snapshot can never drift away from placed nodes.
+  const existing = [...previous.values()];
   for (const node of graph.nodes) {
     if (next.has(node.id)) continue;
     const neighbors: Point[] = [];
     const consider = (other: string) => {
-      const point = next.get(other);
+      const point = previous.get(other);
       if (point) neighbors.push(point);
     };
     for (const edge of graph.edges) {
@@ -191,7 +203,7 @@ export function rememberLayout(
       if (suggestion.source === node.id) consider(suggestion.target);
       if (suggestion.target === node.id) consider(suggestion.source);
     }
-    next.set(node.id, placeNewcomer(node.id, neighbors, [...next.values()]));
+    next.set(node.id, placeNewcomer(node.id, neighbors, existing));
   }
   return next;
 }
