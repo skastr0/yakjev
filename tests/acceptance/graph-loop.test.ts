@@ -449,6 +449,69 @@ test("positions, search, and export survive a restart with the correction intact
   stream.close();
 });
 
+test("taxonomy edits version the definitions without erasing edges or corrections", async () => {
+  const { server: active, revision } = await seeded();
+  const reframed = await sendCommand(active, revision, {
+    type: "edge.reframe",
+    id: reframeEdgeId,
+    relation: optionalRelationId,
+    rationale: "Synthetic correction made under the original definition.",
+    state: "asserted",
+  });
+  const before = await readGraph(active);
+  const edited = before.taxonomy.relations.map((relation) =>
+    relation.id === optionalRelationId
+      ? {
+          ...relation,
+          definition: `${relation.definition} (edited by a synthetic acceptance run)`,
+        }
+      : relation,
+  );
+  const replaced = await sendCommand(active, reframed.receipt.revision, {
+    type: "taxonomy.replace",
+    relations: edited,
+  });
+  const after = await readGraph(active);
+  expect(after.taxonomy.version).toBeGreaterThan(before.taxonomy.version);
+  expect(replaced.receipt.revision).toBe(after.revision);
+  expect(
+    after.taxonomy.relations.find(
+      (relation) => relation.id === optionalRelationId,
+    )?.definition,
+  ).toContain("edited by a synthetic acceptance run");
+  const edge = edgeById(after, reframeEdgeId);
+  expect(edge?.relation).toBe(optionalRelationId);
+  expect(edge?.assertion.relation).toBe("requires");
+  expect(edge?.correction?.rationale).toContain("original definition");
+
+  // Removing a relation that an edge still uses must not silently drop or
+  // rewrite the edge: the command fails, or the graph stays internally valid.
+  const withoutRequires = after.taxonomy.relations.filter(
+    (relation) => relation.id !== "requires",
+  );
+  const removal = await sendCommandExpectingFailure(active, after.revision, {
+    type: "taxonomy.replace",
+    relations: withoutRequires,
+  });
+  const final = await readGraph(active);
+  if (removal.status >= 400) {
+    expect(final.taxonomy.relations.map((relation) => relation.id)).toContain(
+      "requires",
+    );
+  } else {
+    const relationIds = new Set(
+      final.taxonomy.relations.map((relation) => relation.id),
+    );
+    for (const candidate of final.edges) {
+      expect(relationIds.has(candidate.relation)).toBe(true);
+    }
+  }
+  expect(edgeById(final, reframeEdgeId)?.assertion.relation).toBe("requires");
+  expect((await history(active)).map((entry) => entry.type)).toContain(
+    "taxonomy.replace",
+  );
+});
+
 test("graph reads and writes fail closed without a credential", async () => {
   const { server: active } = await seeded();
   const read = await active.fetchAnonymous("/api/graph");
