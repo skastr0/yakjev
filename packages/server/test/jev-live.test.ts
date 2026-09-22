@@ -705,7 +705,14 @@ test("a coarse-rated paraphrase survives the no-evidence filter once semantic sc
     systemOne: (request: any) =>
       Effect.succeed(
         judge({
-          "Chart deployment prerequisites": { related: 2, match: true },
+          // Live ratings: the paraphrase is best in its batch, yet under the
+          // absolute bar (0.74 of 2); the traps trail it (0.53).
+          "Chart deployment prerequisites": { related: 0.74, match: true },
+          ...Object.fromEntries(
+            nodes
+              .filter((n) => n.id !== "release")
+              .map((n) => [n.title, { related: 0.53 }]),
+          ),
         })(request as Request),
       ),
     listModels: () => Effect.succeed({ models: [] }),

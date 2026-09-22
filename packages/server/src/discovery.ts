@@ -66,8 +66,13 @@ const COARSE_MIN = 48;
 const COARSE_BATCH_TOKENS = 20_000;
 const COARSE_TIMEOUT_MS = 8_000;
 const COARSE_DESCRIPTION = 280;
-// A coarse rating at or above this (0.5 = "same broad area") is evidence.
+// Evidence from the coarse pass: a rating at or above 0.5 ("same broad
+// area"), or a place in its top COARSE_TOP above COARSE_FLOOR. Jev's ratings
+// are relative within a batch: a live paraphrase that beat every trap still
+// scored only 0.37, so an absolute bar alone dropped it.
 const COARSE_EVIDENCE = 0.5;
+const COARSE_TOP = 24;
+const COARSE_FLOOR = 0.15;
 // Asks about subject, not wording: with plain relevance Jev rated "Map
 // dependencies for the garden service schedule" above "Chart deployment
 // prerequisites" for "Map dependencies for the service rollout" (1.90 vs
@@ -832,8 +837,10 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
       return {
         ranked: [
           ...explicit,
-          ...scored.map(({ candidate, score }) =>
-            candidate.via === "coverage" && score >= COARSE_EVIDENCE
+          ...scored.map(({ candidate, score }, index) =>
+            candidate.via === "coverage" &&
+            (score >= COARSE_EVIDENCE ||
+              (index < COARSE_TOP && score > COARSE_FLOOR))
               ? { ...candidate, via: "semantic" as const }
               : candidate,
           ),
