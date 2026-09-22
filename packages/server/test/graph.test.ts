@@ -665,6 +665,50 @@ test("node.remove cascade keeps suppression for disputed edges and protects re-r
   expect((await run(store.read)).edges.map((item) => item.id)).toEqual(["ab2"]);
 });
 
+test("node.remove cascade bounds tombstone ids inside the Id limit", async () => {
+  const { store, run, send } = await fixture();
+  const longId = (stem: string) => stem + "-".repeat(120 - stem.length);
+  const ab = longId("ab");
+  const bc = longId("bc");
+  await send({
+    ...capture,
+    edges: [edge(ab, "a", "b"), edge(bc, "b", "c")],
+  });
+  await send({
+    type: "edge.reframe",
+    id: ab,
+    relation: "requires",
+    rationale: "disputed",
+    state: "disputed",
+  });
+  await send({
+    type: "edge.reframe",
+    id: bc,
+    relation: "requires",
+    rationale: "disputed",
+    state: "disputed",
+  });
+  await send({ type: "node.remove", ids: ["b"], removeEdges: true });
+  // Before the bound, this read threw SchemaError and wedged the store.
+  const graph = await run(store.read);
+  const tombstones = graph.suggestions.filter((item) =>
+    item.id.startsWith("suppressed-"),
+  );
+  expect(tombstones).toHaveLength(2);
+  for (const item of tombstones) {
+    expect(item.id.length).toBeLessThanOrEqual(128);
+    expect(item.status).toBe("rejected");
+  }
+  expect(new Set(tombstones.map((item) => item.id)).size).toBe(2);
+  await send({ type: "node.put", node: node("b") });
+  await expect(
+    send({
+      type: "suggestion.record",
+      suggestion: suggestion("again-ab", "a", "b", 5),
+    }),
+  ).rejects.toMatchObject({ code: "Conflict" });
+});
+
 test("capture.remove drops only the record and layout.set clears positions", async () => {
   const { store, run, send } = await fixture();
   await send(capture);

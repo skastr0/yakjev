@@ -9,6 +9,7 @@ import {
   type SuggestionInput,
 } from "@yakjev/protocol";
 import { Data, Effect, Schema } from "effect";
+import { createHash } from "node:crypto";
 
 export class DomainError extends Data.TaggedError("DomainError")<{
   readonly code: "Invalid" | "NotFound" | "Conflict";
@@ -129,7 +130,7 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
   const suppressPair = (
     removed: Edge,
     via: "edge.remove" | "node.remove",
-    idSuffix: string,
+    key: string,
     rationale: string | undefined,
   ) => {
     const pair = (item: { source: string; target: string }) =>
@@ -141,8 +142,14 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
         (suggestion) => pair(suggestion) && suggestion.status === "rejected",
       );
     if (alreadySuppressed) return;
+    let id = `suppressed-r${provenance.revision}${key === "" ? "" : `-${key}`}`;
+    // Persisted suggestions decode through the 128-char Id schema on every
+    // read: hash long edge ids rather than wedge the store. A bare slice
+    // could collide between same-prefix edges in one revision.
+    if (id.length > 128)
+      id = `suppressed-r${provenance.revision}-${createHash("sha256").update(key).digest("hex").slice(0, 12)}`;
     suggestions.push({
-      id: `suppressed-r${provenance.revision}${idSuffix}`,
+      id,
       source: removed.source,
       target: removed.target,
       relation: removed.relation,
@@ -265,7 +272,7 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
       // edge.remove's default; plain cascaded assertions leave no trace.
       for (const edge of incident)
         if (edge.correction !== null || edge.state === "disputed")
-          suppressPair(edge, "node.remove", `-${edge.id}`, command.rationale);
+          suppressPair(edge, "node.remove", edge.id, command.rationale);
       break;
     }
     case "edge.put":
