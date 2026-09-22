@@ -8,6 +8,7 @@ import {
 } from "@yakjev/protocol";
 import {
   initialPosition,
+  layoutBounds,
   safeSourceHref,
   searchNodes,
   syncGraph,
@@ -59,6 +60,24 @@ const snapshot = (
 });
 
 describe("render projection", () => {
+  test("fit uses actual layout coordinates, not the empty fallback extent", () => {
+    expect(
+      layoutBounds([
+        { x: -2, y: 3 },
+        { x: 9, y: 17 },
+        { x: 1, y: -4 },
+      ]),
+    ).toEqual({ x: [-2, 9], y: [-4, 17] });
+    expect(
+      layoutBounds([
+        { x: 1002, y: -900 },
+        { x: 1008, y: -800 },
+      ]),
+    ).toEqual({ x: [1002, 1008], y: [-900, -800] });
+    expect(layoutBounds([])).toEqual({ x: [-400, 400], y: [-400, 400] });
+    const single = layoutBounds([{ x: 1000, y: -500 }]);
+    expect(single).toEqual({ x: [800, 1200], y: [-700, -300] });
+  });
   test("an unrelated live addition never moves saved or unsaved existing nodes", () => {
     const graph = new MultiDirectedGraph();
     const a = node("a", { position: { x: -31, y: 97, pinned: true } });

@@ -10,7 +10,12 @@ import {
 } from "sigma/rendering";
 import FA2Layout from "graphology-layout-forceatlas2/worker";
 import type { Graph } from "@yakjev/protocol";
-import { syncGraph, type LayoutPosition, type Selection } from "./graph-model";
+import {
+  layoutBounds,
+  syncGraph,
+  type LayoutPosition,
+  type Selection,
+} from "./graph-model";
 
 type Props = {
   data: Graph;
@@ -37,21 +42,13 @@ export function GraphCanvas(props: Props) {
   const [arranging, setArranging] = useState(false);
 
   function fitGraph(sigma: Sigma) {
-    const positions = graph.current
-      .nodes()
-      .map((id) => graph.current.getNodeAttributes(id));
+    const positions = graph.current.nodes().map((id) => ({
+      x: graph.current.getNodeAttribute(id, "x") as number,
+      y: graph.current.getNodeAttribute(id, "y") as number,
+    }));
     // A nonempty, fixed coordinate frame also works before the first capture.
     // Sigma v4 otherwise freezes the empty extent with autoRescale: "once".
-    sigma.setCustomBBox({
-      x: [
-        Math.min(-400, ...positions.map((position) => position.x)),
-        Math.max(400, ...positions.map((position) => position.x)),
-      ],
-      y: [
-        Math.min(-400, ...positions.map((position) => position.y)),
-        Math.max(400, ...positions.map((position) => position.y)),
-      ],
-    });
+    sigma.setCustomBBox(layoutBounds(positions));
     void sigma.getCamera().reset();
   }
 
@@ -78,7 +75,17 @@ export function GraphCanvas(props: Props) {
               labelBackgroundColor: "#f5f2e9",
               labelBackgroundPadding: 4,
               cursor: "grab",
-              labelVisibility: "visible",
+            },
+            {
+              whenState: "isHighlighted",
+              then: {
+                labelVisibility: "visible",
+                backdropVisibility: "visible",
+                backdropColor: "#e7eedf",
+                backdropBorderColor: "#668477",
+                backdropBorderWidth: 1,
+                backdropShadowBlur: 0,
+              },
             },
           ],
           edges: [
@@ -86,10 +93,12 @@ export function GraphCanvas(props: Props) {
             {
               path: "straight",
               parallelPath: "curved",
+              parallelSpread: 1.4,
               selfLoopPath: "loop",
               head: "arrow",
               labelColor: "#526459",
               labelSize: 10,
+              labelPosition: "over",
               labelBackgroundColor: "#f5f2e9",
               labelBackgroundPadding: 3,
               cursor: "pointer",
@@ -251,6 +260,7 @@ export function GraphCanvas(props: Props) {
           pinned: false,
         }));
       if (positions.length) void latest.current.save(positions, revision);
+      if (renderer.current) fitGraph(renderer.current);
     }, 900);
   }
 

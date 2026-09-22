@@ -22,6 +22,32 @@ export function initialPosition(id: string) {
   return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
 }
 
+export function layoutBounds(positions: readonly { x: number; y: number }[]): {
+  x: [number, number];
+  y: [number, number];
+} {
+  if (positions.length === 0) return { x: [-400, 400], y: [-400, 400] };
+  if (positions.length === 1) {
+    const point = positions[0]!;
+    return {
+      x: [point.x - 200, point.x + 200],
+      y: [point.y - 200, point.y + 200],
+    };
+  }
+  const xs = positions.map((point) => point.x);
+  const ys = positions.map((point) => point.y);
+  const minX = Math.min(...xs),
+    maxX = Math.max(...xs);
+  const minY = Math.min(...ys),
+    maxY = Math.max(...ys);
+  // Fit in the layout's own units. ForceAtlas2 coordinates can be much smaller
+  // than the initial fallback, or far from zero when a user pins a node.
+  return {
+    x: minX === maxX ? [minX - 0.5, maxX + 0.5] : [minX, maxX],
+    y: minY === maxY ? [minY - 0.5, maxY + 0.5] : [minY, maxY],
+  };
+}
+
 export function safeSourceHref(uri: string): string | undefined {
   try {
     const parsed = new URL(uri);
