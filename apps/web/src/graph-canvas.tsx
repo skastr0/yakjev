@@ -48,7 +48,27 @@ export function GraphCanvas(props: Props) {
     }));
     // A nonempty, fixed coordinate frame also works before the first capture.
     // Sigma v4 otherwise freezes the empty extent with autoRescale: "once".
-    sigma.setCustomBBox(layoutBounds(positions));
+    const bounds = layoutBounds(positions);
+    const width = container.current?.clientWidth ?? 0;
+    if (width >= 500 && positions.length) {
+      // Reserve a right-hand label gutter in graph units. A wide initial graph
+      // otherwise puts its longest node label over an edge or beyond the canvas.
+      const gutter = Math.min(
+        240,
+        Math.max(
+          ...latest.current.data.nodes.map(
+            (node) => node.title.length * 8 + 20,
+          ),
+        ),
+      );
+      const unitsPerPixel = Math.max(
+        (bounds.x[1] - bounds.x[0]) / (width - 80 - gutter),
+        (bounds.y[1] - bounds.y[0]) /
+          Math.max(1, (container.current?.clientHeight ?? 0) - 80),
+      );
+      bounds.x[1] += gutter * unitsPerPixel;
+    }
+    sigma.setCustomBBox(bounds);
     void sigma.getCamera().reset();
   }
 
@@ -295,7 +315,8 @@ export function GraphCanvas(props: Props) {
     layout.current = new FA2Layout(graph.current, {
       settings: {
         barnesHutOptimize: true,
-        gravity: 0.2,
+        strongGravityMode: true,
+        gravity: 1,
         scalingRatio: 80,
         slowDown: 8,
       },
