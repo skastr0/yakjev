@@ -1,0 +1,15 @@
+{
+  "name": "@yakjev/mcp",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@yakjev/protocol": "workspace:*",
+    "@yakjev/server": "workspace:*",
+    "@effect/platform-bun": "4.0.0-rc.117",
+    "effect": "4.0.0-rc.117"
+  }
+}

@@ -3,6 +3,12 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "exports": {
+    "./auth": "./src/auth.ts",
+    "./domain": "./src/domain.ts",
+    "./store": "./src/store.ts",
+    "./discovery": "./src/discovery.ts"
+  },
   "scripts": {
     "dev": "bun --watch src/main.ts"
   },
