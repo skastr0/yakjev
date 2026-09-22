@@ -24,7 +24,7 @@ import {
   layoutBounds,
   settlePoint,
   syncGraph,
-  uprightLabelAngle,
+  placeEdgeLabel,
   visibleSettleDistance,
   type Selection,
 } from "./graph-model";
@@ -803,46 +803,39 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
               </g>
             );
           })}
-          {edgeCaptions().map((caption) => {
-            const plate = Math.max(28, caption.text.length * 6.2 + 12);
-            return (
-              <g
-                key={caption.id}
-                transform={`translate(${caption.x} ${caption.y}) rotate(${caption.angle}) translate(0 -11)`}
-                opacity={caption.opacity}
-                pointerEvents="auto"
-                style={{ cursor: "pointer" }}
-                onClick={() =>
-                  props.onSelect(
-                    caption.id.startsWith("suggestion:")
-                      ? {
-                          kind: "suggestion",
-                          id: caption.id.slice("suggestion:".length),
-                        }
-                      : { kind: "edge", id: caption.id },
-                  )
-                }
+          {edgeCaptions().map((caption) => (
+            <g
+              key={caption.id}
+              transform={`translate(${caption.x} ${caption.y}) rotate(${caption.angle})`}
+              opacity={caption.opacity}
+              pointerEvents="auto"
+              style={{ cursor: "pointer" }}
+              onClick={() =>
+                props.onSelect(
+                  caption.id.startsWith("suggestion:")
+                    ? {
+                        kind: "suggestion",
+                        id: caption.id.slice("suggestion:".length),
+                      }
+                    : { kind: "edge", id: caption.id },
+                )
+              }
+            >
+              <text
+                textAnchor="middle"
+                dominantBaseline="central"
+                fill="#526459"
+                stroke="#f5f2e9"
+                strokeWidth={3}
+                strokeLinejoin="round"
+                paintOrder="stroke"
+                fontSize={11}
+                fontFamily="Avenir Next, Avenir, system-ui, sans-serif"
               >
-                <rect
-                  x={-plate / 2}
-                  y={-8}
-                  width={plate}
-                  height={16}
-                  rx={3}
-                  fill="#f5f2e9"
-                />
-                <text
-                  textAnchor="middle"
-                  dominantBaseline="central"
-                  fill="#526459"
-                  fontSize={11}
-                  fontFamily="Avenir Next, Avenir, system-ui, sans-serif"
-                >
-                  {caption.text}
-                </text>
-              </g>
-            );
-          })}
+                {caption.text}
+              </text>
+            </g>
+          ))}
           <line ref={band} visibility="hidden" />
         </svg>
         {announcement && (
@@ -896,6 +889,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         angle: number;
         opacity: number;
       }[] = [];
+      const obstacles = nodeObstacles();
       graph.current.forEachEdge((id, _attributes, source, target) => {
         if (
           props.hidden &&
@@ -907,19 +901,72 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         if (!from || !to) return;
         const text = String(graph.current.getEdgeAttribute(id, "label") ?? "");
         if (!text) return;
+        const placed = placeEdgeLabel(
+          from,
+          to,
+          labelWidthPx(text) + 4,
+          14,
+          obstacles.discs,
+          obstacles.boxes,
+        );
+        if (!placed) return;
         const dimmed =
           props.matches !== null &&
           (!props.matches.has(source) || !props.matches.has(target));
         captions.push({
           id,
           text,
-          x: (from.x + to.x) / 2,
-          y: (from.y + to.y) / 2,
-          angle: uprightLabelAngle(to.x - from.x, to.y - from.y),
+          x: placed.x,
+          y: placed.y,
+          angle: placed.angle,
           opacity: dimmed ? 0.35 : 1,
         });
       });
       return captions;
+    }
+
+    function nodeObstacles() {
+      const discs: { x: number; y: number; r: number }[] = [];
+      const boxes: { x0: number; y0: number; x1: number; y1: number }[] = [];
+      const canvas = container.current?.getBoundingClientRect();
+      const shellBox = shell.current?.getBoundingClientRect();
+      const originX = canvas && shellBox ? canvas.left - shellBox.left : 0;
+      const width = container.current?.clientWidth ?? 0;
+      graph.current.forEachNode((id) => {
+        if (props.hidden && !props.hidden.has(id)) return;
+        const point = overlayPoint(id);
+        if (!point) return;
+        discs.push({ x: point.x, y: point.y, r: 16 });
+        const title = String(graph.current.getNodeAttribute(id, "label") ?? "");
+        if (!title) return;
+        const labelWidth = labelWidthPx(title);
+        if (width < 500) {
+          boxes.push({
+            x0: point.x - labelWidth / 2,
+            x1: point.x + labelWidth / 2,
+            y0: point.y - 32,
+            y1: point.y - 12,
+          });
+          return;
+        }
+        const localX = point.x - originX;
+        if (labelSitsRight(localX, title, width)) {
+          boxes.push({
+            x0: point.x + 14,
+            x1: point.x + 14 + labelWidth,
+            y0: point.y - 9,
+            y1: point.y + 9,
+          });
+        } else {
+          boxes.push({
+            x0: point.x - 14 - labelWidth,
+            x1: point.x - 14,
+            y0: point.y - 9,
+            y1: point.y + 9,
+          });
+        }
+      });
+      return { discs, boxes };
     }
 
     function nodePaint(id: string) {

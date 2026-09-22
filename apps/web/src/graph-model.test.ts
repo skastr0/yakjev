@@ -18,6 +18,7 @@ import {
   settlePoint,
   unjudgedIds,
   uprightLabelAngle,
+  placeEdgeLabel,
   visibleGraph,
   visibleSettleDistance,
 } from "./graph-model";
@@ -330,6 +331,53 @@ describe("render projection", () => {
     expect(uprightLabelAngle(0, 10)).toBe(90);
     expect(uprightLabelAngle(-10, 10)).toBeCloseTo(-45);
     expect(uprightLabelAngle(-10, -10)).toBeCloseTo(45);
+  });
+
+  test("an edge label moves off a node and is dropped when it cannot", () => {
+    const discs = [
+      { x: 0, y: 0, r: 16 },
+      { x: 200, y: 0, r: 16 },
+    ];
+    const clear = placeEdgeLabel(
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+      70,
+      14,
+      discs,
+      [],
+    );
+    expect(clear).not.toBeNull();
+    expect(clear!.y).not.toBe(0);
+    const crowded = placeEdgeLabel(
+      { x: 0, y: 0 },
+      { x: 40, y: 0 },
+      80,
+      14,
+      discs,
+      [],
+    );
+    expect(crowded).not.toBeNull();
+    expect(Math.abs(crowded!.y)).toBeGreaterThan(16);
+    expect(
+      placeEdgeLabel(
+        { x: 0, y: 0 },
+        { x: 200, y: 0 },
+        40,
+        14,
+        [],
+        [{ x0: -400, y0: -400, x1: 400, y1: 400 }],
+      ),
+    ).toBeNull();
+    const titled = placeEdgeLabel(
+      { x: 0, y: 0 },
+      { x: 220, y: 0 },
+      60,
+      14,
+      discs,
+      [{ x0: 90, y0: -20, x1: 160, y1: 20 }],
+    );
+    expect(titled).not.toBeNull();
+    expect(titled!.y).not.toBe(0);
   });
 
   test("canonical source rendering never turns an executable URI into a link", () => {

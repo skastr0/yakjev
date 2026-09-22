@@ -193,6 +193,120 @@ export function uprightLabelAngle(dx: number, dy: number) {
   return degrees;
 }
 
+export type ScreenDisc = { x: number; y: number; r: number };
+export type ScreenBox = { x0: number; y0: number; x1: number; y1: number };
+
+// A spot for an edge label that does not cover a node disc or a node title.
+// Tries a few shifts along and beside the edge, then gives up.
+export function placeEdgeLabel(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  width: number,
+  height: number,
+  discs: readonly ScreenDisc[],
+  boxes: readonly ScreenBox[],
+): { x: number; y: number; angle: number } | null {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy);
+  if (length < 1 || width <= 0) return null;
+  const angle = uprightLabelAngle(dx, dy);
+  const ux = dx / length;
+  const uy = dy / length;
+  const px = -uy;
+  const py = ux;
+  const midpoint = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+  for (const along of [0, 0.16, -0.16, 0.28, -0.28]) {
+    for (const side of [14, -14, 26, -26, 38, -38]) {
+      const x = midpoint.x + ux * length * along + px * side;
+      const y = midpoint.y + uy * length * along + py * side;
+      if (!labelHits(x, y, width, height, angle, discs, boxes))
+        return { x, y, angle };
+    }
+  }
+  return null;
+}
+
+function labelHits(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  degrees: number,
+  discs: readonly ScreenDisc[],
+  boxes: readonly ScreenBox[],
+) {
+  const hw = width / 2;
+  const hh = height / 2;
+  for (const disc of discs) {
+    const local = unrotate(disc.x - x, disc.y - y, degrees);
+    const qx = Math.max(-hw, Math.min(hw, local.x));
+    const qy = Math.max(-hh, Math.min(hh, local.y));
+    if (Math.hypot(local.x - qx, local.y - qy) < disc.r) return true;
+  }
+  const corners = [
+    [-hw, -hh],
+    [hw, -hh],
+    [hw, hh],
+    [-hw, hh],
+  ].map(([cx, cy]) => {
+    const world = rotate(cx!, cy!, degrees);
+    return { x: x + world.x, y: y + world.y };
+  });
+  for (const box of boxes) if (rotatedHitsBox(corners, box)) return true;
+  return false;
+}
+
+function rotate(x: number, y: number, degrees: number) {
+  const rad = (degrees * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return { x: x * cos - y * sin, y: x * sin + y * cos };
+}
+
+function unrotate(x: number, y: number, degrees: number) {
+  return rotate(x, y, -degrees);
+}
+
+function rotatedHitsBox(
+  corners: readonly { x: number; y: number }[],
+  box: ScreenBox,
+) {
+  const boxCorners = [
+    { x: box.x0, y: box.y0 },
+    { x: box.x1, y: box.y0 },
+    { x: box.x1, y: box.y1 },
+    { x: box.x0, y: box.y1 },
+  ];
+  const edge = corners[1]!;
+  const start = corners[0]!;
+  const dx = edge.x - start.x;
+  const dy = edge.y - start.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const axes = [
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    { x: dx / length, y: dy / length },
+    { x: -dy / length, y: dx / length },
+  ];
+  for (const axis of axes) {
+    const projected = (points: readonly { x: number; y: number }[]) => {
+      let min = Infinity;
+      let max = -Infinity;
+      for (const point of points) {
+        const value = point.x * axis.x + point.y * axis.y;
+        min = Math.min(min, value);
+        max = Math.max(max, value);
+      }
+      return { min, max };
+    };
+    const left = projected(corners);
+    const right = projected(boxCorners);
+    if (left.max < right.min || right.max < left.min) return false;
+  }
+  return true;
+}
+
 // Where a dropped node should rest so the new edge is as long as `distance`.
 // Null when it is already there. Direction is back toward where the drag started.
 export function settlePoint(
