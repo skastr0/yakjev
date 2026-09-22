@@ -4,8 +4,10 @@ import {
   Graph,
   HistoryEntry,
   Neighborhood,
+  Preview,
   Receipt,
   type Command,
+  type PreviewRequest,
 } from "@yakjev/protocol";
 
 export class ApiFailure extends Error {
@@ -70,6 +72,19 @@ export async function sendCommand(command: Command, expectedRevision: number) {
         expectedRevision,
         command,
       }),
+    }),
+  );
+}
+
+// Ephemeral Jev judgments against the live graph. Nothing is saved. Abort
+// stale calls with the signal; an unavailable provider returns no judgments.
+export async function previewJev(input: PreviewRequest, signal?: AbortSignal) {
+  return Schema.decodeUnknownSync(Preview)(
+    await request("/api/jev/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      ...(signal ? { signal } : {}),
     }),
   );
 }

@@ -57,6 +57,18 @@ export const Taxonomy = Schema.Struct({
   ),
 });
 export type Taxonomy = typeof Taxonomy.Type;
+const Probability = Schema.Finite.check(
+  Schema.isBetween({ minimum: 0, maximum: 1 }),
+);
+// Present when Jev made the connection. Owner corrections to such edges are
+// fed back into later judgments.
+export const JevOrigin = Schema.Struct({
+  model: Title,
+  promptVersion: Title,
+  confidence: Schema.NullOr(Probability),
+  same: Schema.optionalKey(Schema.Boolean),
+});
+export type JevOrigin = typeof JevOrigin.Type;
 export const EdgeInput = Schema.Struct({
   id: Id,
   // Directed claim: source requires target, never the other way around.
@@ -64,6 +76,7 @@ export const EdgeInput = Schema.Struct({
   target: Id,
   relation: Id,
   rationale: ShortText,
+  origin: Schema.optionalKey(JevOrigin),
 });
 export const Assertion = Schema.Struct({
   relation: Id,
@@ -99,9 +112,7 @@ export const SuggestionInput = Schema.Struct({
   target: Id,
   relation: Id,
   rationale: ShortText,
-  confidence: Schema.NullOr(
-    Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
-  ),
+  confidence: Schema.NullOr(Probability),
   evidence: Schema.Array(ShortText).check(Schema.isMaxLength(40)),
   model: Title,
   promptVersion: Title,
@@ -149,6 +160,9 @@ export const Command = Schema.Union([
     capture: CaptureInput,
     nodes: Schema.Array(NodeInput).check(Schema.isMaxLength(100)),
     edges: Schema.Array(EdgeInput).check(Schema.isMaxLength(200)),
+    // Default true: after commit, Jev connects each new node. Send false when
+    // the edges already carry Jev's connections (e.g. from a typing preview).
+    autoConnect: Schema.optionalKey(Schema.Boolean),
   }),
   // The capture record leaves the graph; nodes and edges it created stay.
   // History still holds the original command, so removal loses no provenance.
@@ -207,6 +221,8 @@ export const Command = Schema.Union([
     type: Schema.Literal("evaluation.record"),
     evaluation: EvaluationInput,
     suggestions: Schema.Array(SuggestionInput).check(Schema.isMaxLength(24)),
+    // true: each suggestion becomes an accepted Jev edge in the same revision.
+    connect: Schema.optionalKey(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("suggestion.decide"),
@@ -244,8 +260,52 @@ export const EvaluationRequest = Schema.Struct({
   includeNodeIds: Schema.optionalKey(
     Schema.Array(Id).check(Schema.isMaxLength(24)),
   ),
+  connect: Schema.optionalKey(Schema.Boolean),
 });
 export type EvaluationRequest = typeof EvaluationRequest.Type;
+// Ephemeral Jev read: nothing is journaled. Give a draft (text being typed)
+// or an existing focus node; includeNodeIds forces candidates in.
+export const PreviewRequest = Schema.Struct({
+  draft: Schema.optionalKey(
+    Schema.Struct({
+      title: Schema.String.check(Schema.isMaxLength(240)),
+      description: Schema.optionalKey(ShortText),
+    }),
+  ),
+  focusNodeId: Schema.optionalKey(Id),
+  includeNodeIds: Schema.optionalKey(
+    Schema.Array(Id).check(Schema.isMaxLength(24)),
+  ),
+});
+export type PreviewRequest = typeof PreviewRequest.Type;
+export const PreviewJudgment = Schema.Struct({
+  nodeId: Id,
+  // 0, 0.5, or 1 in expectation; probability-weighted.
+  relatedness: Schema.Finite,
+  match: Schema.Boolean,
+  // The candidate restates the same intention.
+  same: Schema.Boolean,
+  relation: Schema.NullOr(Id),
+  direction: Schema.NullOr(
+    Schema.Literals(["focus_to_candidate", "candidate_to_focus"]),
+  ),
+  confidence: Schema.NullOr(Schema.Finite),
+  // The owner removed or corrected this pair before; never connect it.
+  suppressed: Schema.Boolean,
+  // Server policy: Jev would connect this pair now. relation is non-null.
+  connect: Schema.Boolean,
+});
+export type PreviewJudgment = typeof PreviewJudgment.Type;
+export const Preview = Schema.Struct({
+  basedOnRevision: Revision,
+  taxonomyVersion: Revision,
+  status: Schema.Literals(["succeeded", "failed", "unavailable"]),
+  model: Schema.NullOr(Schema.String),
+  promptVersion: Schema.String,
+  elapsedMs: Schema.Finite,
+  judgments: Schema.Array(PreviewJudgment),
+});
+export type Preview = typeof Preview.Type;
 export const EvaluationResult = Schema.Struct({
   ...CommandResult.fields,
   evaluationId: Id,
