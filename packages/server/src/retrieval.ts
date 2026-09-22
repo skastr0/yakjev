@@ -45,14 +45,17 @@ const words = (value: string) =>
 const nodeText = (node: Node) => `${node.title} ${node.description}`;
 const compareId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
-// Bands sit further apart than Jaccard (0..1) plus a cosine (0..1), so a sort
-// by score alone keeps discover()'s order: explicit, then neighbors, then the
-// fused lexical + semantic score, then id.
+// Explicit and neighbor bands stay wider than a cosine (0..1). Lexical Jaccard
+// orders nodes only while embeddings are absent. Once every vector is cached,
+// cosine is the rank signal and Jaccard is a tie-break too small to overturn it.
 const scoreOf = (
   lexicalScore: number,
   isExplicit: boolean,
   isNeighbour: boolean,
 ) => (isExplicit ? 16 : 0) + (isNeighbour ? 4 : 0) + lexicalScore;
+// A full Jaccard is 1. Weighting it by this keeps it under the live gap that
+// mattered: paraphrase cosine 0.677 versus trap cosine 0.671.
+const LEXICAL_TIE = 1e-3;
 
 /** Explicit, then graph neighbours, then word-overlap (Jaccard), then id. */
 export function lexicalRank(input: RankInput): RankedCandidate[] {
@@ -213,11 +216,16 @@ function hybridRanker(client: EmbeddingClient, budgetMs: number) {
         candidate.via === "coverage" && semanticScore >= SEMANTIC_FLOOR
           ? "semantic"
           : candidate.via;
+      const rawBand = candidate.score - candidate.lexicalScore;
+      const band = rawBand > 19 ? 20 : rawBand > 15 ? 16 : rawBand > 3 ? 4 : 0;
       return {
         ...candidate,
         via,
         semanticScore,
-        score: candidate.score + Math.max(0, semanticScore),
+        score:
+          band +
+          Math.max(0, semanticScore) +
+          candidate.lexicalScore * LEXICAL_TIE,
       };
     });
     fused.sort((a, b) => b.score - a.score || compareId(a.nodeId, b.nodeId));

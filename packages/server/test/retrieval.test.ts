@@ -216,6 +216,83 @@ describe("hybrid retrieval", () => {
     ).toBe(0);
   });
 
+  test("a slightly higher cosine outranks a high-overlap word trap", async () => {
+    const along = (value: number): readonly number[] => [
+      value,
+      Math.sqrt(1 - value * value),
+    ];
+    const bodies = new Map<string, readonly number[]>([
+      ["Arrange a routine teeth checkup ", [1, 0]],
+      ["Schedule an oral health examination ", along(0.67718)],
+      ["Arrange a routine code checkup ", along(0.67092)],
+    ]);
+    const client: EmbeddingClient = {
+      embed: async (texts) =>
+        texts.map(
+          (text) =>
+            bodies.get(text.replace(/^search_(?:query|document): /, "")) ?? [
+              0, 1,
+            ],
+        ),
+    };
+    const ranked = await Effect.runPromise(
+      hybridRetrieval(client).rank({
+        graph: graph([
+          focus,
+          node("paraphrase", "Schedule an oral health examination", ""),
+          node("trap", "Arrange a routine code checkup", ""),
+        ]),
+        focus: { id: "focus", text: textOf(focus) },
+        explicit: new Set(),
+        only: false,
+      }),
+    );
+    expect(ranked.map((candidate) => candidate.nodeId)).toEqual([
+      "paraphrase",
+      "trap",
+    ]);
+    expect(ranked[0]?.semanticScore).toBeCloseTo(0.67718, 4);
+    expect(ranked[1]?.semanticScore).toBeCloseTo(0.67092, 4);
+    expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score);
+  });
+
+  test("explicit and neighbor bands stay above semantic", async () => {
+    const client: EmbeddingClient = {
+      embed: async (texts) =>
+        texts.map((text) =>
+          text.includes("Schedule an oral") || text.startsWith("search_query:")
+            ? ([1, 0] as const)
+            : ([0, 1] as const),
+        ),
+    };
+    const named = node("named", "Completely different words", "");
+    const near = node("near", "Keep the culture alive", "");
+    const ranked = await Effect.runPromise(
+      hybridRetrieval(client).rank({
+        graph: graph(
+          [
+            focus,
+            named,
+            near,
+            node("paraphrase", "Schedule an oral health examination", ""),
+          ],
+          [edge("focus", "near")],
+        ),
+        focus: { id: "focus", text: textOf(focus) },
+        explicit: new Set(["named"]),
+        only: false,
+      }),
+    );
+    expect(ranked.map((candidate) => candidate.nodeId)).toEqual([
+      "named",
+      "near",
+      "paraphrase",
+    ]);
+    expect(ranked[0]?.via).toBe("explicit");
+    expect(ranked[1]?.via).toBe("graph");
+    expect(ranked[2]?.via).toBe("semantic");
+  });
+
   test("embeds only new or changed node text", async () => {
     const calls: string[][] = [];
     const retrieval = hybridRetrieval(scripted(calls));
