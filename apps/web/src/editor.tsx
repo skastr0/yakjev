@@ -67,8 +67,6 @@ export function GraphEditor({
   onFocus: (id: string) => void;
   // Links Jev will make for the intention being typed; [] when none.
   onGhosts?: (ghosts: Ghost[]) => void;
-  // Removed; kept optional until main.tsx stops passing it.
-  onAskJev?: (id: string) => void;
   focused: boolean;
   paint: Readonly<Record<string, string>>;
   onPaint: (id: string, color: string) => void;
