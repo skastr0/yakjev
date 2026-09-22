@@ -32,6 +32,10 @@ export const PROMPT_VERSION = "yakjev-discovery-3";
 // Tuned with `bun run jev:eval` (golden graph: P 0.76, R 1.00 on 2026-09-22).
 export const CONNECT_RELATEDNESS = 0.66;
 export const STRONG_RELATEDNESS = 0.9;
+// When nothing else qualifies, the single strongest match at or above this
+// still connects, so a clearly related intention is never left alone.
+// Tuned with `bun run jev:eval` (26 probes: P 0.77 -> 0.79, R 0.87 -> 0.96).
+export const TOP_RELATEDNESS = 0.6;
 export const MAX_CONNECTIONS = 4;
 const MAX_CORRECTIONS = 24;
 const DRAFT_ID = "draft";
@@ -640,6 +644,7 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
       readonly relatedness: number;
       readonly same: boolean;
     }> = [];
+    let best: (typeof eligible)[number] | undefined;
     const fallbackRelation = graph.taxonomy.relations.some(
       (relation) => relation.id === "related_to",
     )
@@ -707,6 +712,24 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
           relatedness: score,
           same: isSame,
         });
+      else if (
+        focus &&
+        !suppressed &&
+        !linked &&
+        match.choice === "match" &&
+        score >= TOP_RELATEDNESS &&
+        (selected || fallbackRelation) &&
+        (!best || score > best.relatedness)
+      )
+        best = {
+          index,
+          candidate,
+          relation: selected?.relation ?? fallbackRelation!,
+          direction: selected?.direction ?? "focus_to_candidate",
+          confidence: relation?.type === "choice" ? relation.confidence : null,
+          relatedness: score,
+          same: false,
+        };
       judgments.push({
         nodeId: candidate.id,
         relatedness: score,
@@ -738,11 +761,19 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
         (b.confidence ?? 0) - (a.confidence ?? 0) ||
         a.index - b.index,
     );
+    if (eligible.length === 0 && best) eligible.push(best);
     const chosen = eligible.slice(0, MAX_CONNECTIONS);
-    const chosenIds = new Set(chosen.map((item) => item.candidate.id));
-    for (const [index, judgment] of judgments.entries())
-      if (chosenIds.has(judgment.nodeId))
-        judgments[index] = { ...judgment, connect: true };
+    const chosenById = new Map(chosen.map((item) => [item.candidate.id, item]));
+    for (const [index, judgment] of judgments.entries()) {
+      const item = chosenById.get(judgment.nodeId);
+      if (item)
+        judgments[index] = {
+          ...judgment,
+          relation: item.relation,
+          direction: item.direction,
+          connect: true,
+        };
+    }
     const connections = focus
       ? chosen.map((item) => {
           const forward = item.direction === "focus_to_candidate";

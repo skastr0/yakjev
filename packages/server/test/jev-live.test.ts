@@ -22,7 +22,7 @@ afterEach(async () => {
 
 // Answers by candidate title so tests read like the owner's world model.
 type Verdict = {
-  related?: 0 | 1 | 2;
+  related?: number;
   match?: boolean;
   relation?: string;
   same?: boolean;
@@ -56,7 +56,12 @@ const judge =
       answers[`relatedness_${index}`] = {
         type: "score",
         score,
-        probabilities: { "0": 0, "1": 0, "2": 0, [String(score)]: 1 },
+        probabilities: {
+          "0": 0,
+          "1": 0,
+          "2": 0,
+          [String(Math.round(score))]: 1,
+        },
         confidence: 1,
       };
       choice(`match_${index}`, verdict.match ? "match" : "no_match");
@@ -452,4 +457,37 @@ test("rounded provider probabilities do not fail a whole batch", async () => {
     nodeId: "flights",
     connect: true,
   });
+});
+
+test("when nothing clears the bar, the strongest clear match still connects", async () => {
+  const { call, capture } = await fixture(
+    controlled(
+      judge({
+        // 0.625 relatedness: under CONNECT_RELATEDNESS, over TOP_RELATEDNESS.
+        "Raise the garden beds": {
+          related: 1.25,
+          match: true,
+          relation: "focus_to_candidate_0",
+        },
+        "Buy compost": { related: 1.22, match: true },
+        "Paint the fence": {
+          related: 1.0,
+          match: true,
+          relation: "focus_to_candidate_3",
+        },
+      }),
+    ),
+  );
+  await capture("beds", "Raise the garden beds", false);
+  await capture("compost", "Buy compost", false);
+  await capture("fence", "Paint the fence", false);
+  const preview = await call("/api/jev/preview", {
+    draft: {
+      title: "Double-dig the new bed",
+      description: "A long description.",
+    },
+  });
+  const connected = preview.body.judgments.filter((j: any) => j.connect);
+  expect(connected).toHaveLength(1);
+  expect(connected[0]).toMatchObject({ nodeId: "beds", relation: "requires" });
 });
