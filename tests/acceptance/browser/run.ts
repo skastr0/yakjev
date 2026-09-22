@@ -1231,40 +1231,88 @@ async function main(): Promise<void> {
         token: devToken,
       });
       try {
+        await run(
+          "J0 workspace context saves before the first intention",
+          async () => {
+            await ab(["open", jevServer.origin]);
+            await ab(["set", "viewport", "1280", "720", "2"]);
+            await login();
+            if (!(await clickButton("Jev context")))
+              blocked("Jev context settings control is missing");
+            const text =
+              "I run a vegetable garden. A prerequisite means the goal cannot happen without it; useful preparation is only a benefit.";
+            if (!(await fillLabel("Jev context", text)))
+              blocked("Jev context text area is missing");
+            if (!(await clickButton("Save")))
+              blocked("Jev context Save button is missing");
+            const deadline = Date.now() + 3_000;
+            let saved = false;
+            while (Date.now() < deadline) {
+              saved = (await readGraph(jevServer)).jevContext?.text === text;
+              if (saved) break;
+              await Bun.sleep(100);
+            }
+            if (!saved)
+              throw new Error("workspace context did not reach SQLite");
+            await ab(["reload"]);
+            await login();
+            if (!(await clickButton("Jev context")))
+              blocked("Jev context control did not survive reload");
+            const restored = await js<string>(
+              "document.querySelector('textarea[aria-label=\"Jev context\"]')?.value ?? ''",
+            );
+            if (restored !== text)
+              throw new Error(
+                "saved workspace context was not restored after reload",
+              );
+            await ab(["press", "Escape"]);
+            return {
+              detail:
+                "context saved in the graph before any node and restored after reload",
+              artifacts: [],
+            };
+          },
+        );
+
         const intention = "Plant tomatoes in the raised beds";
         await run(
           "J1 typing an intention lists Jev's connections; Enter commits them",
           async () => {
-            await sendCommand(jevServer, 0, {
-              type: "capture",
-              capture: {
-                id: "jev_browser_seed",
-                text: "Synthetic seed for the live Jev browser check. Not fetched.",
-                sources: [],
-                nodeIds: ["seed_beds", "seed_seeds"],
+            await sendCommand(
+              jevServer,
+              (await readGraph(jevServer)).revision,
+              {
+                type: "capture",
+                capture: {
+                  id: "jev_browser_seed",
+                  text: "Synthetic seed for the live Jev browser check. Not fetched.",
+                  sources: [],
+                  nodeIds: ["seed_beds", "seed_seeds"],
+                },
+                nodes: [
+                  {
+                    id: "seed_beds",
+                    title: "Build raised beds for the vegetable garden",
+                    description:
+                      "Two cedar raised beds along the south fence for vegetables.",
+                    project: "synthetic-garden",
+                    status: "idea",
+                    sources: [],
+                  },
+                  {
+                    id: "seed_seeds",
+                    title: "Order tomato and basil seeds before spring",
+                    description:
+                      "Seed order must go out before spring planting.",
+                    project: "synthetic-garden",
+                    status: "idea",
+                    sources: [],
+                  },
+                ],
+                edges: [],
+                autoConnect: false,
               },
-              nodes: [
-                {
-                  id: "seed_beds",
-                  title: "Build raised beds for the vegetable garden",
-                  description:
-                    "Two cedar raised beds along the south fence for vegetables.",
-                  project: "synthetic-garden",
-                  status: "idea",
-                  sources: [],
-                },
-                {
-                  id: "seed_seeds",
-                  title: "Order tomato and basil seeds before spring",
-                  description: "Seed order must go out before spring planting.",
-                  project: "synthetic-garden",
-                  status: "idea",
-                  sources: [],
-                },
-              ],
-              edges: [],
-              autoConnect: false,
-            });
+            );
             await ab(["open", jevServer.origin]);
             await ab(["set", "viewport", "1280", "720", "2"]);
             await login();
