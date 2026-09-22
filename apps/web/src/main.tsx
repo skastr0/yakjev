@@ -408,6 +408,7 @@ function App() {
             focusId={focusId}
             paint={paint}
             ghosts={ghosts}
+            asking={jev.asking}
             onView={() => {
               if (mode) setViewTick((value) => value + 1);
             }}
@@ -540,6 +541,8 @@ function useDragConnect(
   const depth = useRef(0);
   const [ghosts, setGhosts] = useState<Ghost[]>([]);
   const [busy, setBusy] = useState(false);
+  // Nodes Jev is judging for the current drag right now.
+  const [asking, setAsking] = useState<readonly string[]>([]);
 
   function begin() {
     depth.current += 1;
@@ -574,6 +577,7 @@ function useDragConnect(
     const task = current.chain.then(async () => {
       if (!alive(current)) return;
       begin();
+      setAsking(include);
       try {
         const preview = await previewJev(
           include.length
@@ -597,6 +601,7 @@ function useDragConnect(
         noteRetry(current, include);
         if (current.phase === "drag") schedule(current, RETRY_MS);
       } finally {
+        setAsking([]);
         finish();
       }
     });
@@ -621,6 +626,7 @@ function useDragConnect(
   return {
     ghosts,
     busy,
+    asking,
     onStart(id: string, nearby: readonly string[]) {
       const previous = session.current;
       if (previous && previous.phase !== "commit") {

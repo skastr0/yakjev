@@ -1237,3 +1237,75 @@ summary {
   margin: 4px 0;
   color: #6b7d73;
 }
+
+/* Drag feedback: Jev checking nearby nodes, a move-only drag, a kept spot. */
+.jev-asking-ring {
+  stroke: var(--jev);
+  stroke-width: 2;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: jev-asking 1s ease-out infinite;
+}
+@keyframes jev-asking {
+  0% {
+    opacity: 0.7;
+    transform: scale(0.85);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.45);
+  }
+}
+.move-only-ring {
+  stroke: #8a9a90;
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+}
+.layout-kept {
+  fill: #2f6b4f;
+  font:
+    600 11px "Avenir Next",
+    Avenir,
+    system-ui,
+    sans-serif;
+  paint-order: stroke;
+  stroke: #f5f2e9;
+  stroke-width: 3;
+  animation: layout-kept 1.2s ease-out forwards;
+}
+@keyframes layout-kept {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  20% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .jev-asking-ring {
+    animation: none;
+    opacity: 0.6;
+  }
+  .layout-kept {
+    animation-duration: 1.2s;
+    animation-name: layout-kept-still;
+  }
+  @keyframes layout-kept-still {
+    0%,
+    80% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+}

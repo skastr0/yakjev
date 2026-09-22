@@ -52,6 +52,8 @@ declare global {
 
 type Props = {
   data: Graph;
+  // Nodes Jev is judging for the current drag; they pulse while it looks.
+  asking: readonly string[];
   // Positions saved on the server; the canvas starts from them.
   savedLayout: ReadonlyMap<string, Point>;
   // Nodes whose position changed since the last save, debounced.
@@ -107,6 +109,14 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     );
     const lastSaved = useRef(new Map<string, Point>(props.savedLayout));
     const moveOnly = useRef(false);
+    // What the current drag is doing, for the status chip and rings.
+    const [dragging, setDragging] = useState<{
+      id: string;
+      mode: "jev" | "move";
+    } | null>(null);
+    // The last dropped node briefly shows it was kept.
+    const lastDropped = useRef<string | null>(null);
+    const [kept, setKept] = useState<{ id: string; born: number } | null>(null);
     const persistTimer = useRef(0);
     // Save only after motion settles (drops and glides take ~300ms), and only
     // the nodes that actually moved.
@@ -129,7 +139,14 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         }
         if (!changed.length) return;
         void latest.current.onLayout(changed).then((saved) => {
-          if (saved) return;
+          if (saved) {
+            const dropped = lastDropped.current;
+            if (dropped && changed.some((point) => point.id === dropped)) {
+              lastDropped.current = null;
+              setKept({ id: dropped, born: performance.now() });
+            }
+            return;
+          }
           for (const point of changed) lastSaved.current.delete(point.id);
           window.setTimeout(schedulePersist, 5000);
         });
@@ -512,6 +529,10 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             x: graph.current.getNodeAttribute(payload.node, "x") as number,
             y: graph.current.getNodeAttribute(payload.node, "y") as number,
           };
+          setDragging({
+            id: payload.node,
+            mode: moveOnly.current ? "move" : "jev",
+          });
           if (!moveOnly.current)
             latest.current.onDragStart(
               payload.node,
@@ -545,6 +566,8 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           const nearby = reachOf.current(node);
           const moved = (dragGesture.current?.peak ?? 0) > DRAG_COMMIT_PX;
           dragGesture.current = null;
+          setDragging(null);
+          if (moved) lastDropped.current = node;
           if (moveOnly.current) moveOnly.current = false;
           else if (moved) {
             releaseNode(node);
@@ -767,7 +790,12 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
       return () => window.clearTimeout(timer);
     }, [arrivals]);
 
-    const announcement = dragAnnouncement(props.ghosts);
+    const announcement =
+      dragging?.mode === "move"
+        ? "Just moving · Jev stays out"
+        : props.asking.length > 0
+          ? `Jev is checking ${props.asking.length} nearby…`
+          : dragAnnouncement(props.ghosts);
 
     return (
       <div className="graph-shell" ref={shell}>
@@ -922,6 +950,48 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
               </g>
             );
           })}
+          {dragging?.mode === "move" &&
+            (() => {
+              const at = overlayPoint(dragging.id);
+              return at ? (
+                <circle
+                  className="move-only-ring"
+                  cx={at.x}
+                  cy={at.y}
+                  r={17}
+                  fill="none"
+                />
+              ) : null;
+            })()}
+          {props.asking.map((id) => {
+            const at = overlayPoint(id);
+            return at ? (
+              <circle
+                key={`asking-${id}`}
+                className="jev-asking-ring"
+                cx={at.x}
+                cy={at.y}
+                r={16}
+                fill="none"
+              />
+            ) : null;
+          })}
+          {kept &&
+            (() => {
+              const at = overlayPoint(kept.id);
+              return at ? (
+                <text
+                  key={kept.born}
+                  className="layout-kept"
+                  x={at.x}
+                  y={at.y - 20}
+                  textAnchor="middle"
+                  onAnimationEnd={() => setKept(null)}
+                >
+                  ✓ kept
+                </text>
+              ) : null;
+            })()}
           {edgeCaptions().map((caption) => (
             <g
               key={caption.id}
