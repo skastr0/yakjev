@@ -21,10 +21,15 @@ export function useGraph() {
   const [session, setSession] = useState(0);
   const current = useRef<Graph | null>(null);
   const busy = useRef(false);
+  const generation = useRef(0);
 
   const refresh = useCallback(async () => {
+    const startedIn = generation.current;
     const next = await snapshot();
-    if (!current.current || next.revision >= current.current.revision) {
+    if (
+      startedIn === generation.current &&
+      (!current.current || next.revision > current.current.revision)
+    ) {
       current.current = next;
       setGraph(next);
     }
@@ -34,6 +39,7 @@ export function useGraph() {
   useEffect(() => {
     let stopped = false;
     let events: EventSource | undefined;
+    generation.current++;
     current.current = null;
     setGraph(null);
     setConnection("loading");
@@ -43,7 +49,24 @@ export function useGraph() {
         if (stopped) return;
         events = new EventSource(`/api/events?after=${initial.revision}`);
         events.onopen = () => setConnection("live");
-        events.onerror = () => setConnection("reconnecting");
+        events.onerror = () => {
+          setConnection("reconnecting");
+          // EventSource does not expose HTTP status. A session check makes an
+          // expired cookie actionable instead of leaving an infinite spinner.
+          void request("/api/session").catch((cause: unknown) => {
+            if (
+              !stopped &&
+              cause instanceof ApiFailure &&
+              cause.status === 401
+            ) {
+              events?.close();
+              current.current = null;
+              setGraph(null);
+              setConnection("locked");
+              setError("Your session expired. Unlock the graph to reconnect.");
+            }
+          });
+        };
         events.addEventListener("change", (event) => {
           try {
             decodeReceipt((event as MessageEvent<string>).data);
@@ -74,13 +97,19 @@ export function useGraph() {
       });
     return () => {
       stopped = true;
+      generation.current++;
       events?.close();
     };
   }, [session, refresh]);
 
   const execute = useCallback(
     async (command: Command, expectedRevision: number) => {
-      if (busy.current) return false;
+      if (busy.current) {
+        setError(
+          "Not saved: another edit is still saving. Try again when it finishes.",
+        );
+        return false;
+      }
       busy.current = true;
       setPending(true);
       setError("");
@@ -89,13 +118,19 @@ export function useGraph() {
         const result = await sendCommand(command, expectedRevision);
         setLastEdit(result.receipt);
         setNotice(`Saved · revision ${result.receipt.revision}`);
-        await refresh();
+        await refresh().catch((cause: unknown) =>
+          setError(
+            `Saved at revision ${result.receipt.revision}, but refreshing the view failed: ${errorMessage(cause)}`,
+          ),
+        );
         return true;
       } catch (cause) {
         setError(
           cause instanceof ApiFailure && cause.status === 409
             ? `Not saved: the graph changed. Your draft is kept. Reload latest before trying again. ${cause.message}`
-            : `Not saved: ${errorMessage(cause)}`,
+            : cause instanceof ApiFailure && cause.status < 500
+              ? `Not saved: ${errorMessage(cause)}`
+              : `Save could not be confirmed. Check history before retrying: ${errorMessage(cause)}`,
         );
         if (cause instanceof ApiFailure && cause.status === 409)
           await refresh().catch(() => {});

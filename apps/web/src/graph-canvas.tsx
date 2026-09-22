@@ -36,6 +36,25 @@ export function GraphCanvas(props: Props) {
   const [renderError, setRenderError] = useState("");
   const [arranging, setArranging] = useState(false);
 
+  function fitGraph(sigma: Sigma) {
+    const positions = graph.current
+      .nodes()
+      .map((id) => graph.current.getNodeAttributes(id));
+    // A nonempty, fixed coordinate frame also works before the first capture.
+    // Sigma v4 otherwise freezes the empty extent with autoRescale: "once".
+    sigma.setCustomBBox({
+      x: [
+        Math.min(-400, ...positions.map((position) => position.x)),
+        Math.max(400, ...positions.map((position) => position.x)),
+      ],
+      y: [
+        Math.min(-400, ...positions.map((position) => position.y)),
+        Math.max(400, ...positions.map((position) => position.y)),
+      ],
+    });
+    void sigma.getCamera().reset();
+  }
+
   useEffect(() => {
     if (!container.current) return;
     syncGraph(graph.current, latest.current.data);
@@ -94,6 +113,7 @@ export function GraphCanvas(props: Props) {
         },
       });
       renderer.current = sigma;
+      fitGraph(sigma);
       sigma.on("clickNode", ({ node }) =>
         latest.current.select({ kind: "node", id: node }),
       );
@@ -183,14 +203,12 @@ export function GraphCanvas(props: Props) {
   }, [props.selection, props.visible, props.data]);
 
   async function saveAll() {
-    const positions = graph.current
-      .nodes()
-      .map((id) => ({
-        id,
-        x: graph.current.getNodeAttribute(id, "x") as number,
-        y: graph.current.getNodeAttribute(id, "y") as number,
-        pinned: graph.current.getNodeAttribute(id, "fixed") === true,
-      }));
+    const positions = graph.current.nodes().map((id) => ({
+      id,
+      x: graph.current.getNodeAttribute(id, "x") as number,
+      y: graph.current.getNodeAttribute(id, "y") as number,
+      pinned: graph.current.getNodeAttribute(id, "fixed") === true,
+    }));
     if (positions.length > 1000) {
       props.report(
         "Save layout supports 1,000 positions per command. Drag individual nodes to save larger graphs incrementally.",
@@ -251,8 +269,12 @@ export function GraphCanvas(props: Props) {
         >
           −
         </button>
-        <button onClick={() => void renderer.current?.getCamera().reset()}>
-          Reset view
+        <button
+          onClick={() => {
+            if (renderer.current) fitGraph(renderer.current);
+          }}
+        >
+          Fit graph
         </button>
         <button
           disabled={props.pending || arranging || !props.data.nodes.length}

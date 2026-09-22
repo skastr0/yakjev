@@ -1,6 +1,7 @@
-import { StrictMode, useState } from "react";
+import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { errorMessage, request } from "./api";
+import { DiscoveryPanel, RelatedHints } from "./discovery";
 import { NodeForm, TaxonomyForm } from "./forms";
 import { GraphCanvas } from "./graph-canvas";
 import { searchNodes, type Selection } from "./graph-model";
@@ -19,6 +20,14 @@ function App() {
   >("capture");
   const [epoch, setEpoch] = useState(0);
   const [includeArchived, setIncludeArchived] = useState(false);
+  const [captureQuery, setCaptureQuery] = useState("");
+  const inspector = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (matchMedia("(max-width: 850px)").matches) {
+      inspector.current?.scrollIntoView({ block: "start" });
+      inspector.current?.focus({ preventScroll: true });
+    }
+  }, [panel, selection?.id, epoch]);
   const graph = state.graph;
   const select = (next: Selection) => {
     setSelection(next);
@@ -175,6 +184,7 @@ function App() {
                 onClick={() => {
                   setPanel("capture");
                   setEpoch((value) => value + 1);
+                  setCaptureQuery("");
                 }}
               >
                 + Capture intention
@@ -272,6 +282,7 @@ function App() {
             />
           </section>
           <aside
+            ref={inspector}
             className="inspector"
             aria-label="Selection inspector"
             tabIndex={-1}
@@ -289,7 +300,9 @@ function App() {
                   execute={state.execute}
                   pending={state.pending}
                   saved={(id) => select({ kind: "node", id })}
+                  related={setCaptureQuery}
                 />
+                <RelatedHints query={captureQuery} graph={graph} />
               </>
             )}
             {panel === "inspect" && (
@@ -334,45 +347,14 @@ function App() {
               </>
             )}
             {panel === "jev" && (
-              <>
-                <p className="eyebrow">REVIEW, THEN DECIDE</p>
-                <h2>Jev &amp; suggestions</h2>
-                <p className="hint">
-                  Suggested connections are never hard blockers until explicitly
-                  accepted.
-                </p>
-                {!graph.suggestions.length && (
-                  <p>No suggestions recorded yet.</p>
-                )}
-                {graph.suggestions.map((suggestion) => (
-                  <button
-                    className="connection-card"
-                    key={suggestion.id}
-                    onClick={() =>
-                      select({ kind: "suggestion", id: suggestion.id })
-                    }
-                  >
-                    <span>
-                      {
-                        graph.nodes.find(
-                          (node) => node.id === suggestion.source,
-                        )?.title
-                      }{" "}
-                      →{" "}
-                      {
-                        graph.nodes.find(
-                          (node) => node.id === suggestion.target,
-                        )?.title
-                      }
-                    </span>
-                    <small>Machine suggestion · {suggestion.status}</small>
-                  </button>
-                ))}
-                <p className="hint">
-                  Evaluation controls are awaiting the server’s Jev capability
-                  contract.
-                </p>
-              </>
+              <DiscoveryPanel
+                graph={graph}
+                select={select}
+                refresh={state.refresh}
+                {...(selection?.kind === "node"
+                  ? { focusNodeId: selection.id }
+                  : {})}
+              />
             )}
           </aside>
         </div>
