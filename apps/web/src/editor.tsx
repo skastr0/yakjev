@@ -638,11 +638,11 @@ function AssertCard({
   const to = flipped ? source : target;
   const selected = picked ?? judgment?.relation ?? null;
   const connect = useRef<HTMLButtonElement>(null);
-  // Enter accepts Jev's pre-selection once it arrives.
+  // Enter commits the selection: Jev's once it arrives, or the owner's pick.
   useEffect(() => {
     if (selected && !(document.activeElement instanceof HTMLInputElement))
       connect.current?.focus();
-  }, [selected !== null]);
+  }, [selected]);
   const title = (id: string) =>
     graph.nodes.find((node) => node.id === id)?.title ?? id;
   const choose = (relation: string) => {
@@ -689,14 +689,7 @@ function AssertCard({
                 : "Jev is offline"}
         </p>
       </div>
-      <RelationChoices
-        graph={graph}
-        selected={selected}
-        onChoose={(relation) => {
-          setPicked(relation);
-          choose(relation);
-        }}
-      />
+      <RelationChoices graph={graph} selected={selected} onChoose={setPicked} />
       <div className="chip-row">
         <button
           type="button"
@@ -732,7 +725,10 @@ function AssertCard({
             if (command.type !== "taxonomy.replace") return;
             const relation = command.relations.at(-1);
             void execute(command, graph.revision).then((ok) => {
-              if (ok && relation) choose(relation.id);
+              if (!ok || !relation) return;
+              setPicked(relation.id);
+              setAdding(false);
+              setLabel("");
             });
           }}
         />
