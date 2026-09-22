@@ -27,6 +27,7 @@ import {
   suggestion as fixtureSuggestion,
 } from "../fixtures";
 import { startServer, type ServerHandle } from "../harness";
+import { callTool, openSession } from "../mcp";
 
 const session = "yakjev-accept";
 const artifacts = resolve(import.meta.dir, "../../../.amp/in/artifacts");
@@ -205,7 +206,9 @@ async function selectByLabel(label: string, value: string): Promise<boolean> {
 
 // ---------------------------------------------------------------- pixel checks
 
-async function changedFraction(before: string, after: string): Promise<number> {
+type CanvasDiff = { pixels: number; fraction: number };
+
+async function diffCanvas(before: string, after: string): Promise<CanvasDiff> {
   const metric = await sh(
     [
       "magick",
@@ -227,7 +230,11 @@ async function changedFraction(before: string, after: string): Promise<number> {
   if (!Number.isFinite(changed) || !width || !height) {
     throw new Error(`could not diff ${before} and ${after}: ${metric}`);
   }
-  return changed / (width * height);
+  return { pixels: changed, fraction: changed / (width * height) };
+}
+
+async function changedFraction(before: string, after: string): Promise<number> {
+  return (await diffCanvas(before, after)).fraction;
 }
 
 /** Wait until a node title is observable in the rendered node list. */
@@ -450,6 +457,80 @@ async function main(): Promise<void> {
         artifacts: [],
       };
     });
+
+    await run(
+      "E1c an MCP capture from an agent appears live in the rendered graph",
+      async () => {
+        const session = await openSession(server);
+        const before = await readGraph(server);
+        const canvasBefore = await screenshotElement(
+          "canvas",
+          "e1c-canvas-before",
+        );
+        const called = await callTool(server, session, "graph_command", {
+          requestId: `acceptance-browser-mcp-${Date.now()}`,
+          expectedRevision: before.revision,
+          command: {
+            type: "capture",
+            capture: {
+              id: "capture_mcp_agent",
+              text: "Synthetic capture submitted through the agent surface while the graph is on screen.",
+              sources: [
+                {
+                  uri: "synthetic://session/mcp-agent",
+                  label: "Synthetic MCP session",
+                },
+              ],
+              nodeIds: ["agent_side_node"],
+            },
+            nodes: [
+              {
+                id: "agent_side_node",
+                title: "Agent side node",
+                description:
+                  "Captured through MCP while the graph is on screen.",
+                project: "synthetic-project",
+                status: "idea",
+                sources: [
+                  {
+                    uri: "synthetic://document/agent-side",
+                    label: "Synthetic agent note",
+                  },
+                ],
+              },
+            ],
+            edges: [],
+          },
+        });
+        const receiptAt = Date.now();
+        const structured = called.structuredContent as {
+          receipt?: { revision?: number; actor?: { channel?: string } };
+        };
+        if (structured.receipt?.actor?.channel !== "mcp") {
+          throw new Error(
+            `an MCP capture recorded channel ${structured.receipt?.actor?.channel}, expected mcp`,
+          );
+        }
+        const renderedAt = await waitForNodeTitle("Agent side node", 10_000);
+        const canvasAfter = await screenshotElement(
+          "canvas",
+          "e1c-canvas-after",
+        );
+        const diff = await diffCanvas(canvasBefore, canvasAfter);
+        await screenshot("01c-after-mcp-capture");
+        // One node is a small mark on the canvas, so count pixels rather than
+        // require a fraction of the whole surface.
+        if (diff.pixels < 150) {
+          throw new Error(
+            `the MCP capture reached the graph but the rendered canvas changed by only ${diff.pixels} pixels`,
+          );
+        }
+        return {
+          detail: `MCP revision ${structured.receipt?.revision}; receipt->render ${renderedAt - receiptAt}ms; canvas changed ${diff.pixels}px (${(diff.fraction * 100).toFixed(2)}%)`,
+          artifacts: [join(artifacts, "01c-after-mcp-capture.png")],
+        };
+      },
+    );
 
     await run(
       "E2 selecting the delayed node exposes its blocking edge and rationale",
