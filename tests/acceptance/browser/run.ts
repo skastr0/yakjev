@@ -194,38 +194,53 @@ async function changedFraction(before: string, after: string): Promise<number> {
 
 // ---------------------------------------------------------------- flow
 
-async function login(server: ServerHandle): Promise<void> {
-  const status = await js<number>(
+const devToken = "synthetic-yakjev-owner-token-local-only";
+const wrongToken = "synthetic-wrong-token-value";
+
+async function graphStatus(): Promise<number> {
+  return js<number>(
     "fetch('/api/graph',{headers:{accept:'application/json'}}).then(r=>r.status)",
   );
-  if (status === 200) return;
-  // Token entry surface: try the plausible affordances before giving up.
-  const attempts: string[][] = [
+}
+
+async function fillToken(value: string): Promise<boolean> {
+  for (const base of [
+    ["label", "Owner access token"],
+    ["placeholder", "Owner access token"],
     ["placeholder", "token"],
-    ["placeholder", "Token"],
     ["label", "token"],
-    ["role", "textbox", "--name", "token"],
-  ];
-  for (const locator of attempts) {
-    const filled = await ab(
-      ["find", ...locator, "fill", acceptanceToken],
-      true,
-    );
-    if (filled.length > 0 && !/not found|no element/i.test(filled)) {
-      for (const button of ["Connect", "Sign in", "Log in", "Continue"]) {
-        if (await findClick(["role", "button", "--name", button])) break;
-      }
-      await ab(["wait", "--load", "networkidle"], true);
-      const after = await js<number>(
-        "fetch('/api/graph',{headers:{accept:'application/json'}}).then(r=>r.status)",
-      );
-      if (after === 200) return;
-    }
+  ]) {
+    if (found(await ab(["find", ...base, "fill", value], true))) return true;
   }
-  blocked(
-    `no authenticated session: /api/graph returned ${status} and no token entry surface was found. ` +
-      "Tell the UI owner which local auth path the browser E2E should drive (token entry or YAKJEV_DEV_AUTH).",
-  );
+  return false;
+}
+
+async function submitLogin(): Promise<boolean> {
+  for (const name of ["Unlock graph", "Connect", "Sign in", "Log in"]) {
+    if (await findClick(["role", "button"], ["--name", name])) return true;
+  }
+  return false;
+}
+
+async function login(): Promise<void> {
+  if ((await graphStatus()) === 200) return;
+  if (!(await fillToken(devToken))) {
+    blocked(
+      "no 'Owner access token' field found; the driver needs the UI's token input",
+    );
+  }
+  if (!(await submitLogin())) {
+    blocked(
+      "no 'Unlock graph' button found; the driver needs the submit control",
+    );
+  }
+  await ab(["wait", "--load", "networkidle"], true);
+  const status = await graphStatus();
+  if (status !== 200) {
+    blocked(
+      `login did not establish a session (/api/graph returned ${status})`,
+    );
+  }
 }
 
 async function main(): Promise<void> {
@@ -237,7 +252,7 @@ async function main(): Promise<void> {
   try {
     await ab(["close"], true);
     await ab(["open", server.origin]);
-    await ab(["set viewport", "1280", "720", "2"]);
+    await ab(["set", "viewport", "1280", "720", "2"]);
     await frame();
 
     if (discover) {
@@ -257,7 +272,7 @@ async function main(): Promise<void> {
     }
 
     await run("open the graph page authenticated", async () => {
-      await login(server);
+      await login();
       await js(
         "window.__yakjevCanvas = document.querySelector('canvas'), true",
       );
@@ -273,6 +288,71 @@ async function main(): Promise<void> {
         artifacts: [join(artifacts, "01-empty-graph.png")],
       };
     });
+
+    await run(
+      "E0 the unauthenticated state renders a login surface, not an empty graph",
+      async () => {
+        await ab(["cookies", "clear"]);
+        await ab(["open", server.origin]);
+        await ab(["set", "viewport", "1280", "720", "2"]);
+        await ab(["eval", "localStorage.clear(); sessionStorage.clear()"]);
+        await ab(["reload"]);
+        await frame();
+
+        const field = await findText(["label", "Owner access token"]);
+        const button = await findText(
+          ["role", "button"],
+          ["--name", "Unlock graph"],
+        );
+        const alert = await findText(["role", "alert"]);
+        await screenshot("00-login");
+        if (!field || !button) {
+          blocked(
+            "the unauthenticated page does not expose the 'Owner access token' field and 'Unlock graph' button",
+          );
+        }
+        if (!alert) {
+          blocked(
+            "the unauthenticated page renders no role=alert error state with the server's message",
+          );
+        }
+
+        await fillToken(wrongToken);
+        await submitLogin();
+        await frame();
+        const cleared = await js<string>(
+          "document.querySelector('input[type=password]')?.value ?? 'MISSING'",
+        );
+        const alertAfter = await findText(["role", "alert"]);
+        await screenshot("00b-rejected-token");
+        if (cleared !== "") {
+          throw new Error(
+            `the token field still holds ${JSON.stringify(cleared)} after a rejected token`,
+          );
+        }
+        if (!alertAfter) {
+          throw new Error("a rejected token produced no visible error message");
+        }
+
+        await login();
+        const stored = await js<number>(
+          "localStorage.length + sessionStorage.length",
+        );
+        if (stored !== 0) {
+          throw new Error(
+            `the session persisted ${stored} storage entries; the token must not be stored client-side`,
+          );
+        }
+        return {
+          detail:
+            "login surface, role=alert error, cleared field after a rejected token, no client-side token storage",
+          artifacts: [
+            join(artifacts, "00-login.png"),
+            join(artifacts, "00b-rejected-token.png"),
+          ],
+        };
+      },
+    );
 
     await run(
       "E1 capture from another client appears live without reload",
@@ -487,8 +567,8 @@ async function main(): Promise<void> {
         const before = await readGraph(server);
         await server.restart();
         await ab(["open", server.origin]);
-        await ab(["set viewport", "1280", "720", "2"]);
-        await login(server);
+        await ab(["set", "viewport", "1280", "720", "2"]);
+        await login();
         await frame();
         await waitForVisibleNode("Multi-machine skills blocker", 8_000);
         const after = await readGraph(server);
@@ -514,7 +594,7 @@ async function main(): Promise<void> {
     );
 
     await run("E8 narrow layout keeps the graph usable at 390px", async () => {
-      await ab(["set viewport", "390", "844", "2"]);
+      await ab(["set", "viewport", "390", "844", "2"]);
       await frame();
       await screenshot("08-narrow");
       const overflow = await js<number>(
@@ -528,6 +608,40 @@ async function main(): Promise<void> {
         artifacts: [join(artifacts, "08-narrow.png")],
       };
     });
+
+    await run(
+      "E9 accessibility audit finds no serious or critical violations",
+      async () => {
+        const raw = await ab(["a11y", "--json"]);
+        let violations: { id?: string; impact?: string }[] | undefined;
+        try {
+          const parsed = JSON.parse(raw) as { violations?: typeof violations };
+          violations = parsed.violations;
+        } catch {
+          blocked(`the a11y report was not JSON: ${raw.slice(0, 200)}`);
+        }
+        if (!violations) {
+          blocked(
+            `the a11y report carried no violations array: ${raw.slice(0, 200)}`,
+          );
+        }
+        const severe = violations.filter(
+          (violation) =>
+            violation.impact === "serious" || violation.impact === "critical",
+        );
+        if (severe.length > 0) {
+          throw new Error(
+            `${severe.length} serious/critical accessibility violations: ${severe
+              .map((violation) => violation.id)
+              .join(", ")}`,
+          );
+        }
+        return {
+          detail: `${violations.length} violations reported, none serious or critical`,
+          artifacts: [],
+        };
+      },
+    );
   } finally {
     await ab(["close"], true);
     await server.stop();
