@@ -13,5 +13,10 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["packages/**/*.ts", "apps/**/*.ts", "apps/**/*.tsx"]
+  "include": [
+    "packages/**/*.ts",
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "tests/**/*.ts"
+  ]
 }

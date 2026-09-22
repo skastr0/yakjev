@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test packages",
     "test:deploy": "bash deploy/tests/run.sh && bash deploy/tests/resume.sh",
+    "test:acceptance": "bun test tests/acceptance",
     "format": "prettier --write .",
     "check:format": "prettier --check .",
     "verify": "bun run check:format && bun run typecheck && bun run test && bun run build && bun run test:deploy"

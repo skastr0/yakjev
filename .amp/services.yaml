@@ -1,6 +1,6 @@
 services:
   api:
-    command: bun run --cwd packages/server dev
+    command: YAKJEV_DEV_AUTH=true bun run --cwd packages/server dev
     port: 3210
     health: /healthz
   web:
