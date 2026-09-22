@@ -355,9 +355,9 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             };
             const gap = Math.hypot(focus.x - point.x, focus.y - point.y);
             if (best && gap >= best.gap) continue;
-            const relation = taxonomy.relations.find(
-              (item) => item.label === ghost.label,
-            );
+            const relation =
+              taxonomy.relations.find((item) => item.id === ghost.relation) ??
+              taxonomy.relations.find((item) => item.label === ghost.label);
             best = {
               ...point,
               gap,

@@ -19,6 +19,8 @@ export type Ghost = {
   strength: number;
   label: string;
   kind: "typing" | "drag";
+  // Relation id when the label is a display word such as "same".
+  relation?: string;
 };
 
 // Judgments Jev will act on, limited to nodes the owner can see.

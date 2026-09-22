@@ -698,6 +698,7 @@ function ghostFrom(
       : 0,
     label: relationLabel(graph, judgment),
     kind: "drag",
+    ...(judgment.relation ? { relation: judgment.relation } : {}),
   };
 }
 
@@ -718,6 +719,7 @@ function sameGhosts(left: readonly Ghost[], right: readonly Ghost[]) {
         ghost.kind === other.kind &&
         ghost.to === other.to &&
         ghost.label === other.label &&
+        ghost.relation === other.relation &&
         ghost.strength === other.strength &&
         endpoint(ghost.from) === endpoint(other.from)
       );
