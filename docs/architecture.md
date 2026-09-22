@@ -8,7 +8,7 @@ Use **Effect v4**, **Bun 1.4 or newer stable**, and **Sigma.js v4 beta** with Gr
 
 On 2026-09-22, the published channel heads were `effect@rc` = `4.0.0-rc.117`, `bun@latest` = `1.4.2`, and `sigma@beta` = `4.0.0-beta.6`. Resolve the current releases within the selected lines when migrating and pin exact versions for reproducible builds.
 
-The checked-in scaffold still uses Effect 3.21.2 and Bun 1.3.14, with no renderer installed. These are obsolete implementation pins, not alternatives to the settled stack. The first implementation change must consolidate dependencies, Effect APIs, runtime setup/resume, CI, and Docker onto the chosen stack and run the full verification suite. This decision record does not claim that migration has already happened.
+The scaffold pins `effect@4.0.0-rc.117`, `bun@1.4.2`, and `sigma@4.0.0-beta.6` with Graphology `0.26.0`. Setup, resume, CI, and the deployment image use the same Bun pin. Renderer and graph-editing code are not implemented yet; the pins are the foundation those features build on.
 
 ## Product model
 

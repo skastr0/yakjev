@@ -7,7 +7,10 @@
     "dev": "bun --watch src/main.ts"
   },
   "dependencies": {
+    "@effect/ai-typesafe": "4.0.0-rc.117",
+    "@effect/platform-bun": "4.0.0-rc.117",
+    "@effect/sql-sqlite-bun": "4.0.0-rc.117",
     "@yakjev/protocol": "workspace:*",
-    "effect": "3.21.2"
+    "effect": "4.0.0-rc.117"
   }
 }

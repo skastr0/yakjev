@@ -9,7 +9,7 @@ Read `docs/product-direction-entanglement-graph.md` before product work. It owns
 ## Stack and boundaries
 
 - Settled stack: **Effect v4**, **Bun 1.4 or newer stable**, and **Sigma.js v4 beta** with Graphology; strict TypeScript, React/Vite, and SQLite as the authoritative graph store. Use current releases in these selected lines and pin exact versions. Effect v4 prereleases and Sigma v4 beta are deliberate choices, not reasons to fall back to older majors.
-- The scaffold's Effect v3 and Bun 1.3 pins are obsolete implementation debt, not competing architectural decisions. Migrate dependencies, code, setup/resume, CI, and the deployment image together before product implementation. Do not relitigate or downgrade the selected stack without an explicit user change of direction.
+- Pinned foundation: `effect@4.0.0-rc.117`, `bun@1.4.2`, `sigma@4.0.0-beta.6`, Graphology `0.26.0`. Do not relitigate or downgrade the selected stack without an explicit user change of direction.
 - The server owns graph semantics and writes. Future HTTP and MCP surfaces share operations; neither owns a second database or rule engine.
 - Authorized Amp orbs must be able to use Yakjev as MCP clients, including from the owner's other projects. Tailnet connectivity and application authorization are separate requirements; access to Yakjev does not grant Railway deployment authority or access to unrelated tailnet services.
 - Use the checked-in TypeSafe skill when implementing Jev. Keep provider credentials server-side, judgments versioned, and edits reversible. Never treat confidence as permission.

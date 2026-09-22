@@ -4,11 +4,9 @@ A lasting map of intentions, dependencies, and the things that get in the way.
 
 **Status: scaffold, not a usable graph editor yet.** The repository contains a React web shell, a Bun/Effect server with SQLite health checks, CI, Amp orb setup, and a private Railway/Tailscale deployment baseline. Graph capture, Jev evaluation, and MCP editing are the next milestone.
 
-**Settled stack: Effect v4, Bun 1.4 or newer stable, Sigma.js v4 beta.** The old scaffold pins have not been migrated yet; updating code, dependencies, setup, CI, and the deployment image is the first implementation task. Those pins are not an alternative stack decision. See [architecture](docs/architecture.md#settled-stack-migration-comes-first).
+**Settled stack: Effect v4, Bun 1.4 or newer stable, Sigma.js v4 beta.** The scaffold pins `effect@4.0.0-rc.117`, [Bun 1.4.2](https://bun.com), and `sigma@4.0.0-beta.6`. See [architecture](docs/architecture.md#settled-stack-migration-comes-first).
 
-## Run the current scaffold locally
-
-The current scaffold uses [Bun 1.3.14](https://bun.com). This is a reproduction note for the unmigrated code, not the target runtime:
+## Run locally
 
 ```sh
 bun install --frozen-lockfile

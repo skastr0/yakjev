@@ -7,6 +7,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "effect": "3.21.2"
+    "effect": "4.0.0-rc.117"
   }
 }

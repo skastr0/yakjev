@@ -8,7 +8,7 @@ Keep `TS_AUTHKEY` only in Railway service secrets. Keep personal tailnet names a
 
 | Piece            | Where                                                                    |
 | ---------------- | ------------------------------------------------------------------------ |
-| Image            | Root `Dockerfile` (Bun 1.3.14 + pinned Tailscale + tini)                 |
+| Image            | Root `Dockerfile` (Bun 1.4.2 + pinned Tailscale + tini)                  |
 | Supervisor       | `deploy/entrypoint.sh` (userspace `tailscaled`, Serve, app; fail closed) |
 | Railway settings | Dockerfile builder, 1 replica, no healthcheck path                       |
 | App data         | `/data/yakjev` (`YAKJEV_DATA_DIR`)                                       |
@@ -127,7 +127,7 @@ Restore: Railway Backups tab → Restore → review staged volume swap → Deplo
 
 ## Pinning
 
-- Bun image: `oven/bun:1.3.14-debian`
+- Bun image: `oven/bun:1.4.2-debian`
 - Tailscale: `1.102.4` from `pkgs.tailscale.com/stable` (Debian Trixie)
 - Init: Debian `tini` as PID 1
 
