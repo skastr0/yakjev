@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { gzipSync } from "node:zlib";
 import { allowDevRequest } from "./dev-proxy";
 
 const apiOrigin = "http://127.0.0.1:3210";
@@ -7,6 +8,23 @@ const apiOrigin = "http://127.0.0.1:3210";
 export default defineConfig({
   plugins: [
     react(),
+    {
+      name: "precompress-public-assets",
+      apply: "build",
+      enforce: "post",
+      generateBundle(_, bundle) {
+        for (const [fileName, asset] of Object.entries(bundle)) {
+          if (!/\.(js|css|svg)$/.test(fileName)) continue;
+          this.emitFile({
+            type: "asset",
+            fileName: `${fileName}.gz`,
+            source: gzipSync(
+              asset.type === "chunk" ? asset.code : asset.source,
+            ),
+          });
+        }
+      },
+    },
     {
       name: "synthetic-api-origin-boundary",
       configureServer(server) {

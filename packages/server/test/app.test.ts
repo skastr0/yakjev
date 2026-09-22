@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { gzipSync } from "node:zlib";
 import { Layer } from "effect";
 import { createApp } from "../src/app";
 import { Discovery, makeDiscovery } from "../src/discovery";
@@ -42,6 +43,106 @@ test("SQLite health and static entrypoint work, including after reopening the st
   const reopened = createApp(options);
   cleanups.push(() => reopened.close());
   expect((await reopened.ready()).storage).toBe("sqlite");
+});
+
+test("hashed public assets negotiate prebuilt gzip and cache without caching private data", async () => {
+  const { request, options } = await fixture();
+  const path = "/assets/index-A1b2C3d4.js";
+  const source =
+    'console.log("A synthetic graph asset, not private graph data");\n'.repeat(
+      50,
+    );
+  await writeFile(`${options.webRoot}${path}`, source);
+  await writeFile(`${options.webRoot}${path}.gz`, gzipSync(source));
+  for (const [encoding, compressed] of [
+    ["gzip", true],
+    ["br, GZip ; q=0.5", true],
+    ["gzip;q=0, br", false],
+    ["gzip;q=0.000, *;q=1", false],
+    ["identity", false],
+    ["", false],
+  ] as const) {
+    const response = await request(path, {
+      headers: { "accept-encoding": encoding },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-encoding")).toBe(
+      compressed ? "gzip" : null,
+    );
+    expect(response.headers.get("content-type")).toContain("javascript");
+    expect(response.headers.get("vary")).toBe("Accept-Encoding");
+    expect(response.headers.get("cache-control")).toBe(
+      "private, max-age=31536000, immutable",
+    );
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    expect(Number(response.headers.get("content-length"))).toBe(bytes.length);
+    expect(
+      new TextDecoder().decode(compressed ? Bun.gunzipSync(bytes) : bytes),
+    ).toBe(source);
+    const head = await request(path, {
+      method: "HEAD",
+      headers: { "accept-encoding": encoding },
+    });
+    expect(Object.fromEntries(head.headers)).toEqual(
+      Object.fromEntries(response.headers),
+    );
+    expect(await head.text()).toBe("");
+  }
+  await writeFile(`${options.webRoot}/assets/unversioned.js`, source);
+  const fallback = await request("/assets/unversioned.js", {
+    headers: { "accept-encoding": "gzip" },
+  });
+  expect(fallback.headers.get("cache-control")).toBe("no-store");
+  expect(fallback.headers.get("content-encoding")).toBeNull();
+  expect(await fallback.text()).toBe(source);
+  for (const path of ["/", "/api/graph"]) {
+    const response = await request(path, {
+      headers: {
+        authorization: `Bearer ${options.ownerToken}`,
+        "accept-encoding": "gzip",
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("content-encoding")).toBeNull();
+  }
+  expect((await request(`${path}.gz`)).status).toBe(404);
+  expect(
+    (await request(path, { headers: { host: "foreign.example" } })).status,
+  ).toBe(403);
+});
+
+test("static byte ranges still use the original file over TCP", async () => {
+  const { app, request, options } = await fixture();
+  const path = "/assets/index-A1b2C3d4.js";
+  const source = "0123456789abcdefghijklmnopqrstuvwxyz";
+  await writeFile(`${options.webRoot}${path}`, source);
+  await writeFile(`${options.webRoot}${path}.gz`, gzipSync(source));
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: app.fetch,
+  });
+  cleanups.push(async () => {
+    await server.stop(true);
+  });
+  const response = await fetch(new URL(path, server.url), {
+    headers: {
+      host: new URL(options.origin).host,
+      range: "bytes=7-15",
+      "accept-encoding": "gzip",
+    },
+  });
+  expect(response.status).toBe(206);
+  expect(response.headers.get("content-encoding")).toBeNull();
+  expect(response.headers.get("content-range")).toBe("bytes 7-15/36");
+  expect(response.headers.get("content-length")).toBe("9");
+  expect(await response.text()).toBe("789abcdef");
+  const head = await request("/", { method: "HEAD" });
+  expect(head.headers.get("content-type")).toContain("text/html");
+  expect(head.headers.get("content-length")).toBe("15");
+  expect(await head.text()).toBe("");
 });
 
 test("rejects foreign hosts, cross-origin requests, and all mutations", async () => {

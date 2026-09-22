@@ -385,10 +385,47 @@ export function createApp(
             : undefined;
       if (relative && (request.method === "GET" || request.method === "HEAD")) {
         const file = Bun.file(`${options.webRoot}/${relative}`);
-        if (await file.exists())
-          return new Response(request.method === "HEAD" ? null : file, {
-            headers,
+        if (await file.exists()) {
+          const assetHeaders = new Headers(headers);
+          assetHeaders.set("Content-Type", file.type);
+          let body = file;
+          if (relative.startsWith("assets/")) {
+            // Only content-hashed build assets can outlive a deployment in cache.
+            if (/-[a-zA-Z0-9_-]{8,}\.(js|css|svg|woff2)$/.test(relative))
+              assetHeaders.set(
+                "Cache-Control",
+                "private, max-age=31536000, immutable",
+              );
+            assetHeaders.set("Vary", "Accept-Encoding");
+            const acceptsGzip = (request.headers.get("accept-encoding") ?? "")
+              .split(",")
+              .some((entry) => {
+                const [coding, ...parameters] = entry
+                  .trim()
+                  .toLowerCase()
+                  .split(";");
+                return (
+                  coding?.trim() === "gzip" &&
+                  parameters.every((parameter) => {
+                    const [name, value] = parameter.trim().split("=");
+                    return name !== "q" || Number(value) > 0;
+                  })
+                );
+              });
+            // Leave byte ranges on the identity file for Bun's range handling.
+            if (acceptsGzip && !request.headers.has("range")) {
+              const compressed = Bun.file(`${options.webRoot}/${relative}.gz`);
+              if (await compressed.exists()) {
+                body = compressed;
+                assetHeaders.set("Content-Encoding", "gzip");
+              }
+            }
+          }
+          assetHeaders.set("Content-Length", String(body.size));
+          return new Response(request.method === "HEAD" ? null : body, {
+            headers: assetHeaders,
           });
+        }
       }
       return new Response("Not found", { status: 404, headers });
     } catch {
