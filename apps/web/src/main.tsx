@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useRef, useState } from "react";
+import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { errorMessage, request } from "./api";
 import { GraphCanvas, type CanvasHandle } from "./graph-canvas";
@@ -21,7 +21,11 @@ function App() {
   const [focusId, setFocusId] = useState<string | null>(null);
   const [viewTick, setViewTick] = useState(0);
   const [evaluating, setEvaluating] = useState(false);
-  const view = graph ? visibleGraph(graph, showArchived) : null;
+  // A new object every render makes the canvas re-apply layout on camera ticks.
+  const view = useMemo(
+    () => (graph ? visibleGraph(graph, showArchived) : null),
+    [graph, showArchived],
+  );
   const matches = view && query.trim() ? searchNodes(view.nodes, query) : null;
   const matchIds = matches ? new Set(matches.map((node) => node.id)) : null;
   const hidden = focusRoot ? neighborhood(view, focusRoot) : null;
@@ -352,7 +356,9 @@ function App() {
             hidden={hidden}
             matches={matchIds}
             focusId={focusId}
-            onView={() => setViewTick((value) => value + 1)}
+            onView={() => {
+              if (mode) setViewTick((value) => value + 1);
+            }}
             onSelect={(next) => setMode(next)}
             onCreate={(at) => setMode({ kind: "create", ...at })}
             onLink={(source, target) => {
