@@ -75,16 +75,17 @@ provider key is recorded as unavailable with no suggestion.
 
 Verified on the integrated tree (published base + parent integration series + this suite + UI final,
 commit ee444406442dd9769517959872ad04e0a88c89d1). `bun run verify` exit 0: 41 package tests, 20
-acceptance tests (148 assertions), 13 deployment checks, 4 resume checks. Browser run: 12 pass,
+acceptance tests (149 assertions), 13 deployment checks, 4 resume checks. Browser run: 12 pass,
 1 fail, 0 blocked.
 
-| Finding                                                                                  | Status         | Evidence                                                                                                      |
-| ---------------------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------- |
-| Default camera after a live capture rendered the graph cramped with overlapping labels   | fixed          | five of five labels legible at default after a live capture; canvas change 5.6%; `final-01-after-capture.png` |
-| Contrast below WCAG AA on `.tagline`, `.node-list > .hint`, `.sidebar-foot > p`          | fixed          | axe no longer reports these                                                                                   |
-| `aria-label` on `div.graph-actions` without a role                                       | fixed          | axe no longer reports `aria-prohibited-attr`                                                                  |
-| Contrast below AA on `.node-card small` (project and status meta)                        | open, minor    | 4.22 (#637565 on #efeee4) and 4.00 on the selected card background #e6e9df, 10px normal, needs 4.5:1          |
-| One edge label truncated to "Re" where it meets the `Multi-machine skills blocker` label | open, cosmetic | `final-01-after-capture.png`                                                                                  |
+| Finding                                                                                                                                                    | Status                         | Evidence                                                                                                      |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| Default camera after a live capture rendered the graph cramped with overlapping labels                                                                     | fixed                          | five of five labels legible at default after a live capture; canvas change 5.6%; `final-01-after-capture.png` |
+| Contrast below WCAG AA on `.tagline`, `.node-list > .hint`, `.sidebar-foot > p`                                                                            | fixed                          | axe no longer reports these                                                                                   |
+| `aria-label` on `div.graph-actions` without a role                                                                                                         | fixed                          | axe no longer reports `aria-prohibited-attr`                                                                  |
+| Contrast below AA on `.node-card small` (project and status meta)                                                                                          | open, minor, with the UI owner | 4.22 (#637565 on #efeee4) and 4.00 on the selected card background #e6e9df, 10px normal, needs 4.5:1          |
+| Arrange with six nodes (the five-node fixture plus an unconnected intention) leaves the isolated node as an outlier and collapses the five connected nodes | open, with the UI owner        | found by the parent on the final workbench; parent artifact `workbench-final-parent-arranged.png`             |
+| One edge label truncated to "Re" where it meets the `Multi-machine skills blocker` label                                                                   | open, cosmetic                 | `final-01-after-capture.png`                                                                                  |
 
 Not findings: axe reports 15 `incomplete` colour-contrast nodes (the `○` status glyphs and text over
 the canvas). Axe cannot measure those; they are unverified, not failures.
@@ -92,6 +93,21 @@ the canvas). Axe cannot measure those; they are unverified, not failures.
 Narrow layout measured at 390x844: `scrollWidth` 390 = `innerWidth` 390 (no horizontal overflow),
 `graphBottom` 1059 = `inspectorTop` 1059 (inspector stacked with no gap), and the node list scrolls
 clear of the sticky footer (last card bottom 381.98 above footer top 387 after scrolling).
+
+## Correction: the 401/403 observation was stale
+
+An earlier note of mine reported that a credential-less `POST /api/commands` with no Origin returned
+403 `Forbidden origin`. That was measured against the backend checkpoint before the composed server.
+On the current tree it returns 401 `Owner authentication required`, and 403 only with a foreign
+Origin, because the cookie path short-circuits with 401 when no cookie is present, before the origin
+check runs. The security reviewer reached the same conclusion independently. The suite now asserts
+401 for the credential-less write and 403 for the foreign-origin write, and the earlier note to
+backend is superseded.
+
+## Deployment
+
+Not verified. No deployed instance has been exercised; the read-only deploy smoke
+(`deploy-smoke.ts`) runs only after the parent deploys, and this document must not claim otherwise.
 
 ## Not yet verifiable, and why
 

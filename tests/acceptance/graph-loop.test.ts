@@ -613,11 +613,23 @@ test("graph reads and writes fail closed without a credential", async () => {
       command: { type: "undo", revision: 0 },
     }),
   });
-  // An anonymous write with no Origin is refused as a forbidden cookie-auth
-  // attempt rather than as missing credentials; the property that matters is
-  // that it is refused and not applied. Reported to backend as a 401/403
-  // inconsistency against the documented contract.
-  expect([401, 403]).toContain(write.status);
+  // A credential-less write is unauthenticated: the cookie path short-circuits
+  // with 401 before the origin check runs, so the origin requirement only
+  // applies once a cookie is present.
+  expect(write.status).toBe(401);
+  const foreignOrigin = await active.fetchAnonymous("/api/commands", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: "https://attacker.example",
+    },
+    body: JSON.stringify({
+      requestId: "acceptance-anonymous-foreign",
+      expectedRevision: 0,
+      command: { type: "undo", revision: 0 },
+    }),
+  });
+  expect(foreignOrigin.status).toBe(403);
   const graph: GraphSnapshot = await readGraph(active);
   expect(graph.revision).toBe(1);
 });
