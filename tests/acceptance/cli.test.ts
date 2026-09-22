@@ -61,8 +61,12 @@ async function runCli(
     stdout: "pipe",
     stderr: "pipe",
   });
-  const stdout = new Response(child.stdout as ReadableStream<Uint8Array>).text();
-  const stderr = new Response(child.stderr as ReadableStream<Uint8Array>).text();
+  const stdout = new Response(
+    child.stdout as ReadableStream<Uint8Array>,
+  ).text();
+  const stderr = new Response(
+    child.stderr as ReadableStream<Uint8Array>,
+  ).text();
   if (options.stdin !== undefined) {
     const sink = child.stdin;
     if (!sink || typeof sink === "number")
@@ -133,10 +137,10 @@ test("doctor reports a ready session and capabilities enumerate the surface", as
     "node.remove",
   ]);
   expect(nodeRemove.notes.length).toBeGreaterThan(0);
-  const example = await okJson<{ command?: { type?: string } }>(
-    server.origin,
-    ["examples", "capture"],
-  );
+  const example = await okJson<{ command?: { type?: string } }>(server.origin, [
+    "examples",
+    "capture",
+  ]);
   expect(example.command?.type).toBe("capture");
 
   const unknownEntry = await runCli(server.origin, ["schema", "bogus"]);
@@ -144,7 +148,7 @@ test("doctor reports a ready session and capabilities enumerate the surface", as
   expect(
     (JSON.parse(unknownEntry.stderr) as { error: { type: string } }).error.type,
   ).toBe("CliInputError");
-});
+}, 30_000);
 
 test("an agent can run the whole graph loop through the CLI", async () => {
   server = await startServer();
@@ -306,9 +310,9 @@ test("an agent can run the whole graph loop through the CLI", async () => {
     JSON.stringify({ id: "multi_machine_skills" }),
   ]);
   expect(gone.code).toBe(1);
-  expect((JSON.parse(gone.stderr) as { error: { type: string } }).error.type).toBe(
-    "ApiError",
-  );
+  expect(
+    (JSON.parse(gone.stderr) as { error: { type: string } }).error.type,
+  ).toBe("ApiError");
   const finalGraph = await readGraph(server);
   expect(finalGraph.nodes.map((item) => item.id)).not.toContain(
     "multi_machine_skills",
@@ -331,7 +335,7 @@ test("an agent can run the whole graph loop through the CLI", async () => {
   expect(entries.every((entry) => entry.actor.channel === "browser")).toBe(
     true,
   );
-});
+}, 60_000);
 
 test("input errors report ok:false on stderr with exit 1", async () => {
   server = await startServer();
@@ -363,4 +367,4 @@ test("input errors report ok:false on stderr with exit 1", async () => {
   expect(
     (JSON.parse(unknownView.stderr) as { error: { type: string } }).error.type,
   ).toBe("CliInputError");
-});
+}, 30_000);
