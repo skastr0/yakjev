@@ -707,6 +707,90 @@ async function main(): Promise<void> {
     );
 
     await run(
+      "E4b Arrange with an unconnected intention keeps the cluster legible",
+      async () => {
+        const before = await readGraph(server);
+        await sendCommand(server, before.revision, {
+          type: "node.put",
+          node: {
+            id: "local_jev_experiment",
+            title: "Local Jev experiment",
+            description:
+              "Unconnected intention: a local experiment with no claimed relation yet.",
+            project: "synthetic-project",
+            status: "idea",
+            sources: [],
+          },
+        });
+        await waitForNodeTitle("Local Jev experiment", 10_000);
+        // A focused neighborhood from an earlier step would hide most nodes, so
+        // return to the whole graph before judging the layout.
+        await clickButton("Show whole graph");
+        await clickButton("← Show whole graph");
+        await frame();
+        if (!(await clickButton("Arrange unpinned"))) {
+          blocked("no 'Arrange unpinned' control found");
+        }
+        const deadline = Date.now() + 15_000;
+        let positioned = false;
+        while (Date.now() < deadline && !positioned) {
+          const current = await readGraph(server);
+          positioned = current.nodes
+            .filter((node) => node.id !== "local_jev_experiment")
+            .every((node) => node.position !== null);
+          if (!positioned) await Bun.sleep(250);
+        }
+        await frame();
+        await screenshot("04b-arranged-six-nodes");
+        const graph = await readGraph(server);
+        const cluster = graph.nodes.filter(
+          (node) => node.id !== "local_jev_experiment" && node.position,
+        );
+        const isolated = graph.nodes.find(
+          (node) => node.id === "local_jev_experiment",
+        );
+        if (cluster.length < 5 || !isolated?.position) {
+          throw new Error(
+            `Arrange did not save positions for all nodes (${cluster.length} cluster, isolated ${isolated?.position ? "positioned" : "unpositioned"})`,
+          );
+        }
+        const center = cluster.reduce(
+          (acc, node) => ({
+            x: acc.x + (node.position?.x ?? 0) / cluster.length,
+            y: acc.y + (node.position?.y ?? 0) / cluster.length,
+          }),
+          { x: 0, y: 0 },
+        );
+        const radius = Math.max(
+          ...cluster.map((node) =>
+            Math.hypot(
+              (node.position?.x ?? 0) - center.x,
+              (node.position?.y ?? 0) - center.y,
+            ),
+          ),
+        );
+        const isolatedDistance = Math.hypot(
+          isolated.position.x - center.x,
+          isolated.position.y - center.y,
+        );
+        const ratio = isolatedDistance / radius;
+        if (ratio > 5) {
+          throw new Error(
+            `the unconnected intention dominates the layout: isolated node is ${ratio.toFixed(1)}x the cluster radius (cluster radius ${radius.toFixed(1)}, isolated distance ${isolatedDistance.toFixed(1)})`,
+          );
+        }
+        // Honest limit: the arranged layout is a screen-space property. Sigma draws
+        // nodes and labels on the canvas, so neither DOM geometry nor the data
+        // ratio can judge overlap; this step records the numbers and the capture,
+        // and the layout itself is judged by inspecting the screenshot.
+        return {
+          detail: `positions saved for all nodes; cluster radius ${radius.toFixed(1)}, isolated distance ${isolatedDistance.toFixed(1)} (${ratio.toFixed(1)}x); layout quality is a visual check, see the capture`,
+          artifacts: [join(artifacts, "04b-arranged-six-nodes.png")],
+        };
+      },
+    );
+
+    await run(
       "E5 reframe requires -> would benefit from in the UI",
       async () => {
         if (!(await clickButton("Multi-machine skills blocker"))) {
