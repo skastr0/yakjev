@@ -16,7 +16,12 @@ import {
 } from "sigma/rendering";
 import type { Graph } from "@yakjev/protocol";
 import { rememberLayout } from "./layout";
-import { nodeColor, syncGraph, type Selection } from "./graph-model";
+import {
+  layoutBounds,
+  nodeColor,
+  syncGraph,
+  type Selection,
+} from "./graph-model";
 
 export type Point = { x: number; y: number };
 export type CanvasHandle = {
@@ -36,11 +41,6 @@ type Props = {
   onLink: (source: string, target: string) => void;
   onFocusNode: (id: string) => void;
   onView: () => void;
-};
-
-const FRAME = {
-  x: [-800, 800] as [number, number],
-  y: [-800, 800] as [number, number],
 };
 
 export const GraphCanvas = forwardRef<CanvasHandle, Props>(
@@ -75,8 +75,19 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     function fit() {
       const sigma = renderer.current;
       if (!sigma) return;
-      sigma.setCustomBBox(FRAME);
-      void sigma.getCamera().reset({ duration: 180 });
+      const points = graph.current.nodes().map((id) => ({
+        x: graph.current.getNodeAttribute(id, "x") as number,
+        y: graph.current.getNodeAttribute(id, "y") as number,
+      }));
+      const bounds = layoutBounds(points);
+      const padX = Math.max(120, (bounds.x[1] - bounds.x[0]) * 0.45);
+      const padY = Math.max(120, (bounds.y[1] - bounds.y[0]) * 0.45);
+      sigma.setCustomBBox({
+        x: [bounds.x[0] - padX, bounds.x[1] + padX],
+        y: [bounds.y[0] - padY, bounds.y[1] + padY],
+      });
+      const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      void sigma.getCamera().reset({ duration: reduced ? 0 : 180 });
     }
 
     useImperativeHandle(ref, () => ({
@@ -196,8 +207,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           },
         });
         renderer.current = sigma;
-        sigma.setCustomBBox(FRAME);
-        void sigma.getCamera().reset({ duration: 0 });
+        fit();
         let frame = 0;
         sigma.getCamera().on("updated", () => {
           cancelAnimationFrame(frame);
@@ -243,6 +253,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         });
         sigma.on("nodeDrag", ({ node }) => {
           if (link.current) return;
+          suppressClick.current = true;
           positions.current.set(node, {
             x: graph.current.getNodeAttribute(node, "x") as number,
             y: graph.current.getNodeAttribute(node, "y") as number,
