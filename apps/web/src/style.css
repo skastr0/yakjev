@@ -184,10 +184,18 @@ summary {
   background: #54794c;
 }
 .workspace-grid {
-  display: grid;
-  grid-template-columns: 245px minmax(320px, 1fr) 340px;
+  display: flex;
   flex: 1;
   min-height: 0;
+  position: relative;
+}
+.find {
+  flex: 0 1 240px;
+  width: 240px;
+  margin: 0;
+  min-height: 32px;
+  padding: 6px 8px;
+  font-size: 13px;
 }
 .node-sidebar {
   display: flex;
@@ -321,8 +329,81 @@ summary {
 }
 .graph-canvas {
   flex: 1;
-  min-height: 280px;
+  min-height: 0;
   position: relative;
+}
+.link-band {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+.link-band line {
+  stroke: #284e40;
+  stroke-width: 1.5;
+}
+.graph-fit {
+  position: absolute;
+  left: 12px;
+  bottom: 36px;
+  z-index: 3;
+  min-height: 28px;
+  font-size: 12px;
+}
+.graph-editor {
+  position: fixed;
+  z-index: 20;
+  width: min(300px, calc(100vw - 24px));
+  max-height: min(70vh, 420px);
+  overflow: auto;
+  padding: 12px;
+  background: #fffcf6;
+  border: 1px solid #c4ccbe;
+  border-radius: 6px;
+  box-shadow: 0 12px 32px #203d3524;
+}
+.graph-editor input,
+.graph-editor p {
+  margin: 6px 0;
+}
+.graph-editor .editor-claim {
+  font-weight: 550;
+}
+.graph-editor .editor-note {
+  color: #3d5246;
+}
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.chip-row button {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.chip-row button[aria-pressed="true"] {
+  background: #284e40;
+  border-color: #284e40;
+  color: #fffdf5;
+}
+.chip-row button[data-blocking="true"][aria-pressed="true"] {
+  background: #8a4e2e;
+  border-color: #8a4e2e;
+}
+.source-links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.source-links li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
 }
 .graph-legend {
   display: flex;
@@ -360,6 +441,9 @@ summary {
   right: 12%;
   max-width: 410px;
   pointer-events: none;
+}
+.canvas-message button {
+  pointer-events: auto;
 }
 .canvas-message h2 {
   font-size: clamp(28px, 3vw, 44px);
@@ -539,9 +623,15 @@ summary {
   font-size: 10px;
 }
 .notice {
-  padding: 9px 24px;
+  position: fixed;
+  z-index: 30;
+  left: 16px;
+  bottom: 16px;
+  max-width: min(440px, calc(100vw - 32px));
+  padding: 9px 14px;
   background: #e4ebdc;
-  border-bottom: 1px solid #c4cfba;
+  border: 1px solid #c4cfba;
+  border-radius: 6px;
   font-size: 12px;
   display: flex;
   align-items: center;

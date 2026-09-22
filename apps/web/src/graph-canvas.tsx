@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import { MultiDirectedGraph } from "graphology";
 import Sigma, { DEFAULT_STYLES } from "sigma";
 import {
@@ -8,452 +14,367 @@ import {
   pathLine,
   pathLoop,
 } from "sigma/rendering";
-import FA2Layout from "graphology-layout-forceatlas2/worker";
 import type { Graph } from "@yakjev/protocol";
-import {
-  layoutBounds,
-  syncGraph,
-  type LayoutPosition,
-  type Selection,
-} from "./graph-model";
+import { placeGraph } from "./layout";
+import { nodeColor, syncGraph, type Selection } from "./graph-model";
+
+export type Point = { x: number; y: number };
+export type CanvasHandle = {
+  anchorNode: (id: string) => Point | null;
+  anchorBetween: (source: string, target: string) => Point | null;
+  fit: () => void;
+};
 
 type Props = {
   data: Graph;
   selection: Selection;
-  visible: ReadonlySet<string> | null;
-  select: (selection: Selection) => void;
-  save: (positions: LayoutPosition[], revision: number) => Promise<boolean>;
-  report: (message: string) => void;
-  pending: boolean;
+  hidden: ReadonlySet<string> | null;
+  matches: ReadonlySet<string> | null;
+  focusId: string | null;
+  onSelect: (selection: Selection) => void;
+  onCreate: (at: Point) => void;
+  onLink: (source: string, target: string) => void;
+  onFocusNode: (id: string) => void;
+  onView: () => void;
 };
 
-export function GraphCanvas(props: Props) {
-  const container = useRef<HTMLDivElement>(null);
-  const graph = useRef(new MultiDirectedGraph());
-  const renderer = useRef<Sigma | null>(null);
-  const latest = useRef(props);
-  latest.current = props;
-  const layout = useRef<FA2Layout | null>(null);
-  const layoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dragTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const queued = useRef(new Map<string, LayoutPosition>());
-  const dragRevision = useRef(0);
-  const [renderError, setRenderError] = useState("");
-  const [arranging, setArranging] = useState(false);
+const FRAME = {
+  x: [-800, 800] as [number, number],
+  y: [-800, 800] as [number, number],
+};
 
-  function fitGraph(sigma: Sigma) {
-    const positions = graph.current.nodes().map((id) => ({
-      x: graph.current.getNodeAttribute(id, "x") as number,
-      y: graph.current.getNodeAttribute(id, "y") as number,
-    }));
-    // A nonempty, fixed coordinate frame also works before the first capture.
-    // Sigma v4 otherwise freezes the empty extent with autoRescale: "once".
-    const bounds = layoutBounds(positions);
-    const width = container.current?.clientWidth ?? 0;
-    if (width >= 500 && positions.length) {
-      // Reserve a right-hand label gutter in graph units. A wide initial graph
-      // otherwise puts its longest node label over an edge or beyond the canvas.
-      const gutter = Math.min(
-        240,
-        Math.max(
-          ...latest.current.data.nodes.map(
-            (node) => node.title.length * 8 + 20,
-          ),
-        ),
-      );
-      const unitsPerPixel = Math.max(
-        (bounds.x[1] - bounds.x[0]) / (width - 80 - gutter),
-        (bounds.y[1] - bounds.y[0]) /
-          Math.max(1, (container.current?.clientHeight ?? 0) - 80),
-      );
-      bounds.x[1] += gutter * unitsPerPixel;
-    }
-    sigma.setCustomBBox(bounds);
-    void sigma.getCamera().reset();
-  }
+export const GraphCanvas = forwardRef<CanvasHandle, Props>(
+  function GraphCanvas(props, ref) {
+    const container = useRef<HTMLDivElement>(null);
+    const graph = useRef(new MultiDirectedGraph());
+    const renderer = useRef<Sigma | null>(null);
+    const latest = useRef(props);
+    latest.current = props;
+    const band = useRef<SVGLineElement>(null);
+    const link = useRef<{
+      source: string;
+      x: number;
+      y: number;
+      moved: boolean;
+    } | null>(null);
+    const suppressClick = useRef(false);
+    const [renderError, setRenderError] = useState("");
 
-  useEffect(() => {
-    if (!container.current) return;
-    syncGraph(graph.current, latest.current.data);
-    try {
-      const sigma = new Sigma(graph.current, container.current, {
-        primitives: {
-          edges: {
-            paths: [pathLine(), pathCurved(), pathLoop()],
-            extremities: [extremityArrow()],
-            layers: [layerPlain()],
-          },
-        },
-        styles: {
-          nodes: [
-            DEFAULT_STYLES.nodes,
-            {
-              size: 9,
-              labelColor: "#203d35",
-              labelSize: 13,
-              labelPosition: (attributes) => {
-                const width = container.current?.clientWidth ?? 0;
-                if (width < 500) return "above";
-                const point = renderer.current?.graphToViewport({
-                  x: attributes.x as number,
-                  y: attributes.y as number,
-                });
-                return point &&
-                  point.x + String(attributes.label).length * 8 + 20 > width
-                  ? "left"
-                  : "right";
-              },
-              labelVisibility: (_attributes, _state, _graphState, graph) =>
-                graph.order <= 24 &&
-                (container.current?.clientWidth ?? 0) >= 500
-                  ? "visible"
-                  : "auto",
-              labelBackgroundColor: "#f5f2e9",
-              labelBackgroundPadding: 4,
-              cursor: "grab",
-            },
-            {
-              whenState: "isHighlighted",
-              then: {
-                labelVisibility: "visible",
-                backdropVisibility: "visible",
-                backdropColor: "#e7eedf",
-                backdropBorderColor: "#668477",
-                backdropBorderWidth: 1,
-                backdropShadowBlur: 0,
-              },
-            },
-          ],
-          edges: [
-            DEFAULT_STYLES.edges,
-            {
-              path: "straight",
-              parallelPath: "curved",
-              parallelSpread: (attributes) => {
-                const sigma = renderer.current;
-                if (!sigma) return 0.6;
-                const source = sigma.graphToViewport(
-                  graph.current.getNodeAttributes(attributes.source) as {
-                    x: number;
-                    y: number;
-                  },
-                );
-                const target = sigma.graphToViewport(
-                  graph.current.getNodeAttributes(attributes.target) as {
-                    x: number;
-                    y: number;
-                  },
-                );
-                // Short reciprocal edges need room for two labels. Long ones
-                // must not bow out beyond the node extent and clip offscreen.
-                const length = Math.hypot(
-                  source.x - target.x,
-                  source.y - target.y,
-                );
-                return Math.min(1.4, Math.max(0.6, 160 / Math.max(1, length)));
-              },
-              selfLoopPath: "loop",
-              head: "arrow",
-              labelColor: "#526459",
-              labelSize: 10,
-              labelPosition: "auto",
-              labelVisibility: (_attributes, _state, _graphState, graph) =>
-                graph.order <= 24 &&
-                (container.current?.clientWidth ?? 0) >= 500
-                  ? "visible"
-                  : "auto",
-              labelBackgroundColor: "#f5f2e9",
-              labelBackgroundPadding: 3,
-              cursor: "pointer",
-            },
-          ],
-        },
-        settings: {
-          autoRescale: "once",
-          itemSizesReference: "screen",
-          enableNodeDrag: true,
-          enableEdgeEvents: true,
-          renderEdgeLabels: true,
-          nodeLabelEvents: "extend",
-          edgeLabelEvents: "extend",
-          stagePadding: container.current.clientWidth < 500 ? 90 : 40,
-          labelDensity: 0.9,
-          minCameraRatio: 0.05,
-          maxCameraRatio: 15,
-          enableCameraRotation: false,
-          gestureTarget: "shared",
-        },
+    function clientAnchor(id: string): Point | null {
+      const sigma = renderer.current;
+      const box = container.current?.getBoundingClientRect();
+      if (!sigma || !box || !graph.current.hasNode(id)) return null;
+      const point = sigma.graphToViewport({
+        x: graph.current.getNodeAttribute(id, "x") as number,
+        y: graph.current.getNodeAttribute(id, "y") as number,
       });
-      renderer.current = sigma;
-      fitGraph(sigma);
-      sigma.on("clickNode", ({ node }) =>
-        latest.current.select({ kind: "node", id: node }),
-      );
-      sigma.on("clickEdge", ({ edge }) =>
-        latest.current.select(
-          edge.startsWith("suggestion:")
-            ? { kind: "suggestion", id: edge.slice(11) }
-            : { kind: "edge", id: edge },
-        ),
-      );
-      sigma.on("clickStage", () => latest.current.select(null));
-      sigma.on("nodeDragStart", (event) => {
-        if (latest.current.pending || layout.current?.isRunning()) {
-          event.preventSigmaDefault();
-          return;
-        }
-        if (queued.current.size === 0)
-          dragRevision.current = latest.current.data.revision;
-      });
-      sigma.on("nodeDragEnd", ({ node }) => {
-        queued.current.set(node, {
-          id: node,
-          x: graph.current.getNodeAttribute(node, "x"),
-          y: graph.current.getNodeAttribute(node, "y"),
-          pinned: true,
-        });
-        if (dragTimer.current) clearTimeout(dragTimer.current);
-        dragTimer.current = setTimeout(() => {
-          const positions = [...queued.current.values()];
-          queued.current.clear();
-          void latest.current.save(positions, dragRevision.current);
-        }, 500);
-      });
-      const resize = new ResizeObserver(() => {
-        sigma.setSetting(
-          "stagePadding",
-          (container.current?.clientWidth ?? 0) < 500 ? 90 : 40,
-        );
-        sigma.resize();
-        sigma.refresh();
-      });
-      resize.observe(container.current);
-      return () => {
-        resize.disconnect();
-        if (dragTimer.current) clearTimeout(dragTimer.current);
-        if (layoutTimer.current) clearTimeout(layoutTimer.current);
-        layout.current?.kill();
-        sigma.kill();
-        renderer.current = null;
-      };
-    } catch (cause) {
-      setRenderError(
-        cause instanceof Error ? cause.message : "Renderer unavailable",
-      );
+      return { x: box.left + point.x, y: box.top + point.y };
     }
-  }, []);
 
-  useEffect(() => {
-    if (layout.current?.isRunning()) {
-      layout.current.kill();
-      layout.current = null;
-      if (layoutTimer.current) clearTimeout(layoutTimer.current);
-      setArranging(false);
-      latest.current.report(
-        "Layout stopped because the graph changed. No positions were overwritten.",
-      );
+    function fit() {
+      const sigma = renderer.current;
+      if (!sigma) return;
+      sigma.setCustomBBox(FRAME);
+      void sigma.getCamera().reset({ duration: 180 });
     }
-    const wasEmpty = graph.current.order === 0;
-    syncGraph(graph.current, props.data);
-    // The first capture has no existing mental map. Later live edits must never
-    // change the camera, even when they add nodes outside the current viewport.
-    if (wasEmpty && graph.current.order > 0 && renderer.current)
-      fitGraph(renderer.current);
-  }, [props.data]);
 
-  useEffect(() => {
-    const sigma = renderer.current;
-    if (!sigma) return;
-    graph.current.forEachNode((id) =>
-      sigma.setNodeState(id, {
-        isHighlighted:
-          props.selection?.kind === "node" && props.selection.id === id,
-        isHidden: props.visible !== null && !props.visible.has(id),
-      }),
-    );
-    graph.current.forEachEdge((id, _attributes, source, target) =>
-      sigma.setEdgeState(id, {
-        isHighlighted:
-          props.selection !== null &&
-          (props.selection.kind === "edge"
-            ? props.selection.id === id
-            : props.selection.kind === "suggestion" &&
-              `suggestion:${props.selection.id}` === id),
-        isHidden:
-          props.visible !== null &&
-          (!props.visible.has(source) || !props.visible.has(target)),
-      }),
-    );
-  }, [props.selection, props.visible, props.data]);
-
-  async function saveAll() {
-    const positions = graph.current.nodes().map((id) => ({
-      id,
-      x: graph.current.getNodeAttribute(id, "x") as number,
-      y: graph.current.getNodeAttribute(id, "y") as number,
-      pinned: graph.current.getNodeAttribute(id, "fixed") === true,
-    }));
-    if (positions.length > 1000) {
-      props.report(
-        "Save layout supports 1,000 positions per command. Drag individual nodes to save larger graphs incrementally.",
-      );
-      return;
-    }
-    await props.save(positions, props.data.revision);
-  }
-
-  function arrange() {
-    if (props.data.nodes.length > 1000) {
-      props.report(
-        "Arrange is limited to 1,000 nodes. Focus a smaller graph and drag nodes individually.",
-      );
-      return;
-    }
-    const revision = props.data.revision;
-    setArranging(true);
-    layout.current?.kill();
-    layout.current = new FA2Layout(graph.current, {
-      settings: {
-        barnesHutOptimize: true,
-        strongGravityMode: true,
-        gravity: 1,
-        scalingRatio: 80,
-        slowDown: 8,
+    useImperativeHandle(ref, () => ({
+      anchorNode: clientAnchor,
+      anchorBetween: (source, target) => {
+        const from = clientAnchor(source);
+        const to = clientAnchor(target);
+        if (!from || !to) return null;
+        return { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
       },
-    });
-    layout.current.start();
-    layoutTimer.current = setTimeout(() => {
-      layout.current?.kill();
-      layout.current = null;
-      setArranging(false);
-      const positions = graph.current
-        .nodes()
-        .filter((id) => !graph.current.getNodeAttribute(id, "fixed"))
-        .map((id) => ({
-          id,
+      fit,
+    }));
+
+    function hideBand() {
+      band.current?.setAttribute("visibility", "hidden");
+    }
+
+    function hitNode(x: number, y: number) {
+      const sigma = renderer.current;
+      if (!sigma) return null;
+      const best = { id: "", distance: Number.POSITIVE_INFINITY };
+      graph.current.forEachNode((id) => {
+        const point = sigma.graphToViewport({
           x: graph.current.getNodeAttribute(id, "x") as number,
           y: graph.current.getNodeAttribute(id, "y") as number,
-          pinned: false,
-        }));
-      if (positions.length) void latest.current.save(positions, revision);
-      if (renderer.current) fitGraph(renderer.current);
-    }, 900);
-  }
+        });
+        const size =
+          (graph.current.getNodeAttribute(id, "size") as number) || 9;
+        const distance = Math.hypot(point.x - x, point.y - y);
+        if (distance <= size + 14 && distance < best.distance) {
+          best.id = id;
+          best.distance = distance;
+        }
+      });
+      return best.id || null;
+    }
 
-  const selectedEdge =
-    props.selection?.kind === "edge"
-      ? props.data.edges.find((edge) => edge.id === props.selection?.id)
-      : null;
-  return (
-    <div className="graph-shell">
-      <div
-        className="graph-actions"
-        role="group"
-        aria-label="Graph view controls"
-      >
-        <button
-          aria-label="Zoom in"
-          onClick={() => void renderer.current?.getCamera().zoomIn()}
-        >
-          +
-        </button>
-        <button
-          aria-label="Zoom out"
-          onClick={() => void renderer.current?.getCamera().zoomOut()}
-        >
-          −
-        </button>
-        <button
-          onClick={() => {
-            if (renderer.current) fitGraph(renderer.current);
-          }}
-        >
-          Fit graph
-        </button>
-        <button
-          disabled={props.pending || arranging || !props.data.nodes.length}
-          onClick={arrange}
-        >
-          {arranging ? "Arranging…" : "Arrange unpinned"}
-        </button>
-        <button
-          disabled={props.pending || arranging || !props.data.nodes.length}
-          onClick={() => void saveAll()}
-        >
-          Save layout
-        </button>
-      </div>
-      <div className="selection-caption" aria-live="polite">
-        {selectedEdge ? (
-          <>
-            <strong>
-              {selectedEdge.correction
-                ? "Corrected"
-                : selectedEdge.state === "disputed"
-                  ? "Disputed"
-                  : "Asserted"}
-            </strong>{" "}
-            ·{" "}
-            {
-              props.data.nodes.find((node) => node.id === selectedEdge.source)
-                ?.title
-            }{" "}
-            →{" "}
-            <strong>
+    useEffect(() => {
+      if (!container.current) return;
+      applyLayout(graph.current, latest.current.data);
+      try {
+        const sigma = new Sigma(graph.current, container.current, {
+          primitives: {
+            edges: {
+              paths: [pathLine(), pathCurved(), pathLoop()],
+              extremities: [extremityArrow()],
+              layers: [layerPlain()],
+            },
+          },
+          styles: {
+            nodes: [
+              DEFAULT_STYLES.nodes,
               {
-                props.data.taxonomy.relations.find(
-                  (relation) => relation.id === selectedEdge.relation,
-                )?.label
-              }
-            </strong>{" "}
-            →{" "}
-            {
-              props.data.nodes.find((node) => node.id === selectedEdge.target)
-                ?.title
-            }
-          </>
-        ) : (
-          "Select a node or arrow to inspect its context and rationale."
+                size: 9,
+                labelColor: "#203d35",
+                labelSize: 13,
+                labelPosition: (attributes) => {
+                  const width = container.current?.clientWidth ?? 0;
+                  if (width < 500) return "above";
+                  const point = renderer.current?.graphToViewport({
+                    x: attributes.x as number,
+                    y: attributes.y as number,
+                  });
+                  return point &&
+                    point.x + String(attributes.label).length * 8 + 20 > width
+                    ? "left"
+                    : "right";
+                },
+                labelVisibility: (_attributes, _state, _graphState, drawn) =>
+                  drawn.order <= 40 ? "visible" : "auto",
+                labelBackgroundColor: "#f5f2e9",
+                labelBackgroundPadding: 4,
+                cursor: "pointer",
+              },
+              {
+                whenState: "isHighlighted",
+                then: {
+                  labelVisibility: "visible",
+                  backdropVisibility: "visible",
+                  backdropColor: "#e7eedf",
+                },
+              },
+            ],
+            edges: [
+              DEFAULT_STYLES.edges,
+              {
+                size: 1.6,
+                labelColor: "#526459",
+                labelSize: 11,
+                labelVisibility: (_attributes, _state, _graphState, drawn) =>
+                  drawn.order <= 40 ? "visible" : "auto",
+                labelBackgroundColor: "#f5f2e9",
+                labelBackgroundPadding: 3,
+                cursor: "pointer",
+              },
+            ],
+          },
+          settings: {
+            autoRescale: false,
+            itemSizesReference: "screen",
+            enableNodeDrag: false,
+            enableEdgeEvents: true,
+            renderEdgeLabels: true,
+            nodeLabelEvents: "extend",
+            edgeLabelEvents: "extend",
+            stagePadding: 48,
+            labelDensity: 0.9,
+            minCameraRatio: 0.05,
+            maxCameraRatio: 8,
+            enableCameraRotation: false,
+            doubleClickZoomingRatio: 1,
+            gestureTarget: "shared",
+          },
+        });
+        renderer.current = sigma;
+        sigma.setCustomBBox(FRAME);
+        void sigma.getCamera().reset({ duration: 0 });
+        let frame = 0;
+        sigma.getCamera().on("updated", () => {
+          cancelAnimationFrame(frame);
+          frame = requestAnimationFrame(() => latest.current.onView());
+        });
+        sigma.on("clickNode", ({ node }) => {
+          if (suppressClick.current) {
+            suppressClick.current = false;
+            return;
+          }
+          latest.current.onSelect({ kind: "node", id: node });
+        });
+        sigma.on("clickEdge", ({ edge }) => {
+          latest.current.onSelect(
+            edge.startsWith("suggestion:")
+              ? { kind: "suggestion", id: edge.slice("suggestion:".length) }
+              : { kind: "edge", id: edge },
+          );
+        });
+        sigma.on("clickStage", () => latest.current.onSelect(null));
+        sigma.on("doubleClickNode", ({ node, event }) => {
+          event.preventSigmaDefault();
+          latest.current.onFocusNode(node);
+        });
+        sigma.on("doubleClickStage", ({ event }) => {
+          event.preventSigmaDefault();
+          const original = event.original;
+          if (!(original instanceof MouseEvent)) return;
+          latest.current.onCreate({ x: original.clientX, y: original.clientY });
+        });
+        sigma.on("downNode", ({ node, event }) => {
+          link.current = { source: node, x: event.x, y: event.y, moved: false };
+        });
+        sigma.on("moveBody", ({ event }) => {
+          const current = link.current;
+          if (!current) return;
+          if (Math.hypot(event.x - current.x, event.y - current.y) > 6) {
+            current.moved = true;
+            event.preventSigmaDefault();
+          }
+          const line = band.current;
+          if (!line || !current.moved) return;
+          line.setAttribute("x1", String(current.x));
+          line.setAttribute("y1", String(current.y));
+          line.setAttribute("x2", String(event.x));
+          line.setAttribute("y2", String(event.y));
+          line.setAttribute("visibility", "visible");
+        });
+        const finish = (point: { x: number; y: number }) => {
+          const current = link.current;
+          link.current = null;
+          hideBand();
+          if (!current?.moved) return;
+          const target = hitNode(point.x, point.y);
+          if (!target || target === current.source) return;
+          suppressClick.current = true;
+          latest.current.onLink(current.source, target);
+        };
+        sigma.on("upNode", ({ event }) => finish(event));
+        sigma.on("upEdge", ({ event }) => finish(event));
+        sigma.on("upStage", ({ event }) => finish(event));
+        const resize = new ResizeObserver(() => {
+          sigma.resize();
+          sigma.refresh();
+        });
+        resize.observe(container.current);
+        return () => {
+          cancelAnimationFrame(frame);
+          resize.disconnect();
+          sigma.kill();
+          renderer.current = null;
+        };
+      } catch (cause) {
+        setRenderError(
+          cause instanceof Error ? cause.message : "Renderer unavailable",
+        );
+      }
+    }, []);
+
+    useEffect(() => {
+      const wasEmpty = graph.current.order === 0;
+      applyLayout(graph.current, props.data);
+      if (wasEmpty && graph.current.order > 0) fit();
+    }, [props.data]);
+
+    useEffect(() => {
+      const sigma = renderer.current;
+      if (!sigma) return;
+      graph.current.forEachNode((id) => {
+        const dimmed = props.matches !== null && !props.matches.has(id);
+        const status = graph.current.getNodeAttribute(id, "status");
+        graph.current.setNodeAttribute(
+          id,
+          "color",
+          dimmed ? "#c5ccc0" : nodeColor(status),
+        );
+        sigma.setNodeState(id, {
+          isHighlighted:
+            (props.selection?.kind === "node" && props.selection.id === id) ||
+            (props.matches?.has(id) ?? false),
+          isHidden: props.hidden !== null && !props.hidden.has(id),
+        });
+      });
+      graph.current.forEachEdge((id, _attributes, source, target) =>
+        sigma.setEdgeState(id, {
+          isHighlighted:
+            props.selection !== null &&
+            (props.selection.kind === "edge"
+              ? props.selection.id === id
+              : props.selection.kind === "suggestion" &&
+                `suggestion:${props.selection.id}` === id),
+          isHidden:
+            props.hidden !== null &&
+            (!props.hidden.has(source) || !props.hidden.has(target)),
+        }),
+      );
+    }, [props.selection, props.hidden, props.matches, props.data]);
+
+    useEffect(() => {
+      const sigma = renderer.current;
+      if (!sigma || !props.focusId || !graph.current.hasNode(props.focusId))
+        return;
+      const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const next = {
+        x: graph.current.getNodeAttribute(props.focusId, "x") as number,
+        y: graph.current.getNodeAttribute(props.focusId, "y") as number,
+      };
+      if (reduced) sigma.getCamera().setState(next);
+      else void sigma.getCamera().animate(next, { duration: 180 });
+    }, [props.focusId, props.data]);
+
+    return (
+      <div className="graph-shell">
+        <div
+          ref={container}
+          className="graph-canvas"
+          role="application"
+          aria-label="Intention graph. Double-click to capture. Drag from one node to another to connect. Click an arrow to reframe it."
+          data-revision={props.data.revision}
+        />
+        <svg className="link-band" aria-hidden="true">
+          <line ref={band} visibility="hidden" />
+        </svg>
+        <button className="graph-fit" type="button" onClick={fit}>
+          Fit
+        </button>
+        {renderError && (
+          <div className="canvas-message" role="alert">
+            <h2>Graph renderer unavailable</h2>
+            <p>{renderError}</p>
+          </div>
         )}
+        {!props.data.nodes.length && !renderError && (
+          <div className="canvas-message">
+            <h2>Capture an intention.</h2>
+            <p>
+              Double-click the canvas. Drag between nodes to say how they
+              connect.
+            </p>
+            <button
+              className="primary"
+              type="button"
+              onClick={() =>
+                props.onCreate({
+                  x: window.innerWidth / 2,
+                  y: window.innerHeight / 2,
+                })
+              }
+            >
+              Capture intention
+            </button>
+          </div>
+        )}
+        <p className="graph-hint">
+          Double-click captures · drag between nodes connects · click an arrow
+          reframes · / finds · ⌘Z undoes
+        </p>
       </div>
-      <div
-        ref={container}
-        className="graph-canvas"
-        role="img"
-        aria-label={`Directed intention graph: ${props.data.nodes.length} nodes. Use the node list and relationship inspector for keyboard access.`}
-        data-revision={props.data.revision}
-      />
-      {renderError && (
-        <div className="canvas-message" role="alert">
-          <h2>Graph renderer unavailable</h2>
-          <p>{renderError}</p>
-          <p>The node list and inspector remain available.</p>
-        </div>
-      )}
-      {!props.data.nodes.length && !renderError && (
-        <div className="canvas-message">
-          <p className="eyebrow">A PLACE FOR THE WHOLE TANGLE</p>
-          <h2>
-            Keep the idea.
-            <br />
-            Question the dependency.
-          </h2>
-          <p>
-            Capture an intention to begin. Add context and a route back to its
-            source; connect it when you are ready.
-          </p>
-        </div>
-      )}
-      <div className="graph-legend">
-        <span>→ claimed direction</span>
-        <span className="blocking-dot">Requires</span>
-        <span className="optional-dot">Optional connection</span>
-        <span className="suggestion-dot">Suggestion ≠ assertion</span>
-      </div>
-      <p className="graph-hint">
-        Drag to place &amp; pin · scroll to zoom · size and proximity are not
-        priority
-      </p>
-    </div>
-  );
+    );
+  },
+);
+
+function applyLayout(target: MultiDirectedGraph, data: Graph) {
+  syncGraph(target, data, placeGraph(data));
 }
