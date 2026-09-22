@@ -1,185 +1,36 @@
 // The only place acceptance tests encode the wire contract.
 //
-// Mirrors the frozen protocol published by the backend owner
-// (`packages/protocol/src/graph.ts` in thread T-01a0c770-931d-75f8-bc3e-5d687825e9a5).
-// These are structural black-box types on purpose: acceptance asserts observable
-// HTTP/SSE behavior and never imports owner internals.
+// The types are imported from the published protocol package rather than copied:
+// a black-box test may depend on the public contract, and deriving them here
+// means this file cannot silently drift from the schema it asserts. The payload
+// builders and the independently written assertions live in the tests.
+import * as protocol from "@yakjev/protocol";
 import type { ServerHandle } from "./harness";
 
-export type Id = string;
-export type Actor = { readonly id: Id; readonly channel: Channel };
-export type Channel = "browser" | "mcp" | "system";
-export type Provenance = {
-  readonly actor: Actor;
-  readonly at: string;
-  readonly revision: number;
-};
-export type Source = { readonly uri: string; readonly label: string };
-export type Position = {
-  readonly x: number;
-  readonly y: number;
-  readonly pinned: boolean;
-};
-export type NodeStatus = "idea" | "active" | "done" | "archived";
-
-export type NodeInput = {
-  readonly id: Id;
-  readonly title: string;
-  readonly description: string;
-  readonly project: string;
-  readonly status: NodeStatus;
-  readonly sources: readonly Source[];
-};
-
-export type GraphNode = NodeInput & {
-  readonly position: Position | null;
-  readonly created: Provenance;
-  readonly updated: Provenance;
-};
-
-export type Relation = {
-  readonly id: Id;
-  readonly label: string;
-  readonly definition: string;
-  readonly blocking: boolean;
-};
-export type Taxonomy = {
-  readonly version: number;
-  readonly relations: readonly Relation[];
-};
-
-export type EdgeInput = {
-  readonly id: Id;
-  readonly source: Id;
-  readonly target: Id;
-  readonly relation: Id;
-  readonly rationale: string;
-};
-export type Assertion = {
-  readonly relation: Id;
-  readonly rationale: string;
-  readonly provenance: Provenance;
-};
-export type Correction = Assertion & {
-  readonly state: "asserted" | "disputed";
-};
-export type EdgeState = "asserted" | "disputed";
-export type GraphEdge = EdgeInput & {
-  readonly state: EdgeState;
-  readonly assertion: Assertion;
-  readonly correction: Correction | null;
-  readonly updated: Provenance;
-};
-
-export type CaptureInput = {
-  readonly id: Id;
-  readonly text: string;
-  readonly sources: readonly Source[];
-  readonly nodeIds: readonly Id[];
-};
-export type Capture = CaptureInput & { readonly provenance: Provenance };
-
-export type SuggestionInput = {
-  readonly id: Id;
-  readonly source: Id;
-  readonly target: Id;
-  readonly relation: Id;
-  readonly rationale: string;
-  readonly confidence: number | null;
-  readonly evidence: readonly string[];
-  readonly model: string;
-  readonly promptVersion: string;
-  readonly taxonomyVersion: number;
-  readonly basedOnRevision: number;
-};
-export type Suggestion = SuggestionInput & {
-  readonly status: "pending" | "accepted" | "rejected";
-  readonly provenance: Provenance;
-  readonly decision: Provenance | null;
-};
-
-export type GraphSnapshot = {
-  readonly revision: number;
-  readonly nodes: readonly GraphNode[];
-  readonly edges: readonly GraphEdge[];
-  readonly captures: readonly Capture[];
-  readonly suggestions: readonly Suggestion[];
-  readonly taxonomy: Taxonomy;
-};
-
-export type Command =
-  | {
-      readonly type: "capture";
-      readonly capture: CaptureInput;
-      readonly nodes: readonly NodeInput[];
-      readonly edges: readonly EdgeInput[];
-    }
-  | { readonly type: "node.put"; readonly node: NodeInput }
-  | { readonly type: "edge.put"; readonly edge: EdgeInput }
-  | {
-      readonly type: "edge.reframe";
-      readonly id: Id;
-      readonly relation: Id;
-      readonly rationale: string;
-      readonly state: EdgeState;
-    }
-  | {
-      readonly type: "layout.set";
-      readonly positions: readonly ({ readonly id: Id } & Position)[];
-    }
-  | {
-      readonly type: "taxonomy.replace";
-      readonly relations: readonly Relation[];
-    }
-  | { readonly type: "suggestion.record"; readonly suggestion: SuggestionInput }
-  | {
-      readonly type: "suggestion.decide";
-      readonly id: Id;
-      readonly decision: "accept" | "reject";
-      readonly rationale: string;
-    }
-  | { readonly type: "undo"; readonly revision: number };
-
-export type CommandRequest = {
-  readonly requestId: Id;
-  readonly expectedRevision: number;
-  readonly command: Command;
-};
-
-export type Receipt = {
-  readonly requestId: Id;
-  readonly revision: number;
-  readonly type: string;
-  readonly actor: Actor;
-  readonly at: string;
-};
-export type CommandResult = {
-  readonly receipt: Receipt;
-  readonly replayed: boolean;
-};
-export type HistoryEntry = Receipt & { readonly command: Command };
-
-export type Neighborhood = {
-  readonly root: Id;
-  readonly revision: number;
-  readonly nodes: readonly GraphNode[];
-  readonly edges: readonly GraphEdge[];
-  readonly blockingEdges: readonly Id[];
-  readonly cycleDetected: boolean;
-  readonly interpretation: string;
-};
-
-export type ApiError = {
-  readonly error:
-    | "Unauthorized"
-    | "Forbidden"
-    | "Invalid"
-    | "NotFound"
-    | "Conflict"
-    | "StorageError";
-  readonly message: string;
-  readonly currentRevision?: number;
-};
+export type Id = typeof protocol.Id.Type;
+export type Revision = typeof protocol.Revision.Type;
+export type Source = typeof protocol.Source.Type;
+export type Actor = protocol.Actor;
+export type Provenance = typeof protocol.Provenance.Type;
+export type Position = typeof protocol.Position.Type;
+export type NodeInput = typeof protocol.NodeInput.Type;
+export type GraphNode = protocol.Node;
+export type Relation = typeof protocol.Relation.Type;
+export type Taxonomy = protocol.Taxonomy;
+export type EdgeInput = typeof protocol.EdgeInput.Type;
+export type GraphEdge = protocol.Edge;
+export type Capture = typeof protocol.Capture.Type;
+export type CaptureInput = typeof protocol.CaptureInput.Type;
+export type SuggestionInput = protocol.SuggestionInput;
+export type Suggestion = typeof protocol.Suggestion.Type;
+export type GraphSnapshot = protocol.Graph;
+export type Command = protocol.Command;
+export type CommandRequest = protocol.CommandRequest;
+export type Receipt = protocol.Receipt;
+export type CommandResult = protocol.CommandResult;
+export type HistoryEntry = protocol.HistoryEntry;
+export type Neighborhood = protocol.Neighborhood;
+export type ApiError = typeof protocol.ApiError.Type;
 
 export type Failure = { readonly status: number; readonly body: unknown };
 
@@ -189,9 +40,9 @@ export async function readGraph(server: ServerHandle): Promise<GraphSnapshot> {
 
 export async function sendCommand(
   server: ServerHandle,
-  expectedRevision: number,
+  expectedRevision: Revision,
   command: Command,
-  requestId: string = nextRequestId(),
+  requestId: Id = nextRequestId(),
 ): Promise<CommandResult> {
   const request: CommandRequest = { requestId, expectedRevision, command };
   return server.json<CommandResult>("/api/commands", {
@@ -204,9 +55,9 @@ export async function sendCommand(
 /** POST that is expected to fail; returns status and parsed body. */
 export async function sendCommandExpectingFailure(
   server: ServerHandle,
-  expectedRevision: number,
+  expectedRevision: Revision,
   command: Command,
-  requestId: string = nextRequestId(),
+  requestId: Id = nextRequestId(),
 ): Promise<Failure> {
   const request: CommandRequest = { requestId, expectedRevision, command };
   const response = await server.fetch("/api/commands", {
@@ -266,7 +117,7 @@ export async function exportAll(
 let counter = 0;
 
 /** Unique request id per attempt, so idempotency is only tested deliberately. */
-export function nextRequestId(prefix = "acceptance"): string {
+export function nextRequestId(prefix = "acceptance"): Id {
   counter += 1;
   return `${prefix}-${Date.now()}-${counter}`;
 }

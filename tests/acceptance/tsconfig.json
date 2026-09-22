@@ -1,4 +1,9 @@
 {
   "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@yakjev/protocol": ["../../packages/protocol/src/index.ts"]
+    }
+  },
   "include": ["./**/*.ts"]
 }

@@ -278,7 +278,15 @@ export async function startServer(
   let stdout = collect(child.stdout as ReadableStream<Uint8Array>);
   let stderr = collect(child.stderr as ReadableStream<Uint8Array>);
   const logs = () => `${stdout()}\n${stderr()}`.trim();
-  await waitForReady(origin, child, logs);
+  try {
+    await waitForReady(origin, child, logs);
+  } catch (error) {
+    // A failed startup must not leak the child process or its disposable
+    // directory: the caller never receives a handle it could stop.
+    await stopChild(child);
+    await rm(dataDir, { recursive: true, force: true });
+    throw error;
+  }
 
   const handle: ServerHandle = {
     origin,
@@ -362,7 +370,14 @@ export async function startServer(
       child = startChild(port, dataDir, extraEnv);
       stdout = collect(child.stdout as ReadableStream<Uint8Array>);
       stderr = collect(child.stderr as ReadableStream<Uint8Array>);
-      await waitForReady(origin, child, logs);
+      try {
+        await waitForReady(origin, child, logs);
+      } catch (error) {
+        // Keep the data directory: the caller may still want to inspect the
+        // graph it was verifying. Only the failed child is cleaned up.
+        await stopChild(child);
+        throw error;
+      }
     },
     async stop() {
       await stopChild(child);
