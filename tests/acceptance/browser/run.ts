@@ -770,13 +770,19 @@ async function main(): Promise<void> {
         if (!(await clickButton("Evaluate with Jev"))) {
           blocked("no 'Evaluate with Jev' control found");
         }
-        const deadline = Date.now() + 15_000;
+        // An unavailable evaluation is a recorded result, so the panel reports it
+        // as a status (with the failure code), not as a request error.
+        const deadline = Date.now() + 20_000;
         let message: string | undefined;
         while (Date.now() < deadline && !message) {
-          message =
+          const inspector =
             (await js<string | null>(
-              "document.querySelector('.inspector [role=alert]')?.textContent ?? null",
-            )) ?? undefined;
+              "document.querySelector('.inspector')?.innerText ?? null",
+            )) ?? "";
+          const match = inspector.match(
+            /[^\n]*(unavailable|not configured)[^\n]*/i,
+          );
+          message = match?.[0]?.trim() || undefined;
           if (!message) await Bun.sleep(250);
         }
         await screenshot("07b-jev-unavailable");

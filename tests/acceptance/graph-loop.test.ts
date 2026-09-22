@@ -6,6 +6,7 @@ import {
   history,
   neighborhood,
   nodeById,
+  nextRequestId,
   nodeByTitle,
   readGraph,
   search,
@@ -544,6 +545,53 @@ test("a stale evaluation is refused rather than silently applied", async () => {
   expect(
     edgeBetween(graph, suggestion.source, suggestion.target),
   ).toBeUndefined();
+});
+
+test("an evaluation without a provider key is unavailable and changes nothing", async () => {
+  const { server: active, revision } = await seeded();
+  const before = await readGraph(active);
+  const posted = await active.json<{ evaluationId: string }>(
+    "/api/evaluations",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        requestId: nextRequestId("acceptance-eval"),
+        expectedRevision: revision,
+        query: "synthetic query with no provider key configured",
+      }),
+    },
+  );
+  expect(typeof posted.evaluationId).toBe("string");
+  expect(posted.evaluationId.length).toBeGreaterThan(0);
+
+  const fetched = await active.json<{
+    result: { status?: string; failure?: { code?: string; message?: string } };
+  }>(`/api/evaluations/${encodeURIComponent(posted.evaluationId)}`);
+  expect(fetched.result.status).toBe("unavailable");
+  expect(fetched.result.failure?.code).toBeTruthy();
+
+  const after = await readGraph(active);
+  const summary = after.evaluations.find(
+    (entry) => entry.id === posted.evaluationId,
+  );
+  expect(summary?.status).toBe("unavailable");
+  // The graph carries a summary, not the raw provider payload.
+  expect(Object.keys(summary ?? {}).sort()).toEqual(
+    [
+      "basedOnRevision",
+      "id",
+      "inputHash",
+      "provenance",
+      "status",
+      "taxonomyVersion",
+    ].sort(),
+  );
+  expect(JSON.stringify(after.evaluations)).not.toContain("rawResponse");
+  // No fabricated judgment: no suggestions, no edges, no node changes.
+  expect(after.suggestions).toHaveLength(before.suggestions.length);
+  expect(after.edges).toHaveLength(before.edges.length);
+  expect(after.nodes).toHaveLength(before.nodes.length);
 });
 
 test("graph reads and writes fail closed without a credential", async () => {
