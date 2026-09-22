@@ -10,6 +10,7 @@ Agents without MCP support (e.g. hermes) can use the yakjev CLI instead; see doc
 - `graph_command`: same envelope as `POST /api/commands`.
 - `graph_discover`: pure `discover()`. Not semantic search.
 - `graph_evaluate`: `Evaluations.evaluate`, the same operation as `POST /api/evaluations`.
+- `graph_preview`: `Evaluations.preview`, the same operation as `POST /api/jev/preview`. Jev's read of a draft or node against the graph (relatedness, same intention, relation, direction, connect). Writes nothing; use it to spot an existing restatement before capturing.
 
 Actor is `{ id, channel: "mcp" }` from the bearer. Arguments named `actor`, `user`, `role`, or `channel` are rejected. Evaluation reads use `Store.evaluation`, not the summary on the graph snapshot.
 

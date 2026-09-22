@@ -2,6 +2,8 @@ import {
   CommandRequest,
   CommandResult,
   EvaluationRequest,
+  Preview,
+  PreviewRequest,
   EvaluationResult,
   type Actor,
   type Edge,
@@ -111,6 +113,19 @@ export const YakjevToolkit = Toolkit.make(
     failureMode: "return",
   })
     .annotate(Tool.Destructive, true)
+    .annotate(Tool.Idempotent, true)
+    .annotate(Tool.OpenWorld, true)
+    .annotate(Tool.Strict, true),
+  Tool.make("graph_preview", {
+    description:
+      "Ask Jev how an intention relates to the graph before or after capturing it. Give draft {title, description?} for text not yet captured, or focusNodeId for an existing node; includeNodeIds forces candidates in. Returns per-candidate relatedness, match, same (a restatement), relation, direction, and connect (what Jev would connect). Writes nothing. Captures are auto-connected anyway; use this to avoid duplicating an existing intention.",
+    parameters: PreviewRequest,
+    success: Preview,
+    failure: ToolFailure,
+    failureMode: "return",
+  })
+    .annotate(Tool.Readonly, true)
+    .annotate(Tool.Destructive, false)
     .annotate(Tool.Idempotent, true)
     .annotate(Tool.OpenWorld, true)
     .annotate(Tool.Strict, true),
@@ -256,6 +271,19 @@ export const toolkitLayer = (actor: () => Effect.Effect<Actor, ToolFailure>) =>
               yield* store.read.pipe(Effect.mapError(mapFailure)),
               input,
             );
+          }),
+        graph_preview: (input) =>
+          Effect.gen(function* () {
+            yield* rejectActorClaims(input);
+            const who = yield* actor();
+            if (who.channel !== "mcp") {
+              return yield* Effect.fail(
+                invalid("MCP tools require an mcp actor."),
+              );
+            }
+            return yield* evaluations
+              .preview(input)
+              .pipe(Effect.mapError(mapFailure));
           }),
         graph_evaluate: (input) =>
           Effect.gen(function* () {

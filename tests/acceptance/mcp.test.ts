@@ -46,6 +46,12 @@ test("MCP requires a bearer before JSON-RPC and lists the shared tools", async (
   expect(tools).toContain("graph_read");
   expect(tools).toContain("graph_discover");
   expect(tools).toContain("graph_evaluate");
+  expect(tools).toContain("graph_preview");
+  // No provider key in acceptance: an honest unavailable, and nothing written.
+  const preview = await callTool(server, session, "graph_preview", {
+    draft: { title: "Ship the release" },
+  });
+  expect(JSON.stringify(preview)).toContain("unavailable");
 });
 
 test("an MCP capture is the same graph HTTP and the UI read", async () => {
