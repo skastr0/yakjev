@@ -208,12 +208,8 @@ describe("hybrid retrieval", () => {
       "lexical",
     );
     expect(
-      ranked.find((candidate) => candidate.nodeId === "unrelated")?.via,
-    ).toBe("coverage");
-    expect(
-      ranked.find((candidate) => candidate.nodeId === "unrelated")
-        ?.semanticScore,
-    ).toBe(0);
+      ranked.find((candidate) => candidate.nodeId === "unrelated"),
+    ).toMatchObject({ via: "semantic", semanticScore: 0 });
   });
 
   test("a slightly higher cosine outranks a high-overlap word trap", async () => {
@@ -254,6 +250,51 @@ describe("hybrid retrieval", () => {
     expect(ranked[0]?.semanticScore).toBeCloseTo(0.67718, 4);
     expect(ranked[1]?.semanticScore).toBeCloseTo(0.67092, 4);
     expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score);
+  });
+
+  test("via semantic is the semantic top 24 or a cosine above the field", async () => {
+    const along = (value: number): readonly number[] => [
+      value,
+      Math.sqrt(1 - value * value),
+    ];
+    const client: EmbeddingClient = {
+      embed: async (texts) =>
+        texts.map((text) => {
+          const match = text.match(/Item (\d+)/);
+          if (!match) return [1, 0] as const;
+          return along(Number(match[1]) < 24 ? 0.9 : 0.55);
+        }),
+    };
+    const focus = node("focus", "Qqq focus phrase", "");
+    const ranked = await Effect.runPromise(
+      hybridRetrieval(client).rank({
+        graph: graph([
+          focus,
+          ...Array.from({ length: 30 }, (_, index) =>
+            node(
+              `item-${index.toString().padStart(2, "0")}`,
+              `Item ${index}`,
+              "",
+            ),
+          ),
+        ]),
+        focus: { id: "focus", text: textOf(focus) },
+        explicit: new Set(),
+        only: false,
+      }),
+    );
+    expect(
+      ranked.find((candidate) => candidate.nodeId === "item-00")?.via,
+    ).toBe("semantic");
+    expect(
+      ranked.find((candidate) => candidate.nodeId === "item-23")?.via,
+    ).toBe("semantic");
+    expect(
+      ranked.find((candidate) => candidate.nodeId === "item-24")?.via,
+    ).toBe("coverage");
+    expect(
+      ranked.find((candidate) => candidate.nodeId === "item-24")?.semanticScore,
+    ).toBeGreaterThan(0.4);
   });
 
   test("explicit and neighbor bands stay above semantic", async () => {

@@ -45,17 +45,24 @@ const words = (value: string) =>
 const nodeText = (node: Node) => `${node.title} ${node.description}`;
 const compareId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
-// Explicit and neighbor bands stay wider than a cosine (0..1). Lexical Jaccard
-// orders nodes only while embeddings are absent. Once every vector is cached,
-// cosine is the rank signal and Jaccard is a tie-break too small to overturn it.
+// Explicit and neighbor bands stay wider than any reciprocal-rank fusion
+// score, so those nodes stay above everyone else. Lexical Jaccard orders
+// nodes only while embeddings are absent.
 const scoreOf = (
   lexicalScore: number,
   isExplicit: boolean,
   isNeighbour: boolean,
 ) => (isExplicit ? 16 : 0) + (isNeighbour ? 4 : 0) + lexicalScore;
-// A full Jaccard is 1. Weighting it by this keeps it under the live gap that
-// mattered: paraphrase cosine 0.677 versus trap cosine 0.671.
-const LEXICAL_TIE = 1e-3;
+// Reciprocal rank fusion below the bands. k=60. Lexical weight is far below 1
+// because nomic cosines are compressed: a paraphrase at 0.677 against a trap
+// at 0.671 is only one semantic rank apart, and w=0.5 would let lexical rank 1
+// outscore that. 0.01 keeps semantic rank primary and still breaks ties.
+const RRF_K = 60;
+const RRF_LEXICAL_WEIGHT = 0.01;
+// via:'semantic' is relative to this query: semantic rank in the top 24, or a
+// cosine at least one standard deviation above the candidate mean. An absolute
+// 0.4 floor is not used; nomic exceeds it for almost every node.
+const SEMANTIC_TOP_N = 24;
 
 /** Explicit, then graph neighbours, then word-overlap (Jaccard), then id. */
 export function lexicalRank(input: RankInput): RankedCandidate[] {
@@ -109,8 +116,6 @@ export const lexicalRetrieval: RetrievalService = {
   rank: (input) => Effect.succeed(lexicalRank(input)),
 };
 
-// Below this cosine a zero-overlap node stays coverage and the packer can drop it.
-const SEMANTIC_FLOOR = 0.4;
 // First rank waits this long, then returns lexical order. The embedding
 // requests keep running. A cold 1,000-node graph is about 11 sequential
 // batches, so that first call does not finish inside this budget.
@@ -208,24 +213,67 @@ function hybridRanker(client: EmbeddingClient, budgetMs: number) {
   ): RankedCandidate[] => {
     const focusVector = cache.get(focusHash);
     if (!focusVector) return lexical;
-    const fused = lexical.map((candidate) => {
+    const rows = lexical.map((candidate) => {
       const vector = cache.get(hashes.get(candidate.nodeId) ?? "");
       const semanticScore = vector ? cosine(focusVector, vector) : null;
+      return { candidate, semanticScore };
+    });
+    const byId = (left: string, right: string) => compareId(left, right);
+    const semanticOrder = rows
+      .filter(
+        (row): row is { candidate: RankedCandidate; semanticScore: number } =>
+          row.semanticScore !== null,
+      )
+      .sort(
+        (left, right) =>
+          right.semanticScore - left.semanticScore ||
+          byId(left.candidate.nodeId, right.candidate.nodeId),
+      );
+    const semanticRank = new Map(
+      semanticOrder.map((row, index) => [row.candidate.nodeId, index + 1]),
+    );
+    const lexicalOrder = rows
+      .filter((row) => row.candidate.lexicalScore > 0)
+      .sort(
+        (left, right) =>
+          right.candidate.lexicalScore - left.candidate.lexicalScore ||
+          byId(left.candidate.nodeId, right.candidate.nodeId),
+      );
+    const lexicalRank = new Map(
+      lexicalOrder.map((row, index) => [row.candidate.nodeId, index + 1]),
+    );
+    const cosines = semanticOrder.map((row) => row.semanticScore);
+    const mean =
+      cosines.reduce((sum, value) => sum + value, 0) / (cosines.length || 1);
+    const deviation = Math.sqrt(
+      cosines.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+        (cosines.length || 1),
+    );
+    const relativeFloor = mean + deviation;
+    const bandOf = (candidate: RankedCandidate) => {
+      const raw = candidate.score - candidate.lexicalScore;
+      if (raw > 19) return 20;
+      if (raw > 15) return 16;
+      if (raw > 3) return 4;
+      return 0;
+    };
+    const fused = rows.map(({ candidate, semanticScore }) => {
       if (semanticScore === null) return candidate;
+      const sRank = semanticRank.get(candidate.nodeId) ?? cosines.length;
+      const lRank = lexicalRank.get(candidate.nodeId);
+      const fusedScore =
+        1 / (RRF_K + sRank) +
+        (lRank === undefined ? 0 : RRF_LEXICAL_WEIGHT / (RRF_K + lRank));
       const via =
-        candidate.via === "coverage" && semanticScore >= SEMANTIC_FLOOR
+        candidate.via === "coverage" &&
+        (sRank <= SEMANTIC_TOP_N || semanticScore >= relativeFloor)
           ? "semantic"
           : candidate.via;
-      const rawBand = candidate.score - candidate.lexicalScore;
-      const band = rawBand > 19 ? 20 : rawBand > 15 ? 16 : rawBand > 3 ? 4 : 0;
       return {
         ...candidate,
         via,
         semanticScore,
-        score:
-          band +
-          Math.max(0, semanticScore) +
-          candidate.lexicalScore * LEXICAL_TIE,
+        score: bandOf(candidate) + fusedScore,
       };
     });
     fused.sort((a, b) => b.score - a.score || compareId(a.nodeId, b.nodeId));
