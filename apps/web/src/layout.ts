@@ -140,12 +140,48 @@ export function placeGraph(graph: Graph): Map<string, Point> {
   return placed;
 }
 
-// A newcomer sits near the nodes it already touches. Existing coordinates stay
-// put: recomputing the whole map on every capture is what throws the canvas.
+const LABEL_CHAR = 7;
+const LABEL_HALF = 11;
+
+export function labelContains(
+  label: { x: number; y: number; text: string },
+  point: { x: number; y: number },
+) {
+  const right = label.x + 14 + label.text.length * LABEL_CHAR;
+  return (
+    point.x >= label.x + 8 &&
+    point.x <= right &&
+    point.y >= label.y - LABEL_HALF &&
+    point.y <= label.y + LABEL_HALF
+  );
+}
+
+function placementBlocked(
+  x: number,
+  y: number,
+  label: string,
+  obstacles: readonly { x: number; y: number; label: string }[],
+) {
+  for (const obstacle of obstacles) {
+    if (Math.hypot(x - obstacle.x, y - obstacle.y) < 36) return true;
+    if (labelContains({ ...obstacle, text: obstacle.label }, { x, y }))
+      return true;
+    if (labelContains({ x, y, text: label }, obstacle)) return true;
+  }
+  return false;
+}
+
+// A newcomer sits near the nodes it already touches, off their labels.
+// Existing coordinates stay put: recomputing the whole map on every capture
+// is what throws the canvas. Labels extend to the right in screen space.
 export function placeNewcomer(
   id: string,
   neighbors: readonly Point[],
   fallback: readonly Point[] = [],
+  options?: {
+    label?: string;
+    obstacles?: readonly { x: number; y: number; label: string }[];
+  },
 ): Point {
   const anchors = neighbors.length > 0 ? neighbors : fallback;
   let hash = 2166136261;
@@ -153,6 +189,8 @@ export function placeNewcomer(
     hash = Math.imul(hash ^ char.charCodeAt(0), 16777619) >>> 0;
   const angle = ((hash % 360) * Math.PI) / 180;
   const distance = 180;
+  const label = options?.label ?? "";
+  const obstacles = options?.obstacles ?? [];
   if (anchors.length === 0)
     return { x: Math.cos(angle) * distance, y: Math.sin(angle) * distance };
   let cx = 0;
@@ -172,6 +210,14 @@ export function placeNewcomer(
       anchor = point;
     }
   }
+  for (let step = 0; step < 16; step++) {
+    const theta = angle + step * ((2 * Math.PI) / 16);
+    const point = {
+      x: anchor.x + Math.cos(theta) * distance,
+      y: anchor.y + Math.sin(theta) * distance,
+    };
+    if (!placementBlocked(point.x, point.y, label, obstacles)) return point;
+  }
   return {
     x: anchor.x + Math.cos(angle) * distance,
     y: anchor.y + Math.sin(angle) * distance,
@@ -184,6 +230,11 @@ export function rememberLayout(
 ): Map<string, Point> {
   if (previous.size === 0 && graph.nodes.length > 0) return placeGraph(graph);
   const next = new Map(previous);
+  const obstacles: { x: number; y: number; label: string }[] = [];
+  for (const node of graph.nodes) {
+    const point = previous.get(node.id);
+    if (point) obstacles.push({ ...point, label: node.title });
+  }
   // Anchors and fallback come only from the previous map, so a chain of
   // newcomers in one snapshot can never drift away from placed nodes.
   const existing = [...previous.values()];
@@ -203,7 +254,12 @@ export function rememberLayout(
       if (suggestion.source === node.id) consider(suggestion.target);
       if (suggestion.target === node.id) consider(suggestion.source);
     }
-    next.set(node.id, placeNewcomer(node.id, neighbors, existing));
+    const spot = placeNewcomer(node.id, neighbors, existing, {
+      label: node.title,
+      obstacles,
+    });
+    next.set(node.id, spot);
+    obstacles.push({ ...spot, label: node.title });
   }
   return next;
 }

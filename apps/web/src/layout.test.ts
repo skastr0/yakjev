@@ -5,7 +5,12 @@ import {
   type Graph,
   type Node,
 } from "@yakjev/protocol";
-import { placeGraph, rememberLayout, type Point } from "./layout";
+import {
+  placeGraph,
+  rememberLayout,
+  labelContains,
+  type Point,
+} from "./layout";
 
 const provenance = {
   actor: { id: "synthetic", channel: "browser" as const },
@@ -195,5 +200,25 @@ describe("placeGraph", () => {
       const near = Math.min(between(next, id, "a"), between(next, id, "b"));
       expect(near).toBeLessThanOrEqual(220);
     }
+  });
+  test("a newcomer stays off an existing node's label", () => {
+    const title = "Go to the gym three times a week";
+    const first = placeGraph(snapshot([node("gym", { title })]));
+    const next = rememberLayout(
+      first,
+      snapshot(
+        [
+          node("gym", { title }),
+          node("train", { title: "Train for the spring marathon" }),
+        ],
+        [edge("gt", "gym", "train")],
+      ),
+    );
+    const gym = next.get("gym")!;
+    const train = next.get("train")!;
+    expect(labelContains({ ...gym, text: title }, train)).toBe(false);
+    expect(Math.hypot(train.x - gym.x, train.y - gym.y)).toBeLessThanOrEqual(
+      220,
+    );
   });
 });
