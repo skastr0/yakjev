@@ -16,7 +16,7 @@ export interface RankInput {
   readonly graph: Graph;
   // A draft has no id; text is what the focus says.
   readonly focus: { readonly id: string | null; readonly text: string };
-  // Always first, in this order.
+  // Always first. Among themselves, Jaccard then id, as discover() does.
   readonly explicit: ReadonlySet<string>;
   // true: return the explicit nodes only.
   readonly only: boolean;
@@ -25,7 +25,9 @@ export interface RankInput {
 // Every eligible node (not archived, not the focus), best first, no cap.
 // Never fails: a semantic outage degrades to lexical order.
 export interface RetrievalService {
-  readonly rank: (input: RankInput) => Effect.Effect<readonly RankedCandidate[]>;
+  readonly rank: (
+    input: RankInput,
+  ) => Effect.Effect<readonly RankedCandidate[]>;
 }
 
 export class Retrieval extends Context.Service<Retrieval, RetrievalService>()(
@@ -42,59 +44,68 @@ const words = (value: string) =>
 const nodeText = (node: Node) => `${node.title} ${node.description}`;
 const compareId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
+// Bands sit further apart than Jaccard (0..1), so a sort by score alone matches
+// discover(): every explicit node, neighbors among them first, then other
+// neighbors, then word overlap, then id.
+const scoreOf = (
+  lexicalScore: number,
+  isExplicit: boolean,
+  isNeighbour: boolean,
+) => (isExplicit ? 16 : 0) + (isNeighbour ? 4 : 0) + lexicalScore;
+
 /** Explicit, then graph neighbours, then word-overlap (Jaccard), then id. */
 export function lexicalRank(input: RankInput): RankedCandidate[] {
-  const { graph, focus, explicit } = input;
+  const { graph, focus, explicit, only } = input;
   const eligible = graph.nodes.filter(
     (node) => node.status !== "archived" && node.id !== focus.id,
   );
   const queryWords = words(focus.text);
   const neighbours = new Set<string>();
-  for (const edge of graph.edges) {
-    if (edge.source === focus.id) neighbours.add(edge.target);
-    if (edge.target === focus.id) neighbours.add(edge.source);
+  if (focus.id !== null) {
+    for (const edge of graph.edges) {
+      if (edge.source === focus.id) neighbours.add(edge.target);
+      if (edge.target === focus.id) neighbours.add(edge.source);
+    }
   }
-  const order = [...explicit];
-  const ranked = eligible
-    .filter((node) => !input.only || explicit.has(node.id))
-    .map((node): RankedCandidate => {
-      const nodeWords = words(nodeText(node));
-      const sharedTokens = [...queryWords]
-        .filter((word) => nodeWords.has(word))
-        .sort(compareId);
-      const union = queryWords.size + nodeWords.size - sharedTokens.length;
-      const lexicalScore = union === 0 ? 0 : sharedTokens.length / union;
-      return {
+  const ranked = eligible.flatMap((node): RankedCandidate[] => {
+    if (only && !explicit.has(node.id)) return [];
+    const nodeWords = words(nodeText(node));
+    const sharedTokens = [...queryWords]
+      .filter((word) => nodeWords.has(word))
+      .sort(compareId);
+    const union = queryWords.size + nodeWords.size - sharedTokens.length;
+    const lexicalScore = union === 0 ? 0 : sharedTokens.length / union;
+    const via: RankedCandidate["via"] = explicit.has(node.id)
+      ? "explicit"
+      : neighbours.has(node.id)
+        ? "graph"
+        : sharedTokens.length
+          ? "lexical"
+          : "coverage";
+    return [
+      {
         nodeId: node.id,
-        score: lexicalScore,
         lexicalScore,
         semanticScore: null,
         sharedTokens,
-        via: explicit.has(node.id)
-          ? "explicit"
-          : neighbours.has(node.id)
-            ? "graph"
-            : sharedTokens.length
-              ? "lexical"
-              : "coverage",
-      };
-    });
-  return ranked.sort(
-    (a, b) =>
-      Number(explicit.has(b.nodeId)) - Number(explicit.has(a.nodeId)) ||
-      (explicit.has(a.nodeId) && explicit.has(b.nodeId)
-        ? order.indexOf(a.nodeId) - order.indexOf(b.nodeId)
-        : 0) ||
-      Number(neighbours.has(b.nodeId)) - Number(neighbours.has(a.nodeId)) ||
-      b.lexicalScore - a.lexicalScore ||
-      compareId(a.nodeId, b.nodeId),
-  );
+        via,
+        score: scoreOf(
+          lexicalScore,
+          explicit.has(node.id),
+          neighbours.has(node.id),
+        ),
+      },
+    ];
+  });
+  ranked.sort((a, b) => b.score - a.score || compareId(a.nodeId, b.nodeId));
+  return ranked;
 }
 
 export const lexicalRetrieval: RetrievalService = {
-  rank: (input) => Effect.sync(() => lexicalRank(input)),
+  rank: (input) => Effect.succeed(lexicalRank(input)),
 };
 
-// Hybrid ranking lands here (jev-drag); until then, lexical.
+// Lexical until an embedding provider is configured. A semantic outage must
+// degrade to this ranker and must not fail the effect.
 export const RetrievalLive: Layer.Layer<Retrieval> =
   Layer.succeed(Retrieval)(lexicalRetrieval);

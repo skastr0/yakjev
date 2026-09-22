@@ -44,7 +44,10 @@ describe("lexical retrieval", () => {
       explicit: new Set(),
       only: false,
     });
-    const top = ranked.slice(0, 24).map((candidate) => candidate.nodeId);
+    // discover() judges the best-first prefix the budget packer keeps.
+    const top = ranked
+      .slice(0, discovered.length)
+      .map((candidate) => candidate.nodeId);
     const recalled = discovered.filter((id) => top.includes(id)).length;
     expect(top).toEqual(discovered);
     expect(recalled / discovered.length).toBe(1);
@@ -74,6 +77,39 @@ describe("lexical retrieval", () => {
     });
     expect(ranked.map((candidate) => candidate.nodeId)).toEqual(["docs"]);
     expect(ranked[0]?.via).toBe("explicit");
+  });
+
+  test("score order is explicit, then neighbors, then overlap", () => {
+    const focus = node("focus", "Bake sourdough bread", "Feed the starter");
+    const snapshot = graph(
+      [
+        focus,
+        node("named", "Completely different words", ""),
+        node("near", "Keep the culture alive", ""),
+        node(
+          "words",
+          "Bake sourdough bread tomorrow",
+          "Feed the starter again",
+        ),
+      ],
+      [edge("focus", "near")],
+    );
+    const ranked = lexicalRank({
+      graph: snapshot,
+      focus: { id: "focus", text: textOf(focus) },
+      explicit: new Set(["named"]),
+      only: false,
+    });
+    expect(ranked.map((candidate) => candidate.nodeId)).toEqual([
+      "named",
+      "near",
+      "words",
+    ]);
+    expect(ranked.map((candidate) => candidate.score)).toEqual(
+      [...ranked]
+        .sort((a, b) => b.score - a.score)
+        .map((candidate) => candidate.score),
+    );
   });
 
   test("the live layer is lexical and does not fail", async () => {
