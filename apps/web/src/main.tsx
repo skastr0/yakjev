@@ -15,6 +15,7 @@ import type {
 } from "@yakjev/protocol";
 import { errorMessage, previewJev, request } from "./api";
 import { GraphCanvas, type CanvasHandle } from "./graph-canvas";
+import { JevContext } from "./jev-context";
 import { JevDevPanel } from "./jev-dev";
 import { jevEdge, relationLabel, type Ghost } from "./jev";
 import { GraphEditor, JevActivity, type Mode } from "./editor";
@@ -275,6 +276,7 @@ function App() {
         </div>
         {graph && (
           <nav aria-label="Workspace">
+            <JevContext graph={graph} execute={state.execute} />
             <button
               type="button"
               aria-pressed={showArchived}
