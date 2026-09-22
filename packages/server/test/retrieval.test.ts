@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { discover } from "../src/discovery.ts";
 import {
+  hybridRetrieval,
   lexicalRank,
   lexicalRetrieval,
   Retrieval,
   RetrievalLive,
+  type EmbeddingClient,
 } from "../src/retrieval.ts";
 import { edge, graph, node } from "./discovery.fixture.ts";
 
@@ -113,36 +115,162 @@ describe("lexical retrieval", () => {
   });
 
   test("the live layer is lexical and does not fail", async () => {
-    const focus = node("focus", "Run a 5k", "Build endurance");
-    const snapshot = graph([
+    const previous = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const focus = node("focus", "Run a 5k", "Build endurance");
+      const snapshot = graph([
+        focus,
+        node("shoes", "Buy running shoes", "Shoes for the 5k"),
+      ]);
+      const ranked = await Effect.runPromise(
+        Effect.gen(function* () {
+          const retrieval = yield* Retrieval;
+          return yield* retrieval.rank({
+            graph: snapshot,
+            focus: { id: null, text: "running shoes" },
+            explicit: new Set(),
+            only: false,
+          });
+        }).pipe(Effect.provide(RetrievalLive)),
+      );
+      expect(ranked.map((candidate) => candidate.nodeId)).toEqual([
+        "shoes",
+        "focus",
+      ]);
+      expect(ranked[0]?.semanticScore).toBeNull();
+      expect(
+        Effect.runSync(
+          lexicalRetrieval.rank({
+            graph: snapshot,
+            focus: { id: "missing", text: "" },
+            explicit: new Set(),
+            only: false,
+          }),
+        ).map((candidate) => candidate.nodeId),
+      ).toEqual(["focus", "shoes"]);
+    } finally {
+      if (previous === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previous;
+    }
+  });
+});
+
+const vectors = new Map<string, readonly number[]>([
+  ["Arrange a routine teeth checkup ", [1, 0]],
+  ["Schedule an oral health examination ", [1, 0]],
+  ["Arrange a routine code checkup ", [0, 1]],
+  ["Quarterly tax filing ", [0, 1]],
+]);
+
+const scripted = (calls: string[][]): EmbeddingClient => ({
+  embed: async (texts) => {
+    calls.push([...texts]);
+    return texts.map((text) => vectors.get(text) ?? [0, 0]);
+  },
+});
+
+describe("hybrid retrieval", () => {
+  const focus = node("focus", "Arrange a routine teeth checkup", "");
+  const snapshot = () =>
+    graph([
       focus,
-      node("shoes", "Buy running shoes", "Shoes for the 5k"),
+      node("paraphrase", "Schedule an oral health examination", ""),
+      node("trap", "Arrange a routine code checkup", ""),
+      node("unrelated", "Quarterly tax filing", ""),
     ]);
+  const input = () => ({
+    graph: snapshot(),
+    focus: { id: "focus" as const, text: textOf(focus) },
+    explicit: new Set<string>(),
+    only: false,
+  });
+
+  test("a zero-overlap paraphrase is semantic and outranks a word trap", async () => {
+    const calls: string[][] = [];
     const ranked = await Effect.runPromise(
-      Effect.gen(function* () {
-        const retrieval = yield* Retrieval;
-        return yield* retrieval.rank({
-          graph: snapshot,
-          focus: { id: null, text: "running shoes" },
-          explicit: new Set(),
-          only: false,
-        });
-      }).pipe(Effect.provide(RetrievalLive)),
+      hybridRetrieval(scripted(calls)).rank(input()),
     );
+    expect(calls).toHaveLength(1);
     expect(ranked.map((candidate) => candidate.nodeId)).toEqual([
-      "shoes",
-      "focus",
+      "paraphrase",
+      "trap",
+      "unrelated",
     ]);
-    expect(ranked[0]?.semanticScore).toBeNull();
     expect(
-      Effect.runSync(
-        lexicalRetrieval.rank({
-          graph: snapshot,
-          focus: { id: "missing", text: "" },
-          explicit: new Set(),
-          only: false,
-        }),
-      ).map((candidate) => candidate.nodeId),
-    ).toEqual(["focus", "shoes"]);
+      ranked.find((candidate) => candidate.nodeId === "paraphrase"),
+    ).toMatchObject({ via: "semantic", lexicalScore: 0, semanticScore: 1 });
+    expect(ranked.find((candidate) => candidate.nodeId === "trap")?.via).toBe(
+      "lexical",
+    );
+    expect(
+      ranked.find((candidate) => candidate.nodeId === "unrelated")?.via,
+    ).toBe("coverage");
+    expect(
+      ranked.find((candidate) => candidate.nodeId === "unrelated")
+        ?.semanticScore,
+    ).toBe(0);
+  });
+
+  test("embeds only new or changed node text", async () => {
+    const calls: string[][] = [];
+    const retrieval = hybridRetrieval(scripted(calls));
+    await Effect.runPromise(retrieval.rank(input()));
+    await Effect.runPromise(retrieval.rank(input()));
+    expect(calls).toHaveLength(1);
+    const edited = graph([
+      focus,
+      node("paraphrase", "Schedule an oral health examination", "booked"),
+      node("trap", "Arrange a routine code checkup", ""),
+      node("unrelated", "Quarterly tax filing", ""),
+    ]);
+    await Effect.runPromise(retrieval.rank({ ...input(), graph: edited }));
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual(["Schedule an oral health examination booked"]);
+  });
+
+  test("a slow embedder returns lexical order and warms the next call", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let finished: Promise<readonly (readonly number[])[]> = Promise.resolve([]);
+    const client: EmbeddingClient = {
+      embed: (texts) => {
+        finished = gate.then(() => texts.map(() => [1, 0] as const));
+        return finished;
+      },
+    };
+    const retrieval = hybridRetrieval(client, { budgetMs: 20 });
+    const first = await Effect.runPromise(retrieval.rank(input()));
+    expect(first.every((candidate) => candidate.semanticScore === null)).toBe(
+      true,
+    );
+    expect(
+      first.find((candidate) => candidate.nodeId === "paraphrase")?.via,
+    ).toBe("coverage");
+    release();
+    await finished;
+    const second = await Effect.runPromise(retrieval.rank(input()));
+    expect(
+      second.find((candidate) => candidate.nodeId === "paraphrase")?.via,
+    ).toBe("semantic");
+  });
+
+  test("an embedding error stays lexical and does not fail", async () => {
+    const client: EmbeddingClient = {
+      embed: async () => {
+        throw new Error("down");
+      },
+    };
+    const ranked = await Effect.runPromise(
+      hybridRetrieval(client, { budgetMs: 50 }).rank(input()),
+    );
+    expect(ranked.every((candidate) => candidate.semanticScore === null)).toBe(
+      true,
+    );
+    expect(
+      ranked.find((candidate) => candidate.nodeId === "paraphrase")?.via,
+    ).toBe("coverage");
   });
 });

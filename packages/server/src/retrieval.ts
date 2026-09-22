@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Context, Effect, Layer } from "effect";
 import type { Graph, Node } from "../../protocol/src/graph.ts";
 
@@ -44,9 +45,9 @@ const words = (value: string) =>
 const nodeText = (node: Node) => `${node.title} ${node.description}`;
 const compareId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
-// Bands sit further apart than Jaccard (0..1), so a sort by score alone matches
-// discover(): every explicit node, neighbors among them first, then other
-// neighbors, then word overlap, then id.
+// Bands sit further apart than Jaccard (0..1) plus a cosine (0..1), so a sort
+// by score alone keeps discover()'s order: explicit, then neighbors, then the
+// fused lexical + semantic score, then id.
 const scoreOf = (
   lexicalScore: number,
   isExplicit: boolean,
@@ -105,7 +106,231 @@ export const lexicalRetrieval: RetrievalService = {
   rank: (input) => Effect.succeed(lexicalRank(input)),
 };
 
-// Lexical until an embedding provider is configured. A semantic outage must
-// degrade to this ranker and must not fail the effect.
-export const RetrievalLive: Layer.Layer<Retrieval> =
-  Layer.succeed(Retrieval)(lexicalRetrieval);
+// text-embedding-3-small cosines for a real paraphrase sit well above this.
+// Below it, a zero-overlap node stays coverage and the packer can drop it.
+const SEMANTIC_FLOOR = 0.4;
+const EMBED_BUDGET_MS = 250;
+const EMBED_BATCH = 96;
+const EMBED_MODEL = "text-embedding-3-small";
+const EMBED_URL = "https://api.openai.com/v1/embeddings";
+// One input's token cap is 8191. Characters stay under that for ordinary text.
+const EMBED_CHARS = 8000;
+
+export interface EmbeddingClient {
+  readonly embed: (
+    texts: readonly string[],
+  ) => Promise<readonly (readonly number[])[]>;
+}
+
+const contentKey = (value: string) =>
+  createHash("sha256").update(value.normalize("NFKC")).digest("hex");
+
+const cosine = (left: readonly number[], right: readonly number[]) => {
+  const length = Math.min(left.length, right.length);
+  if (length === 0) return null;
+  let dot = 0;
+  let leftNorm = 0;
+  let rightNorm = 0;
+  for (let index = 0; index < length; index += 1) {
+    const a = left[index] ?? 0;
+    const b = right[index] ?? 0;
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+    dot += a * b;
+    leftNorm += a * a;
+    rightNorm += b * b;
+  }
+  if (leftNorm === 0 || rightNorm === 0) return null;
+  return dot / Math.sqrt(leftNorm * rightNorm);
+};
+
+interface CachedText {
+  readonly hash: string;
+  readonly text: string;
+}
+
+function hybridRanker(client: EmbeddingClient, budgetMs: number) {
+  const cache = new Map<string, readonly number[]>();
+  const inflight = new Map<string, Promise<void>>();
+
+  const warm = (items: readonly CachedText[]): Promise<void> => {
+    const fresh = [
+      ...new Map(
+        items
+          .filter((item) => item.text.length > 0 && !cache.has(item.hash))
+          .filter((item) => !inflight.has(item.hash))
+          .map((item) => [item.hash, item] as const),
+      ).values(),
+    ];
+    if (fresh.length > 0) {
+      const job = (async () => {
+        try {
+          for (let start = 0; start < fresh.length; start += EMBED_BATCH) {
+            const chunk = fresh.slice(start, start + EMBED_BATCH);
+            const vectors = await client.embed(chunk.map((item) => item.text));
+            if (vectors.length !== chunk.length) throw new Error("shape");
+            for (let index = 0; index < chunk.length; index += 1) {
+              const vector = vectors[index];
+              const item = chunk[index];
+              if (!vector || vector.length === 0 || !item)
+                throw new Error("shape");
+              cache.set(item.hash, vector);
+            }
+          }
+        } catch {
+          // The caller ranks lexically. Uncached hashes are retried next time.
+        } finally {
+          for (const item of fresh) inflight.delete(item.hash);
+        }
+      })();
+      for (const item of fresh) inflight.set(item.hash, job);
+    }
+    return Promise.all(
+      items.map((item) => inflight.get(item.hash) ?? Promise.resolve()),
+    ).then(() => undefined);
+  };
+
+  const fuse = (
+    lexical: RankedCandidate[],
+    focusHash: string,
+    hashes: ReadonlyMap<string, string>,
+  ): RankedCandidate[] => {
+    const focusVector = cache.get(focusHash);
+    if (!focusVector) return lexical;
+    const fused = lexical.map((candidate) => {
+      const vector = cache.get(hashes.get(candidate.nodeId) ?? "");
+      const semanticScore = vector ? cosine(focusVector, vector) : null;
+      if (semanticScore === null) return candidate;
+      const via =
+        candidate.via === "coverage" && semanticScore >= SEMANTIC_FLOOR
+          ? "semantic"
+          : candidate.via;
+      return {
+        ...candidate,
+        via,
+        semanticScore,
+        score: candidate.score + Math.max(0, semanticScore),
+      };
+    });
+    fused.sort((a, b) => b.score - a.score || compareId(a.nodeId, b.nodeId));
+    return fused;
+  };
+
+  const rank = async (input: RankInput): Promise<RankedCandidate[]> => {
+    const lexical = lexicalRank(input);
+    const focusText = input.focus.text.normalize("NFKC").slice(0, EMBED_CHARS);
+    if (focusText.trim() === "") return lexical;
+    const byId = new Map(input.graph.nodes.map((node) => [node.id, node]));
+    const hashes = new Map<string, string>();
+    const needed: CachedText[] = [
+      { hash: contentKey(focusText), text: focusText },
+    ];
+    for (const candidate of lexical) {
+      const node = byId.get(candidate.nodeId);
+      if (!node) continue;
+      const text = nodeText(node).normalize("NFKC").slice(0, EMBED_CHARS);
+      const hash = contentKey(text);
+      hashes.set(node.id, hash);
+      if (text.trim() !== "") needed.push({ hash, text });
+    }
+    const missing = needed.filter((item) => !cache.has(item.hash));
+    if (missing.length > 0) {
+      const pending = warm(missing);
+      const ready = await new Promise<boolean>((resolve) => {
+        let settled = false;
+        const finish = (value: boolean) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        };
+        const timer = setTimeout(() => finish(false), budgetMs);
+        pending.then(
+          () => finish(true),
+          () => finish(false),
+        );
+      });
+      if (!ready || missing.some((item) => !cache.has(item.hash)))
+        return lexical;
+    }
+    return fuse(lexical, needed[0]!.hash, hashes);
+  };
+
+  return rank;
+}
+
+/** Lexical rank, fused with cached embeddings when they are ready in time. */
+export function hybridRetrieval(
+  client: EmbeddingClient,
+  options?: { readonly budgetMs?: number },
+): RetrievalService {
+  const rank = hybridRanker(client, options?.budgetMs ?? EMBED_BUDGET_MS);
+  return {
+    rank: (input) =>
+      Effect.promise(async () => {
+        try {
+          return await rank(input);
+        } catch {
+          return lexicalRank(input);
+        }
+      }),
+  };
+}
+
+function openAiEmbeddings(apiKey: string): EmbeddingClient {
+  return {
+    embed: async (texts) => {
+      const response = await fetch(EMBED_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ model: EMBED_MODEL, input: [...texts] }),
+      });
+      if (!response.ok) throw new Error(`embeddings ${response.status}`);
+      const body: unknown = await response.json();
+      if (!body || typeof body !== "object" || !("data" in body))
+        throw new Error("embeddings shape");
+      const data = body.data;
+      if (!Array.isArray(data) || data.length !== texts.length)
+        throw new Error("embeddings shape");
+      const ordered: (readonly number[])[] = new Array(texts.length);
+      for (const row of data) {
+        if (!row || typeof row !== "object")
+          throw new Error("embeddings shape");
+        const index = "index" in row ? row.index : undefined;
+        const embedding = "embedding" in row ? row.embedding : undefined;
+        if (
+          typeof index !== "number" ||
+          !Number.isInteger(index) ||
+          index < 0 ||
+          index >= texts.length ||
+          !Array.isArray(embedding) ||
+          embedding.some((value) => typeof value !== "number")
+        )
+          throw new Error("embeddings shape");
+        ordered[index] = embedding;
+      }
+      if (ordered.some((vector) => !vector))
+        throw new Error("embeddings shape");
+      return ordered;
+    },
+  };
+}
+
+let liveKey = "";
+let liveHybrid: RetrievalService | null = null;
+
+// Hybrid when OPENAI_API_KEY is set; otherwise lexical. The key stays in this
+// process. A missing key, a slow response, or any error ranks lexically.
+export const RetrievalLive: Layer.Layer<Retrieval> = Layer.succeed(Retrieval)({
+  rank: (input) => {
+    const key = process.env.OPENAI_API_KEY?.trim() ?? "";
+    if (!key) return lexicalRetrieval.rank(input);
+    if (key !== liveKey || !liveHybrid) {
+      liveKey = key;
+      liveHybrid = hybridRetrieval(openAiEmbeddings(key));
+    }
+    return liveHybrid.rank(input);
+  },
+});
