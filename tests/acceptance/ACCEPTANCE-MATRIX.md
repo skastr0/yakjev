@@ -71,13 +71,27 @@ reframing changes the blocking interpretation while the original assertion stays
 restores it; a restart recovers revision, positions, and the correction; an evaluation without a
 provider key is recorded as unavailable with no suggestion.
 
-## Open acceptance findings
+## Acceptance findings after the UI final patch
 
-| Finding                                                                                                                                                                       | Severity | Evidence                                                                                     |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------- |
-| Default camera after a live capture renders the graph into a small central area with overlapping labels; one label is unreadable until the user zooms in or presses Fit graph | medium   | `layout-default-after-capture.png`, `layout-after-fit-graph.png`, `layout-after-zoom-in.png` |
-| Contrast below WCAG AA on `.tagline` (3.93), `.node-list > .hint` (4.28), `.sidebar-foot > p` (3.77)                                                                          | medium   | axe-core `color-contrast`, serious, reported by `browser/run.ts` E9                          |
-| `aria-label` on `div.graph-actions` without a role is not exposed to assistive technology                                                                                     | low      | axe-core `aria-prohibited-attr` (incomplete, serious)                                        |
+Verified on the integrated tree (published base + parent integration series + this suite + UI final,
+commit ee444406442dd9769517959872ad04e0a88c89d1). `bun run verify` exit 0: 41 package tests, 20
+acceptance tests (148 assertions), 13 deployment checks, 4 resume checks. Browser run: 12 pass,
+1 fail, 0 blocked.
+
+| Finding                                                                                  | Status         | Evidence                                                                                                      |
+| ---------------------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------- |
+| Default camera after a live capture rendered the graph cramped with overlapping labels   | fixed          | five of five labels legible at default after a live capture; canvas change 5.6%; `final-01-after-capture.png` |
+| Contrast below WCAG AA on `.tagline`, `.node-list > .hint`, `.sidebar-foot > p`          | fixed          | axe no longer reports these                                                                                   |
+| `aria-label` on `div.graph-actions` without a role                                       | fixed          | axe no longer reports `aria-prohibited-attr`                                                                  |
+| Contrast below AA on `.node-card small` (project and status meta)                        | open, minor    | 4.22 (#637565 on #efeee4) and 4.00 on the selected card background #e6e9df, 10px normal, needs 4.5:1          |
+| One edge label truncated to "Re" where it meets the `Multi-machine skills blocker` label | open, cosmetic | `final-01-after-capture.png`                                                                                  |
+
+Not findings: axe reports 15 `incomplete` colour-contrast nodes (the `○` status glyphs and text over
+the canvas). Axe cannot measure those; they are unverified, not failures.
+
+Narrow layout measured at 390x844: `scrollWidth` 390 = `innerWidth` 390 (no horizontal overflow),
+`graphBottom` 1059 = `inspectorTop` 1059 (inspector stacked with no gap), and the node list scrolls
+clear of the sticky footer (last card bottom 381.98 above footer top 387 after scrolling).
 
 ## Not yet verifiable, and why
 
