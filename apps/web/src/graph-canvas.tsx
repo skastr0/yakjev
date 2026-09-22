@@ -24,6 +24,7 @@ import {
   layoutBounds,
   settlePoint,
   syncGraph,
+  visibleSettleDistance,
   type Selection,
 } from "./graph-model";
 import { ASSERTED_DISTANCE, BLOCKING_DISTANCE } from "./layout";
@@ -340,7 +341,31 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             };
           }
           if (!best) return;
-          const dest = settlePoint(focus, home, best, best.distance);
+          const sigma = renderer.current;
+          let dx = home.x - best.x;
+          let dy = home.y - best.y;
+          if (Math.hypot(dx, dy) < 1) {
+            dx = focus.x - best.x;
+            dy = focus.y - best.y;
+          }
+          const title = String(
+            graph.current.getNodeAttribute(focusId, "label") ?? "",
+          );
+          const viewport = sigma?.graphToViewport(focus);
+          const covers =
+            dx < 0 &&
+            labelSitsRight(
+              viewport?.x ?? 0,
+              title,
+              container.current?.clientWidth ?? 0,
+            );
+          const distance = visibleSettleDistance(
+            best.distance,
+            sigma ? pixelsPerUnit(sigma) : 1,
+            labelWidthPx(title),
+            covers,
+          );
+          const dest = settlePoint(focus, home, best, distance);
           if (!dest) return;
           cancelAnimationFrame(settleFrame.current);
           const started = performance.now();
@@ -836,6 +861,30 @@ const DROP_HINT_STYLE: CSSProperties = {
   whiteSpace: "nowrap",
   pointerEvents: "none",
 };
+
+const labelCanvas =
+  typeof document === "undefined" ? null : document.createElement("canvas");
+
+function labelWidthPx(label: string) {
+  const context = labelCanvas?.getContext("2d");
+  if (!context) return label.length * 8;
+  context.font = "13px Avenir Next, Avenir, system-ui, sans-serif";
+  return context.measureText(label).width;
+}
+
+// Same rule as the node style: labels sit to the right unless the screen is
+// narrow or the text would run off the right edge.
+function labelSitsRight(viewportX: number, label: string, canvasWidth: number) {
+  if (canvasWidth < 500) return false;
+  return viewportX + label.length * 8 + 20 <= canvasWidth;
+}
+
+function pixelsPerUnit(sigma: Sigma) {
+  const origin = sigma.graphToViewport({ x: 0, y: 0 });
+  const step = sigma.graphToViewport({ x: 1, y: 0 });
+  const scale = Math.hypot(step.x - origin.x, step.y - origin.y);
+  return scale > 1e-6 ? scale : 1;
+}
 
 function dragAnnouncement(ghosts: readonly Ghost[]) {
   const count = ghosts.reduce(

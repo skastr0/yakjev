@@ -15,9 +15,10 @@ import {
   safeSourceHref,
   searchNodes,
   syncGraph,
-  unjudgedIds,
   settlePoint,
+  unjudgedIds,
   visibleGraph,
+  visibleSettleDistance,
 } from "./graph-model";
 
 const provenance = {
@@ -307,10 +308,19 @@ describe("render projection", () => {
     ).toEqual({ x: 230, y: 0 });
     expect(
       settlePoint({ x: 200, y: 0 }, { x: 400, y: 0 }, { x: 0, y: 0 }, 230),
+    ).toEqual({ x: 230, y: 0 });
+    expect(
+      settlePoint({ x: 240, y: 0 }, { x: 400, y: 0 }, { x: 0, y: 0 }, 230),
     ).toBeNull();
     expect(
       settlePoint({ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }, 140),
     ).toEqual({ x: 140, y: 0 });
+  });
+
+  test("a label on the left side of an edge lengthens the settle", () => {
+    expect(visibleSettleDistance(140, 1, 160, false)).toBe(140);
+    expect(visibleSettleDistance(140, 1, 160, true)).toBe(208);
+    expect(visibleSettleDistance(140, 2, 40, true)).toBe(140);
   });
 
   test("canonical source rendering never turns an executable URI into a link", () => {

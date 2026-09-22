@@ -3,7 +3,7 @@ import type { Graph, Node, PreviewJudgment } from "@yakjev/protocol";
 
 // Screen pixels, not graph units: dragging toward a node is the gesture, at
 // whatever zoom the owner is using.
-export const DRAG_REACH = 200;
+export const DRAG_REACH = 240;
 
 export type Selection = {
   kind: "node" | "edge" | "suggestion";
@@ -163,9 +163,27 @@ export function unjudgedIds(
   return missing;
 }
 
-// Where a dropped node should rest so the new edge is as long as the layout's
-// link. Null when it is already far enough from the target. Direction is back
-// toward where the drag started.
+// Graph distance that leaves the edge readable on screen. Layout length is the
+// floor. A label drawn to the right covers the edge when this node sits on the
+// left, so that case also clears the label plus a margin.
+export const LABEL_CLEARANCE = 48;
+
+export function visibleSettleDistance(
+  layoutDistance: number,
+  pixelsPerUnit: number,
+  labelWidth: number,
+  labelCoversEdge: boolean,
+) {
+  const scale = pixelsPerUnit > 1e-6 ? pixelsPerUnit : 1;
+  const layoutPx = layoutDistance * scale;
+  const screen = labelCoversEdge
+    ? Math.max(layoutPx, labelWidth + LABEL_CLEARANCE)
+    : layoutPx;
+  return screen / scale;
+}
+
+// Where a dropped node should rest so the new edge is as long as `distance`.
+// Null when it is already there. Direction is back toward where the drag started.
 export function settlePoint(
   focus: { x: number; y: number },
   home: { x: number; y: number },
@@ -173,7 +191,7 @@ export function settlePoint(
   distance: number,
 ): { x: number; y: number } | null {
   const gap = Math.hypot(focus.x - target.x, focus.y - target.y);
-  if (gap >= distance * 0.85) return null;
+  if (gap >= distance) return null;
   let dx = home.x - target.x;
   let dy = home.y - target.y;
   let length = Math.hypot(dx, dy);
