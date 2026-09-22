@@ -468,10 +468,12 @@ function isTyping(target: EventTarget | null) {
 }
 
 const INCLUDE_DELAY_MS = 80;
+const RETRY_MS = 1000;
 
 type Slot =
   | { kind: "judgment"; judgment: PreviewJudgment; preview: Preview }
-  | { kind: "none" };
+  | { kind: "none" }
+  | { kind: "retry"; at: number };
 
 type Session = {
   focusId: string;
@@ -515,13 +517,15 @@ function useDragConnect(
     ).map((judgment) => ghostFrom(current.focusId, data, judgment));
     setGhosts((previous) => (sameGhosts(previous, next) ? previous : next));
   }
-  function schedule(current: Session) {
+  function schedule(current: Session, delay = INCLUDE_DELAY_MS) {
     window.clearTimeout(current.timer);
     current.timer = window.setTimeout(() => {
       if (session.current !== current || current.phase !== "drag") return;
+      for (const [id, slot] of current.held)
+        if (slot.kind === "retry") current.held.delete(id);
       const missing = unjudgedIds(current.nearby, new Set(current.held.keys()));
       if (missing.length) void ask(current, missing);
-    }, INCLUDE_DELAY_MS);
+    }, delay);
   }
   function ask(current: Session, include: readonly string[]) {
     const task = current.chain.then(async () => {
@@ -535,13 +539,15 @@ function useDragConnect(
           current.abort.signal,
         );
         if (!alive(current)) return;
-        absorb(current, preview, include);
+        const answered = absorb(current, preview, include);
+        if (!answered) noteRetry(current, include);
         publish(current);
-        if (current.phase === "drag") schedule(current);
+        if (current.phase === "drag")
+          schedule(current, answered ? INCLUDE_DELAY_MS : RETRY_MS);
       } catch {
         if (!alive(current)) return;
-        for (const id of include) current.held.set(id, { kind: "none" });
-        if (current.phase === "drag") schedule(current);
+        noteRetry(current, include);
+        if (current.phase === "drag") schedule(current, RETRY_MS);
       } finally {
         finish();
       }
@@ -660,16 +666,21 @@ function absorb(
   preview: Preview,
   include: readonly string[],
 ) {
-  if (preview.status === "succeeded") {
-    for (const judgment of preview.judgments)
-      current.held.set(judgment.nodeId, {
-        kind: "judgment",
-        judgment,
-        preview,
-      });
-  }
+  if (preview.status !== "succeeded") return false;
+  for (const judgment of preview.judgments)
+    current.held.set(judgment.nodeId, {
+      kind: "judgment",
+      judgment,
+      preview,
+    });
   for (const id of include)
     if (!current.held.has(id)) current.held.set(id, { kind: "none" });
+  return true;
+}
+
+function noteRetry(current: Session, include: readonly string[]) {
+  const at = Date.now();
+  for (const id of include) current.held.set(id, { kind: "retry", at });
 }
 
 function ghostFrom(
