@@ -237,15 +237,29 @@ export class Evaluations extends Context.Service<Evaluations>()(
         actor: Actor,
         input: unknown,
       ) {
-        const result = yield* store.execute(actor, input);
         const request = Schema.decodeUnknownOption(CommandRequest)(input);
-        if (
-          !result.replayed &&
-          request._tag === "Some" &&
-          request.value.command.type === "capture" &&
-          request.value.command.autoConnect !== false
-        ) {
-          const nodes = request.value.command.nodes.map((node) => node.id);
+        const put =
+          request._tag === "Some" && request.value.command.type === "node.put"
+            ? request.value.command.node
+            : null;
+        const before = put
+          ? (yield* store.read).nodes.find((node) => node.id === put.id)
+          : undefined;
+        const result = yield* store.execute(actor, input);
+        if (result.replayed || request._tag === "None") return result;
+        const command = request.value.command;
+        // New captures, and intentions whose words changed, get connected.
+        const nodes =
+          command.type === "capture" && command.autoConnect !== false
+            ? command.nodes.map((node) => node.id)
+            : put &&
+                put.status !== "archived" &&
+                (!before ||
+                  before.title !== put.title ||
+                  before.description !== put.description)
+              ? [put.id]
+              : [];
+        if (nodes.length > 0) {
           yield* Effect.forEach(
             nodes,
             (id) =>

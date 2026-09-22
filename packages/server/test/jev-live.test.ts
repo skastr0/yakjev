@@ -380,3 +380,40 @@ test("a restated intention is linked as related and marked the same", async () =
     origin: { same: true },
   });
 });
+
+test("editing an intention's words reconnects it; status changes do not", async () => {
+  let calls = 0;
+  const judged = judge({
+    "Hire a designer": {
+      related: 2,
+      match: true,
+      relation: "focus_to_candidate_3",
+    },
+  });
+  const { capture, command, settle } = await fixture(
+    controlled((request) => {
+      calls++;
+      return judged(request);
+    }),
+  );
+  await capture("designer", "Hire a designer", false);
+  await capture("site", "Website", false);
+  const node = {
+    id: "site",
+    title: "Website",
+    description: "",
+    project: "",
+    status: "active",
+    sources: [],
+  };
+  await command({ type: "node.put", node });
+  await Bun.sleep(30);
+  expect(calls).toBe(0);
+  await command({
+    type: "node.put",
+    node: { ...node, title: "Redesign the website" },
+  });
+  const graph = await settle((g) => g.edges.length === 1);
+  expect(calls).toBe(1);
+  expect(graph.edges[0]).toMatchObject({ source: "site", target: "designer" });
+});
