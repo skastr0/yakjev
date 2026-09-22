@@ -7,6 +7,7 @@ import {
   type PreviewJudgment,
 } from "@yakjev/protocol";
 import {
+  backgroundArrivals,
   captureWithJev,
   confidenceText,
   connections,
@@ -205,4 +206,28 @@ describe("fixing Jev", () => {
       ["e3", "b", false],
     ]);
   });
+});
+
+test("background arrivals are new, uncorrected, server-made Jev edges", () => {
+  const origin = { model: "jev-test", promptVersion: "p1", confidence: 0.5 };
+  const at = (revision: number) => ({
+    updated: { revision },
+    correction: null,
+  });
+  const edges = [
+    { id: "auto", origin, suggestionId: "s1", ...at(5) },
+    { id: "old", origin, suggestionId: "s0", ...at(3) },
+    { id: "typed", origin, ...at(5) },
+    { id: "owner", ...at(5) },
+    {
+      id: "fixed",
+      origin,
+      suggestionId: "s2",
+      ...at(5),
+      correction: { relation },
+    },
+  ];
+  expect(
+    backgroundArrivals({ edges } as never, 4).map((edge) => edge.id),
+  ).toEqual(["auto"]);
 });

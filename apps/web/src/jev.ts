@@ -174,6 +174,80 @@ export function labelOf(graph: Pick<Graph, "taxonomy">, relation: string) {
   );
 }
 
+// Edges Jev made on its own after `since`: the server's background connects
+// carry the suggestion they came from; edges made in this browser do not.
+export function backgroundArrivals(
+  graph: Pick<Graph, "edges">,
+  since: number,
+): Edge[] {
+  return graph.edges.filter(
+    (edge) =>
+      edge.origin !== undefined &&
+      edge.suggestionId !== undefined &&
+      edge.correction === null &&
+      edge.updated.revision > since,
+  );
+}
+
+const ARRIVAL_MS = 8000;
+
+export type Arrival = { edge: Edge; until: number };
+
+// Background Jev edges as they arrive, each shown for a while. Nothing is
+// announced for the graph as first loaded.
+export function useJevArrivals(graph: Pick<Graph, "edges" | "revision">) {
+  const seen = useRef<number | null>(null);
+  const [arrivals, setArrivals] = useState<Arrival[]>([]);
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    const since = seen.current;
+    seen.current = graph.revision;
+    const live = new Set(graph.edges.map((edge) => edge.id));
+    setArrivals((current) => {
+      const kept = current.filter((item) => live.has(item.edge.id));
+      if (since === null || graph.revision <= since) return kept;
+      const known = new Set(kept.map((item) => item.edge.id));
+      const until = Date.now() + ARRIVAL_MS;
+      const fresh = backgroundArrivals(graph, since)
+        .filter((edge) => !known.has(edge.id))
+        .map((edge) => ({ edge, until }));
+      return fresh.length === 0 && kept.length === current.length
+        ? current
+        : [...kept, ...fresh];
+    });
+  }, [graph]);
+  useEffect(() => {
+    if (held || arrivals.length === 0) return;
+    const next = Math.min(...arrivals.map((item) => item.until));
+    const timer = setTimeout(
+      () =>
+        setArrivals((current) =>
+          current.filter((item) => item.until > Date.now()),
+        ),
+      Math.max(0, next - Date.now()) + 20,
+    );
+    return () => clearTimeout(timer);
+  }, [arrivals, held]);
+  return {
+    arrivals,
+    dismiss: (id: string) =>
+      setArrivals((current) => current.filter((item) => item.edge.id !== id)),
+    // Hovering keeps the chips; leaving gives them a few more seconds.
+    hold: (on: boolean) => {
+      setHeld(on);
+      if (!on) {
+        const until = Date.now() + ARRIVAL_MS / 2;
+        setArrivals((current) =>
+          current.map((item) => ({
+            ...item,
+            until: Math.max(item.until, until),
+          })),
+        );
+      }
+    },
+  };
+}
+
 // A brief confirmation that outlives the card that caused it (a removed edge
 // closes its card at once).
 export function announceLearned(message: string) {

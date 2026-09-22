@@ -26,6 +26,7 @@ import {
   typingGhosts,
   unlinkJev,
   useDraftPreview,
+  useJevArrivals,
   usePairPreview,
   type Ghost,
 } from "./jev";
@@ -131,6 +132,70 @@ export function GraphEditor({
         />
       )}
     </div>
+  );
+}
+
+// What Jev connected in the background (server auto-connect, agent captures),
+// each undoable with one tap before it fades.
+export function JevActivity({
+  graph,
+  execute,
+  onOpen,
+}: {
+  graph: Graph;
+  execute: Execute;
+  onOpen: (edgeId: string) => void;
+}) {
+  const { arrivals, dismiss, hold } = useJevArrivals(graph);
+  if (arrivals.length === 0) return null;
+  const title = (id: string) =>
+    graph.nodes.find((node) => node.id === id)?.title ?? id;
+  return (
+    <ul
+      className="jev-activity"
+      aria-label="Jev connected"
+      aria-live="polite"
+      onMouseEnter={() => hold(true)}
+      onMouseLeave={() => hold(false)}
+      onFocus={() => hold(true)}
+      onBlur={() => hold(false)}
+    >
+      {arrivals.slice(-4).map(({ edge }) => (
+        <li key={edge.id}>
+          <button
+            type="button"
+            className="jev-activity-claim"
+            onClick={() => {
+              dismiss(edge.id);
+              onOpen(edge.id);
+            }}
+          >
+            <span className="jev-activity-lead">
+              Jev connected ·{" "}
+              {edge.origin?.same ? "same" : labelOf(graph, edge.relation)}
+            </span>
+            <span className="jev-activity-pair">
+              <span>{title(edge.source)}</span>
+              <span aria-hidden="true">→</span>
+              <span>{title(edge.target)}</span>
+            </span>
+          </button>
+          <button
+            type="button"
+            className="jev-unlink"
+            onClick={() => {
+              dismiss(edge.id);
+              void execute(unlinkJev(edge.id), graph.revision).then((ok) => {
+                if (ok)
+                  announceLearned("Jev learned · it won’t connect these again");
+              });
+            }}
+          >
+            Not related
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 
