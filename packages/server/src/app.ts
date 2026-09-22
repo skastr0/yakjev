@@ -137,6 +137,8 @@ export function createApp(
               405,
             );
           if (url.pathname === "/api/graph") return json(yield* store.read);
+          if (url.pathname === "/api/jev/calls")
+            return json(yield* evaluations.calls);
           if (url.pathname === "/api/export")
             return json(yield* store.exportGraph);
           if (url.pathname === "/api/discovery") {

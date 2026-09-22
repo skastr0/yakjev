@@ -3,6 +3,7 @@ import {
   CommandResult,
   Graph,
   HistoryEntry,
+  JevCalls,
   Neighborhood,
   Preview,
   Receipt,
@@ -88,6 +89,9 @@ export async function previewJev(input: PreviewRequest, signal?: AbortSignal) {
     }),
   );
 }
+
+export const jevCalls = async () =>
+  Schema.decodeUnknownSync(JevCalls)(await request("/api/jev/calls"));
 
 export const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "An unexpected error occurred";

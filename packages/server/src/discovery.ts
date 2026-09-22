@@ -56,6 +56,7 @@ export const DiscoveryRequest = Schema.Struct({
   includeNodeIds: Schema.optionalKey(
     Schema.Array(Schema.String).check(Schema.isMaxLength(CANDIDATE_LIMIT)),
   ),
+  only: Schema.optionalKey(Schema.Boolean),
 });
 export type DiscoveryRequest = typeof DiscoveryRequest.Type;
 
@@ -148,6 +149,20 @@ export function discover(
             : "coverage",
     };
   });
+  if (request.only && explicit.size > 0)
+    return {
+      basedOnRevision: graph.revision,
+      candidates: candidates.filter((candidate) =>
+        explicit.has(candidate.nodeId),
+      ),
+      coverage: {
+        eligible: eligible.length,
+        considered: explicit.size,
+        limit: CANDIDATE_LIMIT,
+        truncated: eligible.length > explicit.size,
+        strategy: "lexical_graph_shortlist",
+      },
+    };
   candidates.sort(
     (a, b) =>
       Number(explicit.has(b.nodeId)) - Number(explicit.has(a.nodeId)) ||

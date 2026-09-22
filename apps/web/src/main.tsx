@@ -15,6 +15,7 @@ import type {
 } from "@yakjev/protocol";
 import { errorMessage, previewJev, request } from "./api";
 import { GraphCanvas, type CanvasHandle } from "./graph-canvas";
+import { JevDevPanel } from "./jev-dev";
 import { jevEdge, relationLabel, type Ghost } from "./jev";
 import { GraphEditor, JevActivity, type Mode } from "./editor";
 import {
@@ -60,6 +61,12 @@ function App() {
     if (!view || !query.trim()) return null;
     return searchNodes(view.nodes, query);
   }, [view, query]);
+  const [jevDev, setJevDev] = useState(readJevDev);
+  const toggleJevDev = () =>
+    setJevDev((open) => {
+      writeJevDev(!open);
+      return !open;
+    });
   const matchIds = useMemo(
     () => (matches ? new Set(matches.map((node) => node.id)) : null),
     [matches],
@@ -104,6 +111,8 @@ function App() {
       if (event.key === "/") {
         event.preventDefault();
         findRef.current?.focus();
+      } else if (event.key === "`" && graph) {
+        toggleJevDev();
       } else if (event.key === "Escape") {
         linkGeneration.current += 1;
         setMode(null);
@@ -279,12 +288,21 @@ function App() {
             <button type="button" onClick={() => void exportGraph()}>
               Export
             </button>
+            <button
+              type="button"
+              aria-pressed={jevDev}
+              title="Jev calls, tokens, and cost (`)"
+              onClick={toggleJevDev}
+            >
+              Jev
+            </button>
             <button type="button" onClick={() => void state.logout()}>
               Lock
             </button>
           </nav>
         )}
       </header>
+      {graph && jevDev && <JevDevPanel onClose={toggleJevDev} />}
       {state.error && (
         <div className="notice error" role="alert">
           <span>{state.error}</span>
@@ -534,8 +552,13 @@ function useDragConnect(
       try {
         const preview = await previewJev(
           include.length
-            ? { focusNodeId: current.focusId, includeNodeIds: [...include] }
-            : { focusNodeId: current.focusId },
+            ? {
+                focusNodeId: current.focusId,
+                includeNodeIds: [...include],
+                only: true,
+                purpose: "drag",
+              }
+            : { focusNodeId: current.focusId, purpose: "drag" },
           current.abort.signal,
         );
         if (!alive(current)) return;
@@ -735,6 +758,23 @@ function sameGhosts(left: readonly Ghost[], right: readonly Ghost[]) {
 
 function endpoint(end: Ghost["from"]) {
   return typeof end === "string" ? end : `${end.x},${end.y}`;
+}
+
+const JEV_DEV_KEY = "yakjev.jevDev";
+function readJevDev() {
+  try {
+    return localStorage.getItem(JEV_DEV_KEY) === "open";
+  } catch {
+    return false;
+  }
+}
+function writeJevDev(open: boolean) {
+  try {
+    if (open) localStorage.setItem(JEV_DEV_KEY, "open");
+    else localStorage.removeItem(JEV_DEV_KEY);
+  } catch {
+    /* A remembered panel is a convenience only. */
+  }
 }
 
 createRoot(document.getElementById("root")!).render(

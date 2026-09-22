@@ -279,6 +279,10 @@ export const PreviewRequest = Schema.Struct({
   includeNodeIds: Schema.optionalKey(
     Schema.Array(Id).check(Schema.isMaxLength(24)),
   ),
+  // Judge only includeNodeIds, not a full 24-candidate shortlist.
+  only: Schema.optionalKey(Schema.Boolean),
+  // What asked, for the Jev call log. Not sent to Jev.
+  purpose: Schema.optionalKey(Schema.Literals(["typing", "drag", "link"])),
 });
 export type PreviewRequest = typeof PreviewRequest.Type;
 export const PreviewJudgment = Schema.Struct({
@@ -309,6 +313,48 @@ export const Preview = Schema.Struct({
   judgments: Schema.Array(PreviewJudgment),
 });
 export type Preview = typeof Preview.Type;
+// One provider call, as the in-memory Jev call log records it.
+export const JevCall = Schema.Struct({
+  at: Schema.String,
+  purpose: Schema.Literals([
+    "typing",
+    "drag",
+    "link",
+    "preview",
+    "auto-connect",
+    "evaluate",
+  ]),
+  status: Schema.Literals(["succeeded", "failed"]),
+  candidates: Schema.Int,
+  elapsedMs: Schema.Finite,
+  inputTokens: Schema.NullOr(Schema.Int),
+  outputTokens: Schema.NullOr(Schema.Int),
+  // Estimated from configured rates; null when no rate is configured.
+  costUsd: Schema.NullOr(Schema.Finite),
+  model: Schema.NullOr(Schema.String),
+  failure: Schema.NullOr(Schema.String),
+});
+export type JevCall = typeof JevCall.Type;
+export const JevCalls = Schema.Struct({
+  since: Schema.String,
+  pricing: Schema.NullOr(
+    Schema.Struct({
+      inputUsdPerMTok: Schema.Finite,
+      outputUsdPerMTok: Schema.Finite,
+    }),
+  ),
+  totals: Schema.Struct({
+    calls: Schema.Int,
+    failed: Schema.Int,
+    inputTokens: Schema.Int,
+    outputTokens: Schema.Int,
+    elapsedMs: Schema.Finite,
+    costUsd: Schema.NullOr(Schema.Finite),
+  }),
+  // Newest first, at most JEV_CALL_LOG_LIMIT.
+  calls: Schema.Array(JevCall),
+});
+export type JevCalls = typeof JevCalls.Type;
 export const EvaluationResult = Schema.Struct({
   ...CommandResult.fields,
   evaluationId: Id,

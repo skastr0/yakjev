@@ -3,17 +3,34 @@ import {
   CommandRequest,
   EvaluationRequest,
   EvaluationResult,
+  type JevCall,
+  type JevCalls,
   type Preview,
   PreviewRequest,
 } from "@yakjev/protocol";
 import { createHash } from "node:crypto";
-import { Context, Effect, Layer, Schema, Semaphore } from "effect";
-import { Discovery, DiscoveryError, PROMPT_VERSION } from "./discovery";
+import {
+  Config,
+  Context,
+  DateTime,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+  Semaphore,
+} from "effect";
+import {
+  Discovery,
+  DiscoveryError,
+  PROMPT_VERSION,
+  type Evaluation,
+} from "./discovery";
 import { DomainError } from "./domain";
 import { Store } from "./store";
 
 // Jev acts as its own actor when it connects new nodes in the background.
 export const JEV_ACTOR: Actor = { id: "jev", channel: "system" };
+export const JEV_CALL_LOG_LIMIT = 300;
 
 // Both HTTP and MCP use this operation, including its durable retry behavior.
 export class Evaluations extends Context.Service<Evaluations>()(
@@ -24,6 +41,74 @@ export class Evaluations extends Context.Service<Evaluations>()(
       const discovery = yield* Discovery;
       const permit = yield* Semaphore.make(1);
       const scope = yield* Effect.scope;
+      // In-memory Jev call log for the dev panel: resets when the server
+      // restarts. TypeSafe publishes no per-token price, so cost needs rates.
+      const inputRate = yield* Config.option(
+        Config.Number("YAKJEV_JEV_USD_PER_MTOK_INPUT"),
+      );
+      const outputRate = yield* Config.option(
+        Config.Number("YAKJEV_JEV_USD_PER_MTOK_OUTPUT"),
+      );
+      const pricing =
+        Option.isSome(inputRate) && Option.isSome(outputRate)
+          ? {
+              inputUsdPerMTok: inputRate.value,
+              outputUsdPerMTok: outputRate.value,
+            }
+          : null;
+      const since = DateTime.formatIso(yield* DateTime.now);
+      const log: JevCall[] = [];
+      const totals = {
+        calls: 0,
+        failed: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        elapsedMs: 0,
+        costUsd: pricing ? 0 : null,
+      };
+      const track = (purpose: JevCall["purpose"], evaluated: Evaluation) =>
+        Effect.gen(function* () {
+          // Only calls that reached the provider: no key and empty candidate
+          // sets never leave the server.
+          const called =
+            evaluated.status === "failed" || evaluated.rawResponse !== null;
+          if (!called) return;
+          const input = evaluated.usage.inputTokens;
+          const output = evaluated.usage.outputTokens;
+          const costUsd = pricing
+            ? ((input ?? 0) * pricing.inputUsdPerMTok +
+                (output ?? 0) * pricing.outputUsdPerMTok) /
+              1_000_000
+            : null;
+          log.unshift({
+            at: DateTime.formatIso(yield* DateTime.now),
+            purpose,
+            status: evaluated.status === "failed" ? "failed" : "succeeded",
+            candidates: evaluated.coverage.considered,
+            elapsedMs: evaluated.elapsedMs,
+            inputTokens: input,
+            outputTokens: output,
+            costUsd,
+            model: evaluated.resolvedModel,
+            failure: evaluated.failure?.code ?? null,
+          });
+          log.length = Math.min(log.length, JEV_CALL_LOG_LIMIT);
+          totals.calls += 1;
+          if (evaluated.status === "failed") totals.failed += 1;
+          totals.inputTokens += input ?? 0;
+          totals.outputTokens += output ?? 0;
+          totals.elapsedMs += evaluated.elapsedMs;
+          if (totals.costUsd !== null && costUsd !== null)
+            totals.costUsd += costUsd;
+        });
+      const calls = Effect.sync(
+        (): JevCalls => ({
+          since,
+          pricing,
+          totals: { ...totals },
+          calls: [...log],
+        }),
+      );
       const evaluate = Effect.fn("Evaluations.evaluate")(function* (
         actor: Actor,
         input: unknown,
@@ -80,6 +165,7 @@ export class Evaluations extends Context.Service<Evaluations>()(
                 currentRevision: graph.revision,
               });
             const evaluated = yield* discovery.evaluate(graph, request);
+            yield* track("evaluate", evaluated);
             const result = yield* Schema.decodeUnknownEffect(Schema.Json)({
               ...evaluated,
               request,
@@ -156,6 +242,7 @@ export class Evaluations extends Context.Service<Evaluations>()(
             ...(request.includeNodeIds
               ? { includeNodeIds: request.includeNodeIds }
               : {}),
+            ...(request.only ? { only: true } : {}),
           })
           .pipe(
             Effect.mapError(
@@ -163,6 +250,7 @@ export class Evaluations extends Context.Service<Evaluations>()(
                 new DomainError({ code: "Invalid", message: error.message }),
             ),
           );
+        yield* track(request.purpose ?? "preview", evaluated);
         return {
           ...empty,
           status: evaluated.status,
@@ -190,6 +278,7 @@ export class Evaluations extends Context.Service<Evaluations>()(
                 connect: true,
               };
               const evaluated = yield* discovery.evaluate(graph, request);
+              yield* track("auto-connect", evaluated);
               if (
                 evaluated.status !== "succeeded" ||
                 evaluated.connections.length === 0
@@ -272,7 +361,7 @@ export class Evaluations extends Context.Service<Evaluations>()(
         }
         return result;
       });
-      return { evaluate, preview, command, connectNode };
+      return { evaluate, preview, command, connectNode, calls };
     }),
   },
 ) {

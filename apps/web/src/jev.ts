@@ -306,7 +306,10 @@ export function useDraftPreview(title: string, revision: number): DraftState {
     setState((current) => ({ ...current, loading: true }));
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      previewJev({ draft: { title: text } }, controller.signal).then(
+      previewJev(
+        { draft: { title: text }, purpose: "typing" },
+        controller.signal,
+      ).then(
         (preview) => {
           cache.current.set(text, preview);
           if (controller.signal.aborted) return;
@@ -353,7 +356,12 @@ export function usePairPreview(
     const controller = new AbortController();
     setLoading(true);
     previewJev(
-      { focusNodeId: source, includeNodeIds: [target] },
+      {
+        focusNodeId: source,
+        includeNodeIds: [target],
+        only: true,
+        purpose: "link",
+      },
       controller.signal,
     ).then(
       (preview) => {

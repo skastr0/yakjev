@@ -491,3 +491,70 @@ test("when nothing clears the bar, the strongest clear match still connects", as
   expect(connected).toHaveLength(1);
   expect(connected[0]).toMatchObject({ nodeId: "beds", relation: "requires" });
 });
+
+test("every provider call lands in the Jev call log with purpose and tokens", async () => {
+  const { call, capture, settle } = await fixture(
+    controlled((request) => ({
+      ...judge({
+        "Book flights": {
+          related: 2,
+          match: true,
+          relation: "focus_to_candidate_1",
+        },
+      })(request),
+      usage: { input_tokens: 1200, output_tokens: 80 },
+    })),
+  );
+  await capture("flights", "Book flights", false);
+  await call("/api/jev/preview", {
+    draft: { title: "Plan the trip" },
+    purpose: "typing",
+  });
+  await capture("trip", "Plan the trip");
+  await settle((g) => g.edges.length === 1);
+  await call("/api/jev/preview", { focusNodeId: "flights", purpose: "drag" });
+  const log = (await call("/api/jev/calls")).body;
+  expect(log.calls.map((c: any) => c.purpose)).toEqual([
+    "drag",
+    "auto-connect",
+    "typing",
+  ]);
+  expect(log.calls[0]).toMatchObject({
+    status: "succeeded",
+    candidates: 1,
+    inputTokens: 1200,
+    outputTokens: 80,
+    model: "controlled-jev",
+    costUsd: null,
+  });
+  expect(log.totals).toMatchObject({
+    calls: 3,
+    failed: 0,
+    inputTokens: 3600,
+    outputTokens: 240,
+    costUsd: null,
+  });
+  expect(log.pricing).toBeNull();
+});
+
+test("an only-preview judges just the nodes it names", async () => {
+  const seen: Request[] = [];
+  const { call, capture } = await fixture(controlled(judge({}, seen)));
+  for (const [id, title] of [
+    ["a", "Alpha"],
+    ["b", "Beta"],
+    ["c", "Gamma"],
+    ["d", "Delta"],
+  ] as const)
+    await capture(id, title, false);
+  await call("/api/jev/preview", {
+    focusNodeId: "a",
+    includeNodeIds: ["c"],
+    only: true,
+    purpose: "drag",
+  });
+  const state = seen.at(-1)!.state as { candidates: Array<{ id: string }> };
+  expect(state.candidates.map((node) => node.id)).toEqual(["c"]);
+  const log = (await call("/api/jev/calls")).body;
+  expect(log.calls[0]).toMatchObject({ purpose: "drag", candidates: 1 });
+});
