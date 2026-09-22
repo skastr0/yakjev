@@ -206,8 +206,12 @@ describe("blendedColors", () => {
     taxonomy: initialTaxonomy,
   } satisfies Graph;
 
-  test("an unpainted edge keeps no override", () => {
-    expect(blendedColors(graph, {}).edges.has("ab")).toBe(false);
+  test("an edge keeps the color of the nodes it joins", () => {
+    const colors = blendedColors(graph, {});
+    expect(colors.edges.get("ab")).toBe(colors.nodes.get("a"));
+    expect(blendedColors(graph, {}).edges.get("ab")).toBe(
+      colors.edges.get("ab"),
+    );
   });
 
   test("an edge touching a painted node picks up the mix", () => {

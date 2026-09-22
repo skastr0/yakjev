@@ -113,6 +113,10 @@ export function syncGraph(
   target: MultiDirectedGraph,
   data: Graph,
   placed?: ReadonlyMap<string, { x: number; y: number }>,
+  colors?: {
+    nodes: ReadonlyMap<string, string>;
+    edges: ReadonlyMap<string, string>;
+  },
 ) {
   const nodes = new Set(data.nodes.map((node) => node.id));
   const saved = data.nodes.flatMap((node) =>
@@ -135,7 +139,7 @@ export function syncGraph(
       y: position.y,
       label: node.title,
       size: 12,
-      color: nodeColor(node.status),
+      color: colors?.nodes.get(node.id) ?? nodeColor(node.status),
       fixed: placed ? false : (node.position?.pinned ?? false),
       status: node.status,
     });
@@ -157,7 +161,9 @@ export function syncGraph(
       source: edge.source,
       target: edge.target,
       label: `${disputed ? "Disputed · " : corrected ? "Corrected · " : ""}${relation?.label ?? edge.relation}`,
-      color: disputed ? "#92998c" : relation?.blocking ? "#ab653e" : "#668477",
+      color:
+        colors?.edges.get(edge.id) ??
+        (disputed ? "#92998c" : relation?.blocking ? "#ab653e" : "#668477"),
       size: 1.5,
       suggestion: false,
     };
@@ -190,7 +196,7 @@ export function syncGraph(
         source: suggestion.source,
         target: suggestion.target,
         label: `Suggestion · ${label}`,
-        color: "#9b88a6",
+        color: colors?.edges.get(`suggestion:${suggestion.id}`) ?? "#9b88a6",
         size: 1,
         suggestion: true,
       },

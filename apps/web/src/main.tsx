@@ -28,9 +28,18 @@ function App() {
     () => (graph ? visibleGraph(graph, showArchived) : null),
     [graph, showArchived],
   );
-  const matches = view && query.trim() ? searchNodes(view.nodes, query) : null;
-  const matchIds = matches ? new Set(matches.map((node) => node.id)) : null;
-  const hidden = focusRoot ? neighborhood(view, focusRoot) : null;
+  const matches = useMemo(() => {
+    if (!view || !query.trim()) return null;
+    return searchNodes(view.nodes, query);
+  }, [view, query]);
+  const matchIds = useMemo(
+    () => (matches ? new Set(matches.map((node) => node.id)) : null),
+    [matches],
+  );
+  const hidden = useMemo(
+    () => (focusRoot ? neighborhood(view, focusRoot) : null),
+    [view, focusRoot],
+  );
 
   useEffect(() => {
     if (!view || !mode) return;

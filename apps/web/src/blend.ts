@@ -238,27 +238,42 @@ export function blendedColors(
     );
 
   const edges = new Map<string, string>();
-  for (const edge of graph.edges) {
-    const from = nodes.get(edge.source);
-    const to = nodes.get(edge.target);
-    if (!from || !to) continue;
-    if (!chosen[edge.source] && !chosen[edge.target]) continue;
+  const paintEdge = (
+    id: string,
+    source: string,
+    target: string,
+    blocking: boolean,
+  ) => {
+    const from = nodes.get(source);
+    const to = nodes.get(target);
+    if (!from || !to) return;
     const mixed = mixHex([
       { hex: from, weight: 1 },
       { hex: to, weight: 1 },
     ]);
-    const relation = graph.taxonomy.relations.find(
-      (item) => item.id === edge.relation,
-    );
     edges.set(
-      edge.id,
-      relation?.blocking
+      id,
+      blocking
         ? mixHex([
             { hex: mixed, weight: 1 },
             { hex: BLOCKING_TINT, weight: 1 },
           ])
         : mixed,
     );
+  };
+  for (const edge of graph.edges) {
+    const relation = graph.taxonomy.relations.find(
+      (item) => item.id === edge.relation,
+    );
+    paintEdge(edge.id, edge.source, edge.target, relation?.blocking === true);
   }
+  for (const suggestion of graph.suggestions)
+    if (suggestion.status === "pending")
+      paintEdge(
+        `suggestion:${suggestion.id}`,
+        suggestion.source,
+        suggestion.target,
+        false,
+      );
   return { nodes, edges };
 }

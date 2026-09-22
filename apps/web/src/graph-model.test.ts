@@ -202,6 +202,25 @@ describe("render projection", () => {
     expect(searchNodes(nodes, "skill")).toHaveLength(2);
     expect(searchNodes(nodes, "missing")).toHaveLength(0);
   });
+  test("a supplied display color survives a second projection", () => {
+    const graph = new MultiDirectedGraph();
+    const data = snapshot(
+      [node("a"), node("b", { status: "active" })],
+      [edge("ab", "a", "b")],
+    );
+    const colors = {
+      nodes: new Map([
+        ["a", "#ed4968"],
+        ["b", "#8672fd"],
+      ]),
+      edges: new Map([["ab", "#bb5ede"]]),
+    };
+    syncGraph(graph, data, undefined, colors);
+    syncGraph(graph, data, undefined, colors);
+    expect(graph.getNodeAttribute("a", "color")).toBe("#ed4968");
+    expect(graph.getNodeAttribute("b", "color")).toBe("#8672fd");
+    expect(graph.getEdgeAttribute("ab", "color")).toBe("#bb5ede");
+  });
   test("a derived layout replaces saved positions without pinning them", () => {
     const graph = new MultiDirectedGraph();
     const saved = node("a", { position: { x: 40, y: 40, pinned: true } });

@@ -17,12 +17,7 @@ import {
 import type { Graph } from "@yakjev/protocol";
 import { rememberLayout } from "./layout";
 import { blendedColors } from "./blend";
-import {
-  layoutBounds,
-  nodeColor,
-  syncGraph,
-  type Selection,
-} from "./graph-model";
+import { layoutBounds, syncGraph, type Selection } from "./graph-model";
 
 export type Point = { x: number; y: number };
 export type CanvasHandle = {
@@ -133,7 +128,12 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         positions.current,
         latest.current.data,
       );
-      syncGraph(graph.current, latest.current.data, positions.current);
+      syncGraph(
+        graph.current,
+        latest.current.data,
+        positions.current,
+        blendedColors(latest.current.data, latest.current.paint),
+      );
       try {
         const sigma = new Sigma(graph.current, container.current, {
           primitives: {
@@ -167,6 +167,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
                 labelBackgroundColor: "#f5f2e9",
                 labelBackgroundPadding: 4,
                 cursor: "grab",
+                opacity: { attribute: "opacity", defaultValue: 1 },
               },
               {
                 whenState: "isHighlighted",
@@ -188,6 +189,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
                 labelBackgroundColor: "#f5f2e9",
                 labelBackgroundPadding: 3,
                 cursor: "pointer",
+                opacity: { attribute: "opacity", defaultValue: 1 },
               },
             ],
           },
@@ -317,14 +319,13 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     useEffect(() => {
       const sigma = renderer.current;
       if (!sigma) return;
+      // Fill color is applied with the projection. Writing it here snapped
+      // every node back to its status color when a card opened or closed.
       graph.current.forEachNode((id) => {
         const dimmed = props.matches !== null && !props.matches.has(id);
-        const status = graph.current.getNodeAttribute(id, "status");
-        graph.current.setNodeAttribute(
-          id,
-          "color",
-          dimmed ? "#c5ccc0" : nodeColor(status),
-        );
+        const opacity = dimmed ? 0.35 : 1;
+        if (graph.current.getNodeAttribute(id, "opacity") !== opacity)
+          graph.current.setNodeAttribute(id, "opacity", opacity);
         sigma.setNodeState(id, {
           isHighlighted:
             (props.selection?.kind === "node" && props.selection.id === id) ||
@@ -332,7 +333,13 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           isHidden: props.hidden !== null && !props.hidden.has(id),
         });
       });
-      graph.current.forEachEdge((id, _attributes, source, target) =>
+      graph.current.forEachEdge((id, _attributes, source, target) => {
+        const dimmed =
+          props.matches !== null &&
+          (!props.matches.has(source) || !props.matches.has(target));
+        const opacity = dimmed ? 0.2 : 1;
+        if (graph.current.getEdgeAttribute(id, "opacity") !== opacity)
+          graph.current.setEdgeAttribute(id, "opacity", opacity);
         sigma.setEdgeState(id, {
           isHighlighted:
             props.selection !== null &&
@@ -343,8 +350,8 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           isHidden:
             props.hidden !== null &&
             (!props.hidden.has(source) || !props.hidden.has(target)),
-        }),
-      );
+        });
+      });
     }, [props.selection, props.hidden, props.matches, props.data]);
 
     const seenIds = useRef("");
@@ -378,14 +385,18 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     useEffect(() => {
       const wasEmpty = graph.current.order === 0;
       positions.current = rememberLayout(positions.current, props.data);
-      syncGraph(graph.current, props.data, positions.current);
+      syncGraph(
+        graph.current,
+        props.data,
+        positions.current,
+        blendedColors(props.data, props.paint),
+      );
       const ids = props.data.nodes
         .map((node) => node.id)
         .sort()
         .join("\n");
       const grew = ids !== seenIds.current;
       seenIds.current = ids;
-      recolor(graph.current, props.data, props.paint);
       renderer.current?.refresh();
       if (
         renderer.current &&
@@ -444,15 +455,3 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     );
   },
 );
-
-function recolor(
-  target: MultiDirectedGraph,
-  data: Graph,
-  paint: Readonly<Record<string, string>>,
-) {
-  const colors = blendedColors(data, paint);
-  for (const [id, color] of colors.nodes)
-    if (target.hasNode(id)) target.setNodeAttribute(id, "color", color);
-  for (const [id, color] of colors.edges)
-    if (target.hasEdge(id)) target.setEdgeAttribute(id, "color", color);
-}
