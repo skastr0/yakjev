@@ -66,6 +66,15 @@ const COARSE_MIN = 48;
 const COARSE_BATCH_TOKENS = 20_000;
 const COARSE_TIMEOUT_MS = 8_000;
 const COARSE_DESCRIPTION = 280;
+// Asks about subject, not wording: with plain relevance Jev rated "Map
+// dependencies for the garden service schedule" above "Chart deployment
+// prerequisites" for "Map dependencies for the service rollout" (1.90 vs
+// 1.09); this framing ranked the paraphrase first in every live probe.
+const COARSE_LEVELS = [
+  "Different subject or different work, even if the wording is similar.",
+  "Same broad area, but different work; only indirectly useful.",
+  "The same work or subject as the focus, including a differently worded description of it.",
+] as const;
 export const PROMPT_VERSION = "yakjev-discovery-4";
 // Connect policy: Jev connects a pair when it restates the same intention,
 // when it matches and names a relation with relatedness >= CONNECT_RELATEDNESS,
@@ -699,8 +708,8 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
       };
       const question = (index: number) =>
         Decision.rate({
-          instructions: `How relevant is \`candidates[${index}]\` to \`focus\`? Judge meaning, not shared words; follow \`workspaceContext\` when present.`,
-          criteria: RELATEDNESS_LEVELS,
+          instructions: `Is \`candidates[${index}]\` about the same work and subject as \`focus\`? Compare what each is actually about (its domain and object), not shared verbs or phrasing; a candidate that reuses the focus's wording for a different subject is not the same work. Follow \`workspaceContext\` when present.`,
+          criteria: COARSE_LEVELS,
         });
       const fixed = estimateTokens(
         JSON.stringify({
@@ -771,7 +780,7 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
               ? batch.map((_, index) => {
                   const answer = response.answers[`coarse_${index}`];
                   return answer?.type === "score"
-                    ? answer.score / (RELATEDNESS_LEVELS.length - 1)
+                    ? answer.score / (COARSE_LEVELS.length - 1)
                     : null;
                 })
               : null;
