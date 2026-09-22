@@ -642,8 +642,9 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
       const score = relatedness.score / (RELATEDNESS_LEVELS.length - 1);
       const confidence =
         relation?.type === "choice" ? relation.confidence : match.confidence;
+      // A restatement is linked as related, whatever relation Jev guessed.
       const effective =
-        selected ??
+        (isSame && fallbackRelation ? undefined : selected) ??
         (isSame && fallbackRelation
           ? {
               relation: fallbackRelation,
@@ -705,7 +706,7 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
     const connections = focus
       ? chosen.map((item) => {
           const forward = item.direction === "focus_to_candidate";
-          return record(
+          const connection = record(
             forward ? focus : item.candidate,
             forward ? item.candidate : focus,
             item.relation,
@@ -714,6 +715,7 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
               ? "Connected by Jev: the same intention, restated."
               : "Connected by Jev.",
           );
+          return item.same ? { ...connection, same: true } : connection;
         })
       : [];
     judgments.sort(

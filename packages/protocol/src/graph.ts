@@ -121,6 +121,8 @@ export const SuggestionInput = Schema.Struct({
   basedOnRevision: Revision,
   evaluationId: Schema.optionalKey(Id),
   inputHash: Schema.optionalKey(Title),
+  // Jev judged the pair to be the same intention restated.
+  same: Schema.optionalKey(Schema.Boolean),
 });
 export type SuggestionInput = typeof SuggestionInput.Type;
 export const Suggestion = Schema.Struct({

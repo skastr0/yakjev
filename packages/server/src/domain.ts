@@ -459,6 +459,7 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
             model: suggestion.model,
             promptVersion: suggestion.promptVersion,
             confidence: suggestion.confidence,
+            ...(suggestion.same ? { same: true } : {}),
           },
         });
         edges = edges.map((edge) =>

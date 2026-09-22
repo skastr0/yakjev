@@ -356,3 +356,27 @@ test("no provider key: preview says unavailable and captures stay unconnected", 
   // No failed evaluations clutter the journal.
   expect(current.evaluations).toEqual([]);
 });
+
+test("a restated intention is linked as related and marked the same", async () => {
+  const { capture, settle } = await fixture(
+    controlled(
+      judge({
+        "Deploy yakjev to Railway": {
+          related: 2,
+          match: true,
+          same: true,
+          relation: "candidate_to_focus_2",
+        },
+      }),
+    ),
+  );
+  await capture("deploy", "Deploy yakjev to Railway", false);
+  await capture("ship", "Ship yakjev to production");
+  const graph = await settle((g) => g.edges.length === 1);
+  expect(graph.edges[0]).toMatchObject({
+    source: "ship",
+    target: "deploy",
+    relation: "related_to",
+    origin: { same: true },
+  });
+});
