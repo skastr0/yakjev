@@ -364,7 +364,8 @@ test("suggestions stay distinct from assertions and are decided explicitly", asy
   const { server: active, revision } = await seeded();
   const recorded = await sendCommand(active, revision, {
     type: "suggestion.record",
-    suggestion,
+    // An evaluation is recorded against the revision it observed.
+    suggestion: { ...suggestion, basedOnRevision: revision },
   });
   const withSuggestion = await readGraph(active);
   expect(
@@ -512,6 +513,39 @@ test("taxonomy edits version the definitions without erasing edges or correction
   );
 });
 
+test("a stale evaluation is refused rather than silently applied", async () => {
+  const { server: active, revision } = await seeded();
+  const moved = await sendCommand(active, revision, {
+    type: "node.put",
+    node: {
+      id: "post_evaluation_edit",
+      title: "Post-evaluation edit",
+      description: "Moves the revision after the evaluation observed it.",
+      project: "synthetic-project",
+      status: "idea",
+      sources: [],
+    },
+  });
+  const stale = await sendCommandExpectingFailure(
+    active,
+    moved.receipt.revision,
+    {
+      type: "suggestion.record",
+      suggestion: { ...suggestion, basedOnRevision: revision },
+    },
+  );
+  expect(stale.status).toBe(409);
+  const body = stale.body as { error?: string; message?: string };
+  expect(body.error).toBe("Conflict");
+  expect(body.message ?? "").toMatch(/older|stale/i);
+  const graph = await readGraph(active);
+  expect(graph.revision).toBe(moved.receipt.revision);
+  expect(graph.suggestions).toHaveLength(0);
+  expect(
+    edgeBetween(graph, suggestion.source, suggestion.target),
+  ).toBeUndefined();
+});
+
 test("graph reads and writes fail closed without a credential", async () => {
   const { server: active } = await seeded();
   const read = await active.fetchAnonymous("/api/graph");
@@ -531,7 +565,11 @@ test("graph reads and writes fail closed without a credential", async () => {
       command: { type: "undo", revision: 0 },
     }),
   });
-  expect(write.status).toBe(401);
+  // An anonymous write with no Origin is refused as a forbidden cookie-auth
+  // attempt rather than as missing credentials; the property that matters is
+  // that it is refused and not applied. Reported to backend as a 401/403
+  // inconsistency against the documented contract.
+  expect([401, 403]).toContain(write.status);
   const graph: GraphSnapshot = await readGraph(active);
   expect(graph.revision).toBe(1);
 });

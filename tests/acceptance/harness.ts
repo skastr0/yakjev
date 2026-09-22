@@ -288,7 +288,11 @@ export async function startServer(
     async fetch(path, init) {
       const headers = new Headers(init?.headers);
       headers.set("accept", headers.get("accept") ?? "application/json");
-      headers.set("authorization", `Bearer ${acceptanceToken}`);
+      // Never overwrite a caller-supplied credential: tests must be able to send
+      // a wrong or missing one and observe the server's answer.
+      if (!headers.has("authorization")) {
+        headers.set("authorization", `Bearer ${acceptanceToken}`);
+      }
       return fetch(`${origin}${path}`, { ...init, headers });
     },
     async fetchAnonymous(path, init) {
