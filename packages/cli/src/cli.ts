@@ -139,8 +139,7 @@ const runRead = async (
         typeof params.source === "string" && typeof params.target === "string"
           ? graph.edges.find(
               (item) =>
-                item.source === params.source &&
-                item.target === params.target,
+                item.source === params.source && item.target === params.target,
             )
           : undefined;
       if (byId && byPair && byId.id !== byPair.id)
@@ -338,12 +337,7 @@ const main = async (): Promise<void> => {
       writeJson(
         ok(
           "evaluate",
-          await request(
-            requireServer(args),
-            "POST",
-            "/api/evaluations",
-            body,
-          ),
+          await request(requireServer(args), "POST", "/api/evaluations", body),
         ),
       );
       return;

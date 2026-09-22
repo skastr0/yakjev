@@ -35,8 +35,10 @@ export const fail = (command: string, error: unknown): JsonErrorEnvelope => ({
 
 export const writeJson = (
   value: unknown,
-  stream: { write: (text: string) => unknown; isTTY?: boolean } =
-    process.stdout,
+  stream: {
+    write: (text: string) => unknown;
+    isTTY?: boolean;
+  } = process.stdout,
 ): void => {
   const indentation = stream.isTTY === true ? 2 : undefined;
   stream.write(`${JSON.stringify(value, null, indentation)}\n`);
