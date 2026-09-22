@@ -19,7 +19,7 @@
     "test:acceptance": "bun test tests/acceptance",
     "format": "prettier --write .",
     "check:format": "prettier --check .",
-    "verify": "bun run check:format && bun run typecheck && bun run test && bun run build && bun run test:deploy"
+    "verify": "bun run check:format && bun run typecheck && bun run test && bun run test:acceptance && bun run build && bun run test:deploy"
   },
   "devDependencies": {
     "@types/bun": "1.4.2",

@@ -4,7 +4,7 @@
 
 Setup installs Bun 1.4.2, dependencies, a web build, GitHub CLI if missing, Tailscale, Railway CLI 5.58.0, and Quasar CLI 0.5.3. Toolchains/clients may be cached; login state must not be created in setup. Resume authenticates after the snapshot is activated.
 
-`amp orb services ensure` starts a private API on 3210 with `YAKJEV_DEV_AUTH=true` and an Amp-authenticated web portal. The current scaffold ignores that flag. Once owner auth lands, it is the only synthetic loopback token; production must not set it. The Vite proxy keeps browser requests on one origin. Builds and tests need no provider credentials. The checked-in TypeSafe skill is automatically discovered.
+`amp orb services ensure` starts a private API on 3210 with `YAKJEV_DEV_AUTH=true` and an Amp-authenticated web portal. The synthetic owner token is `synthetic-yakjev-owner-token-local-only`; the server accepts this mode only with a non-production loopback origin. Production must not set the flag. The Vite proxy keeps browser requests on one origin. Builds and tests need no provider credentials. The checked-in TypeSafe skill is automatically discovered.
 
 ## Existing account integration
 
