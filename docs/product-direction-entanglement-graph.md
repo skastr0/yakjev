@@ -37,6 +37,27 @@ The need is not simply fewer items. It is an external, persistent representation
 
 Other systems may reference Yakjev node IDs and use its relationships. They own financial facts, schedules, prioritization, and execution. Yakjev may reference external work without importing those systems' full domain models.
 
+## Topology: Yakjev is the index, not the content store
+
+**Yakjev indexes intentions and their relationships; it is not a fully featured knowledge base.** Full documents, files, plans, and architecture remain in their canonical stores, such as Notion, repositories, or existing session archives. Do not create split-brain copies that must be maintained in both places.
+
+A node can contain a title, a concise description, pointers, URLs, source identifiers, and references to multiple relevant resources. Yakjev owns graph-specific state: relationships, classifications, edge rationale, user corrections, and graph history. The referenced store owns the actual document. Preserving context means preserving a reliable route to that context, with enough description to understand the node—not copying every source into Yakjev.
+
+For example:
+
+1. Save a full architecture plan in Notion, its canonical home.
+2. Create a Yakjev node with a short description and the Notion page reference.
+3. Use the available description and authorized source context to propose where the node belongs in the graph.
+4. Explore and revise its relationships in Yakjev; read and edit the architecture plan in Notion.
+
+Bidirectional synchronization is not required. A source does not need a backlink or a mirrored graph record for Yakjev to reference it. Any derived summaries or indexing material must remain distinguishable from the authoritative source; their existence must not create a second editable version of the plan. Missing, inaccessible, or outdated references should be represented honestly, not silently replaced with an assumed current copy.
+
+### Completion and optional source cleanup
+
+Completing, pruning, or cleaning up nodes can also provide an opportunity to prune related stores. This is optional, separately scoped cleanup—not automatic cascading deletion. A completed node does not imply its architecture document, receipt, or source conversation has lost value. A resource may also support other nodes or obligations.
+
+Preserve the distinction between removing an item from the active graph, removing a reference, and archiving or deleting the underlying resource. Before source cleanup, establish authorization, check known shared references and retention needs, and report unknown dependencies rather than assuming exclusivity. Verify any external change at its canonical store. Graph-only cleanup must remain possible without changing the source.
+
 ## Core interaction
 
 **Capture → connect → see → expand → reframe → recover a path forward.**
