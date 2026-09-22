@@ -13,7 +13,7 @@ import type {
   Preview,
   PreviewJudgment,
 } from "@yakjev/protocol";
-import { errorMessage, previewJev, request } from "./api";
+import { errorMessage, previewJev, request, saveLayout } from "./api";
 import { GraphCanvas, type CanvasHandle } from "./graph-canvas";
 import { JevContext } from "./jev-context";
 import { JevDevPanel } from "./jev-dev";
@@ -326,7 +326,7 @@ function App() {
           </button>
         </div>
       )}
-      {!graph || !view ? (
+      {!graph || !view || !state.layout ? (
         <section className="entry-screen">
           <h1>
             A place for
@@ -384,6 +384,18 @@ function App() {
           <GraphCanvas
             ref={canvas}
             data={view}
+            savedLayout={state.layout ?? EMPTY_LAYOUT}
+            onLayout={(positions) =>
+              saveLayout(positions).then(
+                () => true,
+                (cause: unknown) => {
+                  state.setError(
+                    `Positions not saved yet, retrying: ${errorMessage(cause)}`,
+                  );
+                  return false;
+                },
+              )
+            }
             selection={
               mode?.kind === "node" ||
               mode?.kind === "edge" ||
@@ -488,7 +500,17 @@ function isTyping(target: EventTarget | null) {
   );
 }
 
-const INCLUDE_DELAY_MS = 80;
+// A drag asks Jev only about nodes it lingers near: sweeping past nodes
+// costs nothing, and each call names just the new nearby nodes (only:true).
+const INCLUDE_DELAY_MS = 200;
+// Answers for (revision, dragged node, neighbour), reused across drags until
+// the graph changes, so moving a node around the same area is free.
+const dragMemo = new Map<
+  string,
+  { judgment: PreviewJudgment; preview: Preview }
+>();
+const memoKey = (revision: number, focus: string, node: string) =>
+  `${revision}|${focus}|${node}`;
 const RETRY_MS = 1000;
 
 type Slot =
@@ -616,8 +638,14 @@ function useDragConnect(
         timer: 0,
       };
       session.current = current;
+      const revision = graphRef.current?.revision;
+      if (revision !== undefined)
+        for (const [key, hit] of dragMemo)
+          if (key.startsWith(`${revision}|${id}|`))
+            current.held.set(hit.judgment.nodeId, { kind: "judgment", ...hit });
       setGhosts([]);
-      void ask(current, []);
+      publish(current);
+      schedule(current);
     },
     onMove(id: string, nearby: readonly string[]) {
       const current = session.current;
@@ -699,12 +727,18 @@ function absorb(
   include: readonly string[],
 ) {
   if (preview.status !== "succeeded") return false;
-  for (const judgment of preview.judgments)
+  for (const judgment of preview.judgments) {
     current.held.set(judgment.nodeId, {
       kind: "judgment",
       judgment,
       preview,
     });
+    dragMemo.set(
+      memoKey(preview.basedOnRevision, current.focusId, judgment.nodeId),
+      { judgment, preview },
+    );
+  }
+  if (dragMemo.size > 5000) dragMemo.clear();
   for (const id of include)
     if (!current.held.has(id)) current.held.set(id, { kind: "none" });
   return true;
@@ -763,6 +797,7 @@ function endpoint(end: Ghost["from"]) {
   return typeof end === "string" ? end : `${end.x},${end.y}`;
 }
 
+const EMPTY_LAYOUT: ReadonlyMap<string, { x: number; y: number }> = new Map();
 const JEV_DEV_KEY = "yakjev.jevDev";
 function readJevDev() {
   try {

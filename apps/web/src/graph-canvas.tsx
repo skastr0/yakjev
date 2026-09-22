@@ -52,6 +52,13 @@ declare global {
 
 type Props = {
   data: Graph;
+  // Positions saved on the server; the canvas starts from them.
+  savedLayout: ReadonlyMap<string, Point>;
+  // Nodes whose position changed since the last save, debounced.
+  // Resolves false when the save failed, so those nodes are sent again.
+  onLayout: (
+    positions: { id: string; x: number; y: number }[],
+  ) => Promise<boolean>;
   selection: Selection;
   hidden: ReadonlySet<string> | null;
   matches: ReadonlySet<string> | null;
@@ -95,7 +102,40 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
       moved: boolean;
     } | null>(null);
     const suppressClick = useRef(false);
-    const positions = useRef(new Map<string, { x: number; y: number }>());
+    const positions = useRef(
+      new Map<string, { x: number; y: number }>(props.savedLayout),
+    );
+    const lastSaved = useRef(new Map<string, Point>(props.savedLayout));
+    const moveOnly = useRef(false);
+    const persistTimer = useRef(0);
+    // Save only after motion settles (drops and glides take ~300ms), and only
+    // the nodes that actually moved.
+    function schedulePersist() {
+      window.clearTimeout(persistTimer.current);
+      persistTimer.current = window.setTimeout(() => {
+        const changed: { id: string; x: number; y: number }[] = [];
+        for (const node of latest.current.data.nodes) {
+          const point = positions.current.get(node.id);
+          if (!point) continue;
+          const saved = lastSaved.current.get(node.id);
+          if (
+            saved &&
+            Math.abs(saved.x - point.x) < 0.01 &&
+            Math.abs(saved.y - point.y) < 0.01
+          )
+            continue;
+          changed.push({ id: node.id, x: point.x, y: point.y });
+          lastSaved.current.set(node.id, { x: point.x, y: point.y });
+        }
+        if (!changed.length) return;
+        void latest.current.onLayout(changed).then((saved) => {
+          if (saved) return;
+          for (const point of changed) lastSaved.current.delete(point.id);
+          window.setTimeout(schedulePersist, 5000);
+        });
+      }, 900);
+    }
+    useEffect(() => () => window.clearTimeout(persistTimer.current), []);
     const dragGesture = useRef<{ x: number; y: number; peak: number } | null>(
       null,
     );
@@ -243,6 +283,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         latest.current.data,
         layoutUnit(),
       );
+      schedulePersist();
       syncGraph(
         graph.current,
         latest.current.data,
@@ -457,6 +498,10 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             };
             return;
           }
+          // Option/Alt-drag just moves: no Jev, no connection on drop.
+          moveOnly.current =
+            payload.event.original instanceof MouseEvent &&
+            payload.event.original.altKey;
           dragGesture.current = {
             x: payload.event.x,
             y: payload.event.y,
@@ -467,10 +512,11 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             x: graph.current.getNodeAttribute(payload.node, "x") as number,
             y: graph.current.getNodeAttribute(payload.node, "y") as number,
           };
-          latest.current.onDragStart(
-            payload.node,
-            reachOf.current(payload.node),
-          );
+          if (!moveOnly.current)
+            latest.current.onDragStart(
+              payload.node,
+              reachOf.current(payload.node),
+            );
         });
         sigma.on("nodeDrag", ({ node, event }) => {
           if (link.current) return;
@@ -487,7 +533,8 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             y: graph.current.getNodeAttribute(node, "y") as number,
           });
           setOverlayTick((value) => value + 1);
-          latest.current.onDragMove(node, reachOf.current(node));
+          if (!moveOnly.current)
+            latest.current.onDragMove(node, reachOf.current(node));
         });
         sigma.on("nodeDragEnd", ({ node }) => {
           if (link.current) return;
@@ -498,10 +545,12 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           const nearby = reachOf.current(node);
           const moved = (dragGesture.current?.peak ?? 0) > DRAG_COMMIT_PX;
           dragGesture.current = null;
-          if (moved) {
+          if (moveOnly.current) moveOnly.current = false;
+          else if (moved) {
             releaseNode(node);
             latest.current.onDragEnd(node, nearby);
           } else latest.current.onDragCancel();
+          schedulePersist();
         });
         sigma.on("moveBody", ({ event }) => {
           const current = link.current;
@@ -660,6 +709,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         blendedColors(props.data, props.paint),
       );
       if (moves.length && !reduceMotion.current) glideNodes(moves);
+      schedulePersist();
       const ids = props.data.nodes
         .map((node) => node.id)
         .sort()
@@ -943,8 +993,9 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           </div>
         )}
         <p className="graph-hint">
-          Drag toward a node to connect · shift-drag chooses the link ·
-          double-click captures · click an arrow reframes · / finds · ⌘Z undoes
+          Drag toward a node to connect · ⌥-drag just moves · shift-drag chooses
+          the link · double-click captures · click an arrow reframes · / finds ·
+          ⌘Z undoes
         </p>
       </div>
     );

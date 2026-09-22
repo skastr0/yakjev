@@ -4,6 +4,7 @@ import {
   ApiFailure,
   decodeReceipt,
   errorMessage,
+  layout as loadLayout,
   request,
   sendCommand,
   snapshot,
@@ -20,6 +21,11 @@ export function useGraph() {
   const [pending, setPending] = useState(false);
   const [lastEdit, setLastEdit] = useState<Receipt | null>(null);
   const [session, setSession] = useState(0);
+  // Saved canvas positions, loaded once per session before the canvas mounts.
+  const [layout, setLayout] = useState<ReadonlyMap<
+    string,
+    { x: number; y: number }
+  > | null>(null);
   // Edits sent but not yet confirmed, shown on top of the last snapshot so the
   // graph answers at once instead of after two network round trips.
   const [inFlight, setInFlight] = useState<
@@ -54,9 +60,13 @@ export function useGraph() {
     setGraph(null);
     setConnection("loading");
     setError("");
-    void refresh()
-      .then((initial) => {
+    setLayout(null);
+    void Promise.all([refresh(), loadLayout()])
+      .then(([initial, saved]) => {
         if (stopped) return;
+        setLayout(
+          new Map(saved.positions.map((point) => [point.id, point] as const)),
+        );
         events = new EventSource(`/api/events?after=${initial.revision}`);
         events.onopen = () => setConnection("live");
         events.onerror = () => {
@@ -232,6 +242,7 @@ export function useGraph() {
   );
   return {
     graph: shown,
+    layout,
     connection,
     error,
     notice,

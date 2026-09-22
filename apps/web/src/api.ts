@@ -4,6 +4,8 @@ import {
   Graph,
   HistoryEntry,
   JevCalls,
+  Layout,
+  type LayoutPoint,
   Neighborhood,
   Preview,
   Receipt,
@@ -89,6 +91,16 @@ export async function previewJev(input: PreviewRequest, signal?: AbortSignal) {
     }),
   );
 }
+
+// Canvas positions live outside the journal: saving creates no revision.
+export const layout = async () =>
+  Schema.decodeUnknownSync(Layout)(await request("/api/layout"));
+export const saveLayout = async (positions: readonly LayoutPoint[]) =>
+  request("/api/layout", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ positions }),
+  });
 
 export const jevCalls = async () =>
   Schema.decodeUnknownSync(JevCalls)(await request("/api/jev/calls"));
