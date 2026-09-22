@@ -36,7 +36,9 @@ Jev runs as the graph is edited; there is no "ask" step.
 - **Auto-connect** (`Evaluations.command`): every capture from any channel is connected in the background by the `jev` system actor unless it says `autoConnect: false` (the browser sends its previewed edges itself). The evaluation audit and the edges commit in one revision; a concurrent edit retries against the new graph. Failures leave no trace.
 - **Learning**: Jev edges carry `origin` (model, prompt version, confidence, same). Reframing one records a correction; removing one suppresses the pair and records a `jev-edge-removed` rejection. Both are sent to Jev as `ownerCorrections`, precedent for later judgments.
 
-Candidate retrieval is lexical and graph-neighborhood selection, capped at 24 nodes with explicit coverage/truncation. Source URLs are unfetched pointers; only supplied context participates. Missing credentials and provider errors produce unavailable/failed results, never invented judgments.
+Retrieval (`retrieval.ts`) ranks every eligible node: explicit ids and graph neighbours first, then Synthetic nomic embeddings fused with word overlap (lexical only without `SYNTHETIC_API_KEY`). On graphs over 24 nodes, a coarse Jev pass rates the top 480 with one question each, and the packer (`shortlist()` in `discovery.ts`) keeps the best-first prefix up to a ~26k-token soft target under Jev's 64k/32k/128 KB limits.
+
+Known limit (2026-09-22): the live 1,000-node paraphrase test (`bun run jev:retrieval --jev-rerank`, about 330 near-duplicate traps per target) recalls 2 of 3. The miss reaches the coarse window but not the packed set, likely because coarse ratings are relative within each batch. The proposed next step is a single side-by-side re-rating of the coarse top ~60. Source URLs are unfetched pointers; only supplied context participates. Missing credentials and provider errors produce unavailable/failed results, never invented judgments.
 
 ## Cross-project agent access
 
