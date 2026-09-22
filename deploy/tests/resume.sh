@@ -128,6 +128,7 @@ code="$(
     YAKJEV_RESUME_POLL_WAIT=0 \
     YAKJEV_RESUME_ONLINE_WAIT=0 \
     YAKJEV_RESUME_STATUS_CMD="printf '%s' '$(status_json true)'" \
+    YAKJEV_RESUME_CONNECT_CMD='echo UNEXPECTED_CONNECT; exit 97' \
     QUASAR_SERVER_URL=https://quasar.example \
     YAKJEV_REMOTE_URL=https://yakjev.example \
     RAILWAY_API_TOKEN= \
