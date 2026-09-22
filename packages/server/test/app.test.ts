@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { Layer } from "effect";
 import { createApp } from "../src/app";
+import { Discovery, makeDiscovery } from "../src/discovery";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -20,7 +22,7 @@ async function fixture() {
     origin: "https://yakjev.example.ts.net",
     ownerToken: "synthetic-owner-test-token-with-40-characters",
   };
-  const app = createApp(options);
+  const app = createApp(options, Layer.effect(Discovery, makeDiscovery(null)));
   cleanups.push(() => app.close());
   const request = (path: string, init?: RequestInit) =>
     app.fetch(new Request(`${options.origin}${path}`, init));
@@ -63,14 +65,13 @@ test("rejects foreign hosts, cross-origin requests, and all mutations", async ()
   ).toBe(403);
 });
 
-test("never serves database, repository, traversal paths, or a pretend MCP endpoint", async () => {
+test("never serves database, repository or traversal paths", async () => {
   const { request } = await fixture();
   for (const path of [
     "/.env",
     "/graph.sqlite",
     "/package.json",
     "/assets/%2e%2e%2fsecret.txt",
-    "/mcp",
   ]) {
     const response = await request(path);
     expect(response.status).toBe(404);
@@ -291,4 +292,246 @@ test("SSE replays durable receipts, follows live commits and resumes after resta
     error: "Conflict",
     currentRevision: 3,
   });
+});
+
+test("mounted MCP over TCP authenticates every request and shares HTTP graph and evaluation operations", async () => {
+  const { app, options } = await fixture();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: app.fetch,
+  });
+  cleanups.push(async () => {
+    await server.stop(true);
+  });
+  const request = (path: string, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    headers.set("host", new URL(options.origin).host);
+    return fetch(new URL(path, server.url), { ...init, headers });
+  };
+  let session: string | null = null;
+  let sequence = 0;
+  const rpc = (
+    method: string,
+    params: unknown,
+    authorization: string | null = `Bearer ${options.ownerToken}`,
+    extra: Record<string, string> = {},
+  ) =>
+    request("/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        ...(authorization ? { authorization } : {}),
+        ...(session
+          ? { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" }
+          : {}),
+        ...extra,
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++sequence, method, params }),
+    });
+  const initialize = {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "synthetic-integration", version: "1" },
+  };
+  expect((await rpc("initialize", initialize, null)).status).toBe(401);
+  expect(
+    (
+      await rpc("initialize", initialize, "Bearer forged", {
+        "tailscale-user-login": "owner",
+        "x-actor": "owner",
+      })
+    ).status,
+  ).toBe(401);
+  const response = await rpc("initialize", initialize);
+  expect(response.status).toBe(200);
+  session = response.headers.get("mcp-session-id");
+  expect(session).not.toBeNull();
+  const listed = await (await rpc("tools/list", {})).json();
+  expect(
+    listed.result.tools.map((tool: { name: string }) => tool.name).sort(),
+  ).toEqual([
+    "graph_command",
+    "graph_discover",
+    "graph_evaluate",
+    "graph_read",
+  ]);
+  const command = {
+    requestId: "mcp-create",
+    expectedRevision: 0,
+    command: nodeCommand("agent"),
+  };
+  const called = await (
+    await rpc("tools/call", { name: "graph_command", arguments: command })
+  ).json();
+  expect(called.result.isError).toBe(false);
+  expect(JSON.parse(called.result.content[0].text)).toMatchObject({
+    receipt: { revision: 1, actor: { id: "owner", channel: "mcp" } },
+  });
+  const auth = { authorization: `Bearer ${options.ownerToken}` };
+  const graph = await (await request("/api/graph", { headers: auth })).json();
+  expect(graph.nodes[0].id).toBe("agent");
+  expect(graph.revision).toBe(1);
+  const replay = await request("/api/commands", {
+    method: "POST",
+    headers: { ...auth, "content-type": "application/json" },
+    body: JSON.stringify(command),
+  });
+  expect(await replay.json()).toMatchObject({
+    replayed: true,
+    receipt: { revision: 1, actor: { channel: "mcp" } },
+  });
+  expect((await rpc("tools/list", {}, null)).status).toBe(401);
+  expect(
+    (await rpc("tools/list", {}, `Bearer ${options.ownerToken}wrong`)).status,
+  ).toBe(401);
+  expect(
+    (
+      await rpc("tools/list", {}, `Bearer ${options.ownerToken}`, {
+        origin: "https://foreign.test",
+      })
+    ).status,
+  ).toBe(403);
+  const spoofed = await (
+    await rpc("tools/call", {
+      name: "graph_command",
+      arguments: { ...command, actor: { id: "forged" } },
+    })
+  ).json();
+  expect(spoofed.error.code).toBe(-32602);
+  const httpCommand = {
+    requestId: "browser-create",
+    expectedRevision: 1,
+    command: nodeCommand("prerequisite"),
+  };
+  expect(
+    (
+      await request("/api/commands", {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify(httpCommand),
+      })
+    ).status,
+  ).toBe(200);
+  const tool = async (name: string, args: unknown, isError = false) => {
+    const response = await rpc("tools/call", { name, arguments: args });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.result.isError).toBe(isError);
+    return JSON.parse(body.result.content[0].text);
+  };
+  expect(await tool("graph_command", httpCommand)).toMatchObject({
+    replayed: true,
+    receipt: { revision: 2, actor: { channel: "browser" } },
+  });
+  expect(
+    await tool("graph_command", { ...httpCommand, requestId: "stale" }, true),
+  ).toMatchObject({ error: "Conflict", currentRevision: 2 });
+  await tool("graph_command", {
+    requestId: "mcp-connect",
+    expectedRevision: 2,
+    command: {
+      type: "edge.put",
+      edge: {
+        id: "edge",
+        source: "agent",
+        target: "prerequisite",
+        relation: "requires",
+        rationale: "Synthetic prerequisite",
+      },
+    },
+  });
+  for (const [args, path] of [
+    [{ view: "graph" }, "/api/graph"],
+    [{ view: "history", after: 1, limit: 1 }, "/api/history?after=1&limit=1"],
+    [{ view: "search", query: "prerequisite" }, "/api/search?q=prerequisite"],
+    [
+      { view: "neighborhood", id: "agent", blocking: true },
+      "/api/neighborhood?id=agent&blocking=true",
+    ],
+    [
+      { view: "neighborhood", id: "agent", direction: "incoming" },
+      "/api/neighborhood?id=agent&direction=incoming",
+    ],
+    [{ view: "export" }, "/api/export"],
+  ] as const) {
+    expect(await tool("graph_read", args)).toEqual(
+      await (await request(path, { headers: auth })).json(),
+    );
+  }
+  expect(
+    await tool("graph_discover", { query: "agent", focusNodeId: "agent" }),
+  ).toEqual(
+    await (
+      await request("/api/discovery?query=agent&focusNodeId=agent", {
+        headers: auth,
+      })
+    ).json(),
+  );
+  const events = await request("/api/events?after=2", { headers: auth });
+  const reader = events.body!.getReader();
+  let text = "";
+  while (!text.includes("id: 3\n"))
+    text += new TextDecoder().decode((await reader.read()).value);
+  expect(text).toContain('"channel":"mcp"');
+  await reader.cancel();
+  const evaluationRequest = {
+    requestId: "mcp-evaluate",
+    expectedRevision: 3,
+    query: "agent",
+  };
+  const evaluated = await (
+    await rpc("tools/call", {
+      name: "graph_evaluate",
+      arguments: evaluationRequest,
+    })
+  ).json();
+  expect(evaluated.result.isError).toBe(false);
+  const result = JSON.parse(evaluated.result.content[0].text);
+  const blob = await (
+    await request(
+      `/api/evaluations/${encodeURIComponent(result.evaluationId)}`,
+      { headers: auth },
+    )
+  ).json();
+  expect(blob.result.status).toBe("unavailable");
+  expect(blob.provenance.actor.channel).toBe("mcp");
+  expect(
+    await tool("graph_read", { view: "evaluation", id: result.evaluationId }),
+  ).toEqual(blob);
+  const evaluateHttp = (input: unknown) =>
+    request("/api/evaluations", {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  expect(await (await evaluateHttp(evaluationRequest)).json()).toEqual({
+    ...result,
+    replayed: true,
+  });
+  expect(await tool("graph_evaluate", evaluationRequest)).toEqual({
+    ...result,
+    replayed: true,
+  });
+  expect(
+    (await evaluateHttp({ ...evaluationRequest, query: "changed" })).status,
+  ).toBe(409);
+  expect(
+    await tool(
+      "graph_evaluate",
+      { ...evaluationRequest, query: "changed" },
+      true,
+    ),
+  ).toMatchObject({ error: "Conflict" });
+  expect(
+    (await (await request("/api/history", { headers: auth })).json()).length,
+  ).toBe(4);
+  const login = await request("/api/session", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: options.origin },
+    body: JSON.stringify({ token: options.ownerToken }),
+  });
+  const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+  expect((await rpc("tools/list", {}, null, { cookie })).status).toBe(401);
 });

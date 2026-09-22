@@ -7,6 +7,7 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http";
+import { mcpLayer, provideActor } from "../../mcp/src/index";
 import { Auth, type AuthOptions } from "./auth";
 import {
   discover,
@@ -297,8 +298,35 @@ export function createApp(
       yield* router.add("*", "/healthz", handle());
     }),
   );
+  const mcp = Layer.unwrap(
+    Effect.gen(function* () {
+      const auth = yield* Auth;
+      const authenticate = HttpRouter.middleware((httpEffect) =>
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const authorized = yield* auth
+            .bearer(request.headers)
+            .pipe(Effect.result);
+          if (authorized._tag === "Failure")
+            return json(
+              {
+                error: authorized.failure.code,
+                message: authorized.failure.message,
+              },
+              statusFor[authorized.failure.code],
+            );
+          return yield* httpEffect.pipe(
+            Effect.provide(provideActor(authorized.success)),
+          );
+        }),
+      ).layer;
+      return mcpLayer({ origin: origin.origin }).pipe(
+        Layer.provide(authenticate),
+      );
+    }),
+  );
   const app = HttpRouter.toWebHandler(
-    routes.pipe(
+    Layer.mergeAll(routes, mcp).pipe(
       Layer.provide(
         Layer.mergeAll(
           Auth.layer(options),
@@ -334,7 +362,11 @@ export function createApp(
         request.headers.get("origin") !== origin.origin
       )
         return error("Forbidden origin", 403);
-      if (url.pathname === "/healthz" || url.pathname.startsWith("/api/")) {
+      if (
+        url.pathname === "/healthz" ||
+        url.pathname === "/mcp" ||
+        url.pathname.startsWith("/api/")
+      ) {
         const response = await app.handler(request);
         const secured = new Headers(response.headers);
         for (const [key, value] of Object.entries(headers))
