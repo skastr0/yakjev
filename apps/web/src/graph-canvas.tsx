@@ -24,6 +24,7 @@ import {
   layoutBounds,
   settlePoint,
   syncGraph,
+  uprightLabelAngle,
   visibleSettleDistance,
   type Selection,
 } from "./graph-model";
@@ -280,7 +281,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             itemSizesReference: "screen",
             enableNodeDrag: true,
             enableEdgeEvents: true,
-            renderEdgeLabels: true,
+            renderEdgeLabels: false,
             nodeLabelEvents: "extend",
             edgeLabelEvents: "extend",
             stagePadding: 48,
@@ -299,8 +300,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           cancelAnimationFrame(frame);
           frame = requestAnimationFrame(() => {
             latest.current.onView();
-            if (latest.current.ghosts.length || arrivingRef.current)
-              setOverlayTick((value) => value + 1);
+            setOverlayTick((value) => value + 1);
           });
         });
         sigma.on("clickNode", ({ node }) => {
@@ -803,6 +803,46 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
               </g>
             );
           })}
+          {edgeCaptions().map((caption) => {
+            const plate = Math.max(28, caption.text.length * 6.2 + 12);
+            return (
+              <g
+                key={caption.id}
+                transform={`translate(${caption.x} ${caption.y}) rotate(${caption.angle}) translate(0 -11)`}
+                opacity={caption.opacity}
+                pointerEvents="auto"
+                style={{ cursor: "pointer" }}
+                onClick={() =>
+                  props.onSelect(
+                    caption.id.startsWith("suggestion:")
+                      ? {
+                          kind: "suggestion",
+                          id: caption.id.slice("suggestion:".length),
+                        }
+                      : { kind: "edge", id: caption.id },
+                  )
+                }
+              >
+                <rect
+                  x={-plate / 2}
+                  y={-8}
+                  width={plate}
+                  height={16}
+                  rx={3}
+                  fill="#f5f2e9"
+                />
+                <text
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fill="#526459"
+                  fontSize={11}
+                  fontFamily="Avenir Next, Avenir, system-ui, sans-serif"
+                >
+                  {caption.text}
+                </text>
+              </g>
+            );
+          })}
           <line ref={band} visibility="hidden" />
         </svg>
         {announcement && (
@@ -846,6 +886,41 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         </p>
       </div>
     );
+
+    function edgeCaptions() {
+      const captions: {
+        id: string;
+        text: string;
+        x: number;
+        y: number;
+        angle: number;
+        opacity: number;
+      }[] = [];
+      graph.current.forEachEdge((id, _attributes, source, target) => {
+        if (
+          props.hidden &&
+          (!props.hidden.has(source) || !props.hidden.has(target))
+        )
+          return;
+        const from = overlayPoint(source);
+        const to = overlayPoint(target);
+        if (!from || !to) return;
+        const text = String(graph.current.getEdgeAttribute(id, "label") ?? "");
+        if (!text) return;
+        const dimmed =
+          props.matches !== null &&
+          (!props.matches.has(source) || !props.matches.has(target));
+        captions.push({
+          id,
+          text,
+          x: (from.x + to.x) / 2,
+          y: (from.y + to.y) / 2,
+          angle: uprightLabelAngle(to.x - from.x, to.y - from.y),
+          opacity: dimmed ? 0.35 : 1,
+        });
+      });
+      return captions;
+    }
 
     function nodePaint(id: string) {
       if (!graph.current.hasNode(id)) return "#2c84ff";

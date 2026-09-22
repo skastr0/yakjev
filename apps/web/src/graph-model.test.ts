@@ -17,6 +17,7 @@ import {
   syncGraph,
   settlePoint,
   unjudgedIds,
+  uprightLabelAngle,
   visibleGraph,
   visibleSettleDistance,
 } from "./graph-model";
@@ -321,6 +322,14 @@ describe("render projection", () => {
     expect(visibleSettleDistance(140, 1, 160, false)).toBe(140);
     expect(visibleSettleDistance(140, 1, 160, true)).toBe(208);
     expect(visibleSettleDistance(140, 2, 40, true)).toBe(140);
+  });
+
+  test("edge labels stay upright when the edge runs right to left", () => {
+    expect(uprightLabelAngle(10, 0)).toBe(0);
+    expect(uprightLabelAngle(-10, 0)).toBe(0);
+    expect(uprightLabelAngle(0, 10)).toBe(90);
+    expect(uprightLabelAngle(-10, 10)).toBeCloseTo(-45);
+    expect(uprightLabelAngle(-10, -10)).toBeCloseTo(45);
   });
 
   test("canonical source rendering never turns an executable URI into a link", () => {

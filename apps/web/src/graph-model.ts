@@ -182,6 +182,17 @@ export function visibleSettleDistance(
   return screen / scale;
 }
 
+// Screen-space angle of an edge label, flipped so text stays upright when the
+// edge runs right-to-left.
+export function uprightLabelAngle(dx: number, dy: number) {
+  if (dx === 0 && dy === 0) return 0;
+  let degrees = (Math.atan2(dy, dx) * 180) / Math.PI;
+  if (degrees > 90 || degrees < -90) degrees += 180;
+  if (degrees > 180) degrees -= 360;
+  if (degrees < -180) degrees += 360;
+  return degrees;
+}
+
 // Where a dropped node should rest so the new edge is as long as `distance`.
 // Null when it is already there. Direction is back toward where the drag started.
 export function settlePoint(
