@@ -375,9 +375,9 @@ export function usePairPreview(
   return { preview, judgment, loading };
 }
 
-export function confidenceText(confidence: number | null | undefined) {
-  const value = probability(confidence);
-  return value === null ? "" : `${Math.round(value * 100)}%`;
+export function percentText(value: number | null | undefined) {
+  const share = probability(value);
+  return share === null ? "" : `${Math.round(share * 100)}%`;
 }
 
 function probability(value: number | null | undefined) {

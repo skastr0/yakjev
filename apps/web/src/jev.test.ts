@@ -9,7 +9,7 @@ import {
 import {
   backgroundArrivals,
   captureWithJev,
-  confidenceText,
+  percentText,
   connections,
   correctJev,
   jevEdge,
@@ -155,9 +155,9 @@ test("typing ghosts start at the create point and label the relation", () => {
   expect(ghosts[1]).toMatchObject({ label: "same", relation });
 });
 
-test("confidence reads as a whole percent", () => {
-  expect(confidenceText(0.824)).toBe("82%");
-  expect(confidenceText(null)).toBe("");
+test("a probability reads as a whole percent", () => {
+  expect(percentText(0.824)).toBe("82%");
+  expect(percentText(null)).toBe("");
 });
 
 describe("fixing Jev", () => {

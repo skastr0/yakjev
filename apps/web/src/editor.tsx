@@ -15,7 +15,7 @@ import { PALETTE } from "./blend";
 import {
   announceLearned,
   captureWithJev,
-  confidenceText,
+  percentText,
   connections,
   correctJev,
   JEV_RATIONALE,
@@ -307,8 +307,11 @@ function WarmingUp({
               </span>
               <span className="jev-relation">{relationLabel(graph, link)}</span>
               <span className="jev-title">{title(link.nodeId)}</span>
-              <span className="jev-confidence">
-                {confidenceText(link.confidence)}
+              <span
+                className="jev-confidence"
+                title="How related Jev judged it"
+              >
+                {percentText(link.relatedness)}
               </span>
             </li>
           ))}
@@ -573,11 +576,11 @@ function EdgeCard({
             Jev
             {edge.correction
               ? " · corrected by you"
-              : `${edge.origin.same ? " · same intention" : ""}${
-                  edge.origin.confidence !== null
-                    ? ` · ${confidenceText(edge.origin.confidence)}`
-                    : ""
-                }`}
+              : edge.origin.same
+                ? " · same intention"
+                : edge.origin.confidence !== null
+                  ? ` · ${percentText(edge.origin.confidence)} sure`
+                  : ""}
           </p>
           <button
             type="button"
@@ -746,11 +749,9 @@ function AssertCard({
           {jev.loading
             ? "Jev is reading…"
             : judgment
-              ? `Jev · ${relationLabel(graph, judgment)}${
-                  confidenceText(judgment.confidence)
-                    ? ` · ${confidenceText(judgment.confidence)}`
-                    : ""
-                }`
+              ? `Jev · ${relationLabel(graph, judgment)} · ${percentText(
+                  judgment.relatedness,
+                )} related`
               : jev.preview?.status === "succeeded"
                 ? "Jev sees no relation"
                 : "Jev is offline"}
