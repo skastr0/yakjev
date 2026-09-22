@@ -5,6 +5,7 @@
 //
 //   bun tests/acceptance/browser/run.ts            # full loop
 //   bun tests/acceptance/browser/run.ts --discover # inspect the page and exit
+//   bun tests/acceptance/browser/run.ts --only=J   # only steps named J*
 //
 // Every step reports PASS, FAIL, or BLOCKED with the reason. BLOCKED means the
 // driver could not locate a surface it needs; it is never reported as a pass.
@@ -32,6 +33,11 @@ import { callTool, openSession } from "../mcp";
 const session = "yakjev-accept";
 const artifacts = resolve(import.meta.dir, "../../../.amp/in/artifacts");
 const discover = process.argv.includes("--discover");
+// Run only steps whose name starts with the prefix, e.g. --only=J for the
+// self-contained live Jev checks (they use their own server and login).
+const only = process.argv
+  .find((value) => value.startsWith("--only="))
+  ?.slice("--only=".length);
 const devToken = "synthetic-yakjev-owner-token-local-only";
 const wrongToken = "synthetic-wrong-token-value";
 
@@ -59,6 +65,7 @@ async function run(
   name: string,
   body: () => Promise<Omit<Step, "name" | "status">>,
 ): Promise<void> {
+  if (only && !name.startsWith(only)) return;
   const started = Date.now();
   try {
     const result = await body();
@@ -285,6 +292,128 @@ async function diffCanvas(before: string, after: string): Promise<CanvasDiff> {
 
 async function changedFraction(before: string, after: string): Promise<number> {
   return (await diffCanvas(before, after)).fraction;
+}
+
+async function waitForSelector(
+  selector: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const present = await js<boolean>(
+      `!!document.querySelector(${JSON.stringify(selector)})`,
+    );
+    if (present) return true;
+    await Bun.sleep(150);
+  }
+  return false;
+}
+
+/** A node's CSS-pixel anchor via the canvas test hook (window.__yakjevCanvas). */
+async function nodeAnchor(
+  id: string,
+): Promise<{ x: number; y: number } | null> {
+  return js<{ x: number; y: number } | null>(
+    `window.__yakjevCanvas?.anchorNode(${JSON.stringify(id)}) ?? null`,
+  );
+}
+
+/**
+ * Trusted shift-drag between two canvas points. Sigma ignores JS-dispatched
+ * mouse events and agent-browser's own mouse commands cannot hold a modifier,
+ * so this drives raw CDP Input.dispatchMouseEvent with the Shift bitmask (8).
+ */
+async function cdpShiftDrag(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): Promise<void> {
+  const cdpUrl = (await ab(["get", "cdp-url"])).trim();
+  const port = await js<string>("location.port");
+  const ws = new WebSocket(cdpUrl);
+  await new Promise<void>((resolve, reject) => {
+    ws.onopen = () => resolve();
+    ws.onerror = () => reject(new Error("CDP WebSocket failed to open"));
+  });
+  try {
+    let nextId = 0;
+    const pending = new Map<number, (value: never) => void>();
+    ws.onmessage = (event) => {
+      const message = JSON.parse(String(event.data)) as {
+        id?: number;
+        result?: never;
+      };
+      if (message.id && pending.has(message.id)) {
+        pending.get(message.id)!(message.result as never);
+        pending.delete(message.id);
+      }
+    };
+    const send = (
+      method: string,
+      params: Record<string, unknown> = {},
+      sessionId?: string,
+    ) =>
+      new Promise<// eslint-disable-next-line @typescript-eslint/no-explicit-any
+      any>((resolve) => {
+        const id = ++nextId;
+        pending.set(id, resolve);
+        ws.send(
+          JSON.stringify({
+            id,
+            method,
+            params,
+            ...(sessionId ? { sessionId } : {}),
+          }),
+        );
+      });
+    const targets = await send("Target.getTargets");
+    const page = targets.targetInfos.find(
+      (target: { type: string; url: string }) =>
+        target.type === "page" && target.url.includes(`127.0.0.1:${port}`),
+    );
+    if (!page)
+      throw new Error("no CDP page target for the current acceptance page");
+    const attached = await send("Target.attachToTarget", {
+      targetId: page.targetId,
+      flatten: true,
+    });
+    const mouse = (
+      type: string,
+      x: number,
+      y: number,
+      extra: Record<string, unknown> = {},
+    ) =>
+      send(
+        "Input.dispatchMouseEvent",
+        { type, x, y, button: "left", pointerType: "mouse", ...extra },
+        attached.sessionId,
+      );
+    // Hover first so sigma registers the node under the cursor, then hold Shift.
+    await mouse("mouseMoved", from.x, from.y, { buttons: 0 });
+    await Bun.sleep(150);
+    await mouse("mousePressed", from.x, from.y, {
+      buttons: 1,
+      modifiers: 8,
+      clickCount: 1,
+    });
+    await Bun.sleep(120);
+    for (let i = 1; i <= 8; i++) {
+      await mouse(
+        "mouseMoved",
+        from.x + ((to.x - from.x) * i) / 8,
+        from.y + ((to.y - from.y) * i) / 8,
+        { buttons: 1, modifiers: 8 },
+      );
+      await Bun.sleep(60);
+    }
+    await Bun.sleep(120);
+    await mouse("mouseReleased", to.x, to.y, {
+      buttons: 0,
+      modifiers: 8,
+      clickCount: 1,
+    });
+  } finally {
+    ws.close();
+  }
 }
 
 /** Wait until a node title is observable in the rendered node list. */
@@ -1083,6 +1212,196 @@ async function main(): Promise<void> {
         };
       },
     );
+
+    // ---------------------------------------------------- live Jev (real provider)
+    // A second disposable server with the real provider key: the primary
+    // acceptance server deliberately runs without one (E7b depends on that).
+    const providerKey = process.env.TYPESAFE_API_KEY;
+    if (!providerKey) {
+      record({
+        name: "J1/J2 live Jev browser checks",
+        status: "blocked",
+        detail:
+          "TYPESAFE_API_KEY is not configured; live preview checks skipped",
+        artifacts: [],
+      });
+    } else {
+      const jevServer = await startServer({
+        env: { YAKJEV_DEV_AUTH: "true", TYPESAFE_API_KEY: providerKey },
+        token: devToken,
+      });
+      try {
+        const intention = "Plant tomatoes in the raised beds";
+        await run(
+          "J1 typing an intention lists Jev's connections; Enter commits them",
+          async () => {
+            await sendCommand(jevServer, 0, {
+              type: "capture",
+              capture: {
+                id: "jev_browser_seed",
+                text: "Synthetic seed for the live Jev browser check. Not fetched.",
+                sources: [],
+                nodeIds: ["seed_beds", "seed_seeds"],
+              },
+              nodes: [
+                {
+                  id: "seed_beds",
+                  title: "Build raised beds for the vegetable garden",
+                  description:
+                    "Two cedar raised beds along the south fence for vegetables.",
+                  project: "synthetic-garden",
+                  status: "idea",
+                  sources: [],
+                },
+                {
+                  id: "seed_seeds",
+                  title: "Order tomato and basil seeds before spring",
+                  description: "Seed order must go out before spring planting.",
+                  project: "synthetic-garden",
+                  status: "idea",
+                  sources: [],
+                },
+              ],
+              edges: [],
+              autoConnect: false,
+            });
+            await ab(["open", jevServer.origin]);
+            await ab(["set", "viewport", "1280", "720", "2"]);
+            await login();
+            await frame();
+            await ab(["press", "c"]);
+            if (!(await waitForSelector("input[aria-label='Intention']", 5000)))
+              blocked("pressing c did not open the create card");
+            let items: string[] = [];
+            let attempts = 0;
+            for (attempts = 1; attempts <= 2; attempts++) {
+              if (!(await fillLabel("Intention", intention)))
+                blocked("no 'Intention' input in the create card");
+              if (
+                await waitForSelector(
+                  ".jev-live ul[aria-label='Jev will connect'] li",
+                  12_000,
+                )
+              ) {
+                items = await js<string[]>(
+                  `Array.from(document.querySelectorAll(".jev-live ul[aria-label='Jev will connect'] li")).map((li) => (li.textContent || "").trim())`,
+                );
+                if (items.length > 0) break;
+              }
+              // A flaky provider call shows the offline note; retry once.
+              await fillLabel("Intention", "");
+              await frame();
+            }
+            if (items.length === 0)
+              throw new Error(
+                "the live 'Jev will connect' list never appeared while typing",
+              );
+            if (!items.some((item) => /raised beds|seeds/i.test(item)))
+              throw new Error(
+                `the live list named none of the seeded nodes: ${items.join(" | ")}`,
+              );
+            const shot = await screenshot("j1-typing-preview");
+            await ab(["press", "Enter"]);
+            const deadline = Date.now() + 10_000;
+            let createdId: string | undefined;
+            let jevEdges: {
+              id: string;
+              source: string;
+              target: string;
+              rationale: string;
+              origin?: unknown;
+            }[] = [];
+            while (Date.now() < deadline) {
+              const graph = await readGraph(jevServer);
+              const created = graph.nodes.find(
+                (node) => node.title === intention,
+              );
+              if (created) {
+                createdId = created.id;
+                jevEdges = graph.edges.filter(
+                  (edge) =>
+                    edge.source === created.id || edge.target === created.id,
+                );
+                if (jevEdges.length > 0) break;
+              }
+              await Bun.sleep(250);
+            }
+            if (!createdId)
+              throw new Error("Enter did not create the intention");
+            if (jevEdges.length === 0)
+              throw new Error("the created intention has no edges");
+            if (jevEdges.some((edge) => !edge.origin))
+              throw new Error("a Jev-created edge is missing its origin");
+            if (jevEdges.some((edge) => edge.rationale !== "Connected by Jev."))
+              throw new Error("a Jev-created edge lacks the Jev rationale");
+            await screenshot("j1-created-with-edges");
+            return {
+              detail: `${items.length} live connection(s) while typing (${attempts} attempt(s)); created ${createdId} with ${jevEdges.length} Jev edge(s), origin and rationale set`,
+              artifacts: [shot],
+            };
+          },
+        );
+
+        await run(
+          "J2 shift-drag pre-selects Jev's relation in the link card",
+          async () => {
+            const before = await readGraph(jevServer);
+            if (edgeBetween(before, "seed_beds", "seed_seeds"))
+              throw new Error("seed nodes are already connected; bad fixture");
+            await screenshot("j2-before-shift-drag");
+            const from = await nodeAnchor("seed_seeds");
+            const to = await nodeAnchor("seed_beds");
+            if (!from || !to)
+              blocked(
+                "window.__yakjevCanvas.anchorNode is not exposed; the canvas needs the test hook requested from jev-drag",
+              );
+            await cdpShiftDrag(from, to);
+            if (!(await waitForSelector(".jev-note", 8_000))) {
+              await screenshot("j2-shift-drag-missed");
+              blocked(
+                "synthetic shift-drag did not open the link chooser (see j2-shift-drag-missed.png)",
+              );
+            }
+            const deadline = Date.now() + 15_000;
+            let note = "";
+            while (Date.now() < deadline) {
+              note = await js<string>(
+                "document.querySelector('.jev-note')?.textContent ?? ''",
+              );
+              if (/Jev ·/.test(note) || /no relation|offline/.test(note)) break;
+              await Bun.sleep(250);
+            }
+            const shot2 = await screenshot("j2-assert-card");
+            if (/no relation|offline/.test(note))
+              throw new Error(`Jev declined the seeded pair: ${note}`);
+            if (!/Jev ·/.test(note))
+              throw new Error(`the link card shows no Jev judgment: ${note}`);
+            if (!(await clickButton("Connect")))
+              blocked("the link card has no 'Connect' control");
+            const connected = Date.now() + 8_000;
+            let edge = undefined;
+            while (Date.now() < connected) {
+              const graph = await readGraph(jevServer);
+              edge = edgeBetween(graph, "seed_beds", "seed_seeds");
+              if (edge) break;
+              await Bun.sleep(250);
+            }
+            if (!edge)
+              throw new Error("Connect did not create the shift-dragged edge");
+            if (!edge.origin)
+              throw new Error(
+                "the accepted Jev pre-selection lost its origin on commit",
+              );
+            return {
+              detail: `link card showed "${note}"; Connect created ${edge.id} with Jev origin`,
+              artifacts: [shot2],
+            };
+          },
+        );
+      } finally {
+        await jevServer.stop();
+      }
+    }
   } finally {
     await ab(["close"], true);
     await server.stop();
