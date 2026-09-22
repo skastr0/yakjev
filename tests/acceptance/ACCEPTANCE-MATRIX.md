@@ -59,10 +59,10 @@ happen.
 
 ## How the loop was verified
 
-`bun tests/acceptance` drives the real server over HTTP and SSE; `bun tests/acceptance/browser/run.ts`
-drives the rendered app with Chromium and inspects screenshots. Latest run on this orb
-(published main + backend-next + UI checkpoint): 17 HTTP tests / 125 assertions pass, and 11 of 12
-browser steps pass with 0 blocked.
+`bun test tests/acceptance` drives the real server over HTTP, MCP, and SSE;
+`bun tests/acceptance/browser/run.ts` drives the rendered app with Chromium and records screenshots
+for inspection. The final composed run passed 20 acceptance tests / 149 assertions and all 14
+browser steps with 0 blocked. The counts below refer to that composition, not earlier checkpoints.
 
 Observed in the rendered loop: capture receipt to rendered node 2.7s for five nodes and five
 asserted edges; the canvas element is preserved across live updates; expanding the delayed work
@@ -73,10 +73,9 @@ provider key is recorded as unavailable with no suggestion.
 
 ## Acceptance status after the UI polish patch
 
-Verified on the integrated tree (published base + parent integration series + this suite + UI final
-
-- UI polish, commit 6246a5ba35509668833681d2749ce76e6a70b2a8). `bun run verify` exit 0: 41 package
-  tests, 20 acceptance tests (149 assertions), 13 deployment checks, 4 resume checks.
+Verified on the integrated tree: published base, parent integration series, this suite, UI final,
+and UI polish. `bun run verify` exited 0: 41 package tests, 20 acceptance tests (149 assertions),
+13 deployment checks, and 4 resume checks.
 
 Browser run: **14 steps, 14 pass, 0 fail, 0 blocked.**
 
@@ -97,16 +96,16 @@ Browser run: **14 steps, 14 pass, 0 fail, 0 blocked.**
 | Narrow layout at 390px                                              | no horizontal overflow                                                                    |
 | Accessibility                                                       | axe-core 4.12.1: 0 violations                                                             |
 
-Findings from earlier rounds, all closed and re-verified on this patch:
+Findings from earlier rounds and the remaining cosmetic limit:
 
-| Finding                                                                    | Status | Evidence                                                              |
-| -------------------------------------------------------------------------- | ------ | --------------------------------------------------------------------- |
-| Default camera rendered the graph cramped with overlapping labels          | closed | five of five labels legible at default; `polish-01-after-capture.png` |
-| Contrast below AA on `.tagline`, `.node-list > .hint`, `.sidebar-foot > p` | closed | axe reports 0 violations                                              |
-| Contrast below AA on `.node-card small` and other metadata text            | closed | axe reports 0 violations; metadata colour now #566853                 |
-| `aria-label` on `div.graph-actions` without a role                         | closed | axe no longer reports `aria-prohibited-attr`                          |
-| Edge label truncated to "Re" where it met a node label                     | closed | all "Requires" labels render in full; `polish-01-after-capture.png`   |
-| Six-node Arrange collapsed the connected cluster                           | closed | arranged layout spread with no overlap; `polish-04b-arranged.png`     |
+| Finding                                                                    | Status         | Evidence                                                                                                           |
+| -------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Default camera rendered the graph cramped with overlapping labels          | closed         | five of five labels legible at default; `polish-01-after-capture.png`                                              |
+| Contrast below AA on `.tagline`, `.node-list > .hint`, `.sidebar-foot > p` | closed         | axe reports 0 violations                                                                                           |
+| Contrast below AA on `.node-card small` and other metadata text            | closed         | axe reports 0 violations; metadata colour now #566853                                                              |
+| `aria-label` on `div.graph-actions` without a role                         | closed         | axe no longer reports `aria-prohibited-attr`                                                                       |
+| Edge label truncated to "Re" where it meets a node label                   | cosmetic limit | Can recur in a selected 1280px fit; endpoints and the full relation remain inspectable in the connection inspector |
+| Six-node Arrange collapsed the connected cluster                           | closed         | arranged layout spread with no overlap; `polish-04b-arranged.png`                                                  |
 
 Axe still reports `incomplete` colour-contrast items, which are the `○` status glyphs, gradient fills,
 and text drawn over the canvas. Axe cannot measure those; they are unverified, not failures. The UI
@@ -126,9 +125,9 @@ and the node list scrolls clear of the sticky footer.
 
 An earlier note of mine reported that a credential-less `POST /api/commands` with no Origin returned
 403 `Forbidden origin`. That was measured against the backend checkpoint before the composed server.
-On the current tree it returns 401 `Owner authentication required`, and 403 only with a foreign
-Origin, because the cookie path short-circuits with 401 when no cookie is present, before the origin
-check runs. The security reviewer reached the same conclusion independently. The suite now asserts
+On the current tree a credential-less write with no Origin or the exact Origin returns 401
+`Owner authentication required`. A foreign Origin returns 403 even without credentials.
+The security reviewer reached the same conclusion independently. The suite now asserts
 401 for the credential-less write and 403 for the foreign-origin write, and the earlier note to
 backend is superseded.
 

@@ -613,9 +613,8 @@ test("graph reads and writes fail closed without a credential", async () => {
       command: { type: "undo", revision: 0 },
     }),
   });
-  // A credential-less write is unauthenticated: the cookie path short-circuits
-  // with 401 before the origin check runs, so the origin requirement only
-  // applies once a cookie is present.
+  // Missing credentials return 401; a foreign Origin is rejected with 403
+  // independently of whether the request supplied credentials.
   expect(write.status).toBe(401);
   const foreignOrigin = await active.fetchAnonymous("/api/commands", {
     method: "POST",
