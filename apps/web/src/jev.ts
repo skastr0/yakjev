@@ -232,6 +232,7 @@ export function useDraftPreview(title: string, revision: number): DraftState {
       previewJev({ draft: { title: text } }, controller.signal).then(
         (preview) => {
           cache.current.set(text, preview);
+          if (controller.signal.aborted) return;
           setState({
             result: { text, preview },
             loading: false,
@@ -266,10 +267,12 @@ export function usePairPreview(
 ): PairState {
   const [fetched, setFetched] = useState<Preview | null>(null);
   const [loading, setLoading] = useState(false);
+  // Keyed on whether the canvas already judged the pair, not on the object.
+  const judged = given?.judgments.some((item) => item.nodeId === target);
   useEffect(() => {
     setFetched(null);
     setLoading(false);
-    if (given?.judgments.some((item) => item.nodeId === target)) return;
+    if (judged) return;
     const controller = new AbortController();
     setLoading(true);
     previewJev(
@@ -277,6 +280,7 @@ export function usePairPreview(
       controller.signal,
     ).then(
       (preview) => {
+        if (controller.signal.aborted) return;
         setFetched(preview);
         setLoading(false);
       },
@@ -285,10 +289,8 @@ export function usePairPreview(
       },
     );
     return () => controller.abort();
-  }, [source, target, given]);
-  const preview = given?.judgments.some((item) => item.nodeId === target)
-    ? given
-    : fetched;
+  }, [source, target, judged]);
+  const preview = judged && given ? given : fetched;
   const judgment =
     preview?.status === "succeeded"
       ? (preview.judgments.find((item) => item.nodeId === target) ?? null)
