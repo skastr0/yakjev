@@ -2,7 +2,7 @@
 
 A lasting map of intentions, dependencies, and the things that get in the way.
 
-Capture intentions and sources, connect them in a directed graph, inspect claimed blockers, and reframe relationships without losing their original assertions. The React/Sigma workbench and MCP tools use the same SQLite graph, revision checks, history, and undo. Jev proposes connections against your editable taxonomy; it never accepts its own suggestions.
+Capture intentions and sources, connect them in a directed graph, inspect claimed blockers, and reframe relationships without losing their original assertions. The React/Sigma workbench and MCP tools use the same SQLite graph, revision checks, history, and undo. Jev connects intentions against your editable taxonomy as you work.
 
 **Settled stack: Effect v4, Bun 1.4 or newer stable, Sigma.js v4 beta.** Exact pins: `effect@4.0.0-rc.117`, [Bun 1.4.2](https://bun.com), `sigma@4.0.0-beta.6`, and Graphology `0.26.0`. See [architecture](docs/architecture.md).
 
@@ -48,10 +48,6 @@ The official TypeSafe skill is vendored in `.agents/skills/typesafe-ai`, with it
 Public code, private graph. The deployment joins **your** tailnet and exposes HTTPS to permitted tailnet clients. It does not open a public Railway domain. Reads and writes require application authentication: owner-token exchange for a browser session, or owner bearer for HTTP/MCP. Read [the deployment guide](docs/deployment.md) for configuration, grants, credential lifecycle, and validation steps; see [MCP configuration](docs/mcp.md) for agent access.
 
 **Nothing is deployed by cloning, building, running CI, or starting an orb.** Configured orbs join the tailnet on resume; this does not deploy Yakjev. Deployment, enrollment, and network grants remain separately authorized operations. Production requires `YAKJEV_OWNER_TOKEN` of at least 32 characters and rejects `YAKJEV_DEV_AUTH`.
-
-## Product direction
-
-Read [the entanglement graph product direction](docs/product-direction-entanglement-graph.md) for scope and acceptance, then [architecture and first milestone](docs/architecture.md). Yakjev indexes intentions and relationships over canonical sources; it does not mirror full documents or own whole-life prioritization. Authorized agents, including Amp orbs from other projects, must use the same graph as the visual interface. Keep graph facts, user policy, inference, and layout separate.
 
 ## License
 
