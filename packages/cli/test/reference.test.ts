@@ -16,6 +16,7 @@ const COMMAND_TYPES = [
   "suggestion.record",
   "suggestion.decide",
   "evaluation.record",
+  "jev.context.set",
   "undo",
 ] as const;
 

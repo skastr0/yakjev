@@ -282,6 +282,16 @@ export const COMMAND_REFERENCE: Record<string, ReferenceEntry> = {
       "Bulk position write or clear; positions are display state, not claims. A {id, clear:true} entry removes a stored position.",
     ],
   },
+  "jev.context.set": {
+    fields: {
+      type: commandType("jev.context.set"),
+      text: { type: "string", required: true, maxLength: 4000 },
+    },
+    notes: [
+      ENVELOPE_NOTE,
+      "Replaces the workspace context: long-term facts and preferences Jev reads on every call. Blank text clears it.",
+    ],
+  },
   "taxonomy.replace": {
     fields: {
       type: commandType("taxonomy.replace"),
@@ -534,6 +544,14 @@ export const EXAMPLES: Record<string, unknown> = {
         { id: "n-launch", x: 140, y: -60, pinned: true },
         { id: "n-pricing", clear: true },
       ],
+    },
+  },
+  "jev.context.set": {
+    requestId: "req-jev-context-1",
+    expectedRevision: 1,
+    command: {
+      type: "jev.context.set",
+      text: "I work solo on yakjev and client projects; trips are work travel.",
     },
   },
   "taxonomy.replace": {
