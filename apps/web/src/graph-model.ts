@@ -70,10 +70,15 @@ export function safeSourceHref(uri: string): string | undefined {
   }
 }
 
+// Unpainted nodes take their status color, so these are the colors most of the
+// graph wears. They mirror palette entries on purpose: three vivid, well-apart
+// hues that read as a progression rather than three shades of the same mud.
+// Kept as literals because blend.ts imports this module; importing back would
+// close a cycle.
 export function nodeColor(status: Node["status"]) {
-  if (status === "active") return "#1d4a3c";
-  if (status === "done" || status === "archived") return "#a4ada1";
-  return "#386253";
+  if (status === "active") return "#e35b00"; // orange, in flight
+  if (status === "done" || status === "archived") return "#159b05"; // green, settled
+  return "#2c84ff"; // blue, captured and not yet started
 }
 
 // Archived nodes leave the drawing. The derived layout then follows what is shown.
