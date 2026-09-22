@@ -5,13 +5,17 @@ import {
   type Edge,
   type Graph,
   type Node,
+  type PreviewJudgment,
 } from "@yakjev/protocol";
 import {
+  dragJudgments,
+  idsWithinReach,
   initialPosition,
   layoutBounds,
   safeSourceHref,
   searchNodes,
   syncGraph,
+  unjudgedIds,
   visibleGraph,
 } from "./graph-model";
 
@@ -46,6 +50,21 @@ const edge = (id: string, source: string, target: string): Edge => ({
   },
   correction: null,
   updated: provenance,
+});
+const judgment = (
+  nodeId: string,
+  overrides: Partial<PreviewJudgment> = {},
+): PreviewJudgment => ({
+  nodeId,
+  relatedness: 1,
+  match: true,
+  same: false,
+  relation: "requires",
+  direction: "focus_to_candidate",
+  confidence: 0.8,
+  suppressed: false,
+  connect: true,
+  ...overrides,
 });
 const snapshot = (
   nodes: readonly Node[],
@@ -236,6 +255,51 @@ describe("render projection", () => {
     ]);
     expect(visibleGraph(data, true).nodes).toHaveLength(2);
   });
+  test("drag reach keeps the nearest nodes inside the radius", () => {
+    const points = [
+      { id: "focus", x: 0, y: 0 },
+      { id: "near", x: 40, y: 0 },
+      { id: "mid", x: 120, y: 0 },
+      { id: "far", x: 240, y: 0 },
+    ];
+    expect(idsWithinReach("focus", points, 200)).toEqual(["near", "mid"]);
+    expect(idsWithinReach("missing", points, 200)).toEqual([]);
+  });
+
+  test("drop ghosts are nearby related pairs that are not already linked", () => {
+    const edges = [{ source: "focus", target: "linked" }];
+    const picked = dragJudgments(
+      "focus",
+      ["near", "linked", "quiet", "reversed", "blocked", "capped"],
+      [
+        judgment("quiet", { match: false, connect: false }),
+        judgment("blocked", { suppressed: true }),
+        judgment("near", { relatedness: 0.4 }),
+        judgment("near", { relatedness: 1, relation: "benefits_from" }),
+        judgment("linked"),
+        judgment("reversed", { direction: "candidate_to_focus" }),
+        judgment("capped", { connect: false, match: true }),
+        judgment("aside"),
+      ],
+      edges,
+    );
+    expect(picked.map((item) => item.nodeId)).toEqual([
+      "near",
+      "reversed",
+      "capped",
+    ]);
+    expect(picked[0]?.relation).toBe("benefits_from");
+  });
+
+  test("unjudged proximity asks for the closest unseen nodes, at most 24", () => {
+    const nearby = Array.from({ length: 30 }, (_, index) => `n${index}`);
+    const judged = new Set(["n0", "n2"]);
+    const missing = unjudgedIds(nearby, judged);
+    expect(missing).toHaveLength(24);
+    expect(missing[0]).toBe("n1");
+    expect(missing).not.toContain("n0");
+  });
+
   test("canonical source rendering never turns an executable URI into a link", () => {
     expect(safeSourceHref("javascript:alert(1)")).toBeUndefined();
     expect(safeSourceHref("data:text/html,hello")).toBeUndefined();

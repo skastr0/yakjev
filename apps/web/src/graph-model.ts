@@ -1,5 +1,9 @@
 import { MultiDirectedGraph } from "graphology";
-import type { Graph, Node } from "@yakjev/protocol";
+import type { Graph, Node, PreviewJudgment } from "@yakjev/protocol";
+
+// Screen pixels, not graph units: dragging toward a node is the gesture, at
+// whatever zoom the owner is using.
+export const DRAG_REACH = 200;
 
 export type Selection = {
   kind: "node" | "edge" | "suggestion";
@@ -96,6 +100,67 @@ export function visibleGraph(graph: Graph, showArchived: boolean): Graph {
       (item) => ids.has(item.source) && ids.has(item.target),
     ),
   };
+}
+
+// Closest first. Hidden nodes are omitted by the caller.
+export function idsWithinReach(
+  focusId: string,
+  points: readonly { id: string; x: number; y: number }[],
+  reach: number,
+) {
+  const focus = points.find((point) => point.id === focusId);
+  if (!focus) return [];
+  return points
+    .flatMap((point) => {
+      if (point.id === focusId) return [];
+      const distance = Math.hypot(point.x - focus.x, point.y - focus.y);
+      return distance <= reach ? [{ id: point.id, distance }] : [];
+    })
+    .sort((a, b) => a.distance - b.distance)
+    .map((point) => point.id);
+}
+
+// Ghosts the owner will commit on drop: nearby, related, and not already linked
+// in the direction Jev chose. Closest first. A later judgment for the same node
+// wins.
+export function dragJudgments(
+  focusId: string,
+  nearby: readonly string[],
+  judgments: readonly PreviewJudgment[],
+  edges: readonly { source: string; target: string }[],
+) {
+  const byId = new Map<string, PreviewJudgment>();
+  for (const judgment of judgments) byId.set(judgment.nodeId, judgment);
+  const taken = new Set(edges.map((edge) => `${edge.source}\0${edge.target}`));
+  const picked: PreviewJudgment[] = [];
+  for (const id of nearby) {
+    const judgment = byId.get(id);
+    if (!judgment || id === focusId) continue;
+    if (judgment.suppressed || !judgment.relation || !judgment.direction)
+      continue;
+    if (!judgment.connect && !judgment.match) continue;
+    const forward = judgment.direction === "focus_to_candidate";
+    const source = forward ? focusId : judgment.nodeId;
+    const target = forward ? judgment.nodeId : focusId;
+    if (taken.has(`${source}\0${target}`)) continue;
+    picked.push(judgment);
+  }
+  return picked;
+}
+
+// Nearby nodes with no judgment yet, closest first, capped for PreviewRequest.
+export function unjudgedIds(
+  nearby: readonly string[],
+  judged: ReadonlySet<string>,
+  limit = 24,
+) {
+  const missing: string[] = [];
+  for (const id of nearby) {
+    if (judged.has(id)) continue;
+    missing.push(id);
+    if (missing.length === limit) break;
+  }
+  return missing;
 }
 
 export function searchNodes(nodes: readonly Node[], query: string) {
