@@ -1,6 +1,11 @@
 import { initialTaxonomy, type Graph } from "@yakjev/protocol";
 import { Effect } from "effect";
-import { shortlist, type DiscoveryResult } from "../src/discovery.ts";
+import {
+  Discovery,
+  DiscoveryLive,
+  shortlist,
+  type DiscoveryResult,
+} from "../src/discovery.ts";
 import {
   hybridRetrieval,
   lexicalRetrieval,
@@ -10,7 +15,7 @@ import {
   type RetrievalService,
 } from "../src/retrieval.ts";
 
-// Cheap shortlist check: no provider key, network, or persistent graph needed.
+// Provider-free by default; --live-smoke and --jev-rerank opt into real providers.
 // The distractors deliberately share words with each query while the intended
 // node is a paraphrase. This catches a lexical shortlist that hides a valid
 // connection before Jev has a chance to judge it.
@@ -132,7 +137,78 @@ const live = await Effect.runPromise(
   }).pipe(Effect.provide(RetrievalLive)),
 );
 const liveSmoke = process.argv.includes("--live-smoke");
-const liveRecall = liveSmoke ? null : await evaluate("live", live);
+const jevRerank = process.argv.includes("--jev-rerank");
+const liveRecall = liveSmoke || jevRerank ? null : await evaluate("live", live);
+if (jevRerank) {
+  if (
+    !process.env.SYNTHETIC_API_KEY?.trim() ||
+    !process.env.TYPESAFE_API_KEY?.trim()
+  )
+    throw new Error(
+      "--jev-rerank requires SYNTHETIC_API_KEY and TYPESAFE_API_KEY",
+    );
+  const discovery = await Effect.runPromise(
+    Effect.gen(function* () {
+      return yield* Discovery;
+    }).pipe(Effect.provide(DiscoveryLive)),
+  );
+  const caseId = process.argv
+    .find((value) => value.startsWith("--case="))
+    ?.slice(7);
+  const liveCases = caseId ? cases.filter((item) => item.id === caseId) : cases;
+  if (liveCases.length === 0) throw new Error(`unknown case: ${caseId}`);
+  const results = [];
+  for (const { query, id } of liveCases) {
+    const rankInput = {
+      graph,
+      focus: { id: null, text: query },
+      explicit: new Set<string>(),
+      only: false,
+    };
+    const warmDeadline = Date.now() + 180_000;
+    let ranked = await Effect.runPromise(live.rank(rankInput));
+    while (
+      ranked.some((candidate) => candidate.semanticScore === null) &&
+      Date.now() < warmDeadline
+    ) {
+      await Bun.sleep(500);
+      ranked = await Effect.runPromise(live.rank(rankInput));
+    }
+    const warmed = ranked.every(
+      (candidate) => candidate.semanticScore !== null,
+    );
+    if (!warmed) throw new Error(`embedding warm timed out for ${id}`);
+    const started = performance.now();
+    const result = await Effect.runPromise(
+      discovery.shortlist(graph, { query }),
+    );
+    const ids = result.candidates.map((candidate) => candidate.nodeId);
+    const calls = result.coarse;
+    results.push({
+      id,
+      found: ids.includes(id),
+      packedRank: ids.indexOf(id) + 1 || null,
+      considered: ids.length,
+      rerankCalls: calls.length,
+      rerankFailures: calls.filter((call) => call.status !== "succeeded")
+        .length,
+      rerankInputTokens: calls.reduce(
+        (sum, call) => sum + (call.inputTokens ?? 0),
+        0,
+      ),
+      rerankOutputTokens: calls.reduce(
+        (sum, call) => sum + (call.outputTokens ?? 0),
+        0,
+      ),
+      rerankMs: Math.round(performance.now() - started),
+    });
+    console.table([results.at(-1)]);
+  }
+  const recall =
+    results.filter((result) => result.found).length / results.length;
+  console.log(`Jev-reranked warmed live recall: ${recall.toFixed(3)}`);
+  if (recall < 1) process.exitCode = 1;
+}
 if (liveSmoke) {
   if (!process.env.SYNTHETIC_API_KEY?.trim())
     throw new Error("--live-smoke requires SYNTHETIC_API_KEY");
