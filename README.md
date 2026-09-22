@@ -2,23 +2,25 @@
 
 A lasting map of intentions, dependencies, and the things that get in the way.
 
-**Status: scaffold, not a usable graph editor yet.** The repository contains a React web shell, a Bun/Effect server with SQLite health checks, CI, Amp orb setup, and a private Railway/Tailscale deployment baseline. Graph capture, Jev evaluation, and MCP editing are the next milestone.
+Capture intentions and sources, connect them in a directed graph, inspect claimed blockers, and reframe relationships without losing their original assertions. The React/Sigma workbench and MCP tools use the same SQLite graph, revision checks, history, and undo. Jev proposes connections against your editable taxonomy; it never accepts its own suggestions.
 
-**Settled stack: Effect v4, Bun 1.4 or newer stable, Sigma.js v4 beta.** The scaffold pins `effect@4.0.0-rc.117`, [Bun 1.4.2](https://bun.com), and `sigma@4.0.0-beta.6`. See [architecture](docs/architecture.md#settled-stack-migration-comes-first).
+**Settled stack: Effect v4, Bun 1.4 or newer stable, Sigma.js v4 beta.** Exact pins: `effect@4.0.0-rc.117`, [Bun 1.4.2](https://bun.com), `sigma@4.0.0-beta.6`, and Graphology `0.26.0`. See [architecture](docs/architecture.md).
 
 ## Run locally
 
 ```sh
 bun install --frozen-lockfile
-bun run dev
+YAKJEV_DEV_AUTH=true bun run dev
 ```
 
-Open **http://127.0.0.1:5173**. The Vite proxy reaches the loopback API on port 3210. No API keys required. SQLite lives in `.data/yakjev.sqlite` (gitignored).
+Open **http://127.0.0.1:5173** and unlock with `synthetic-yakjev-owner-token-local-only`. This explicit development mode is limited to non-production loopback origins. The Vite proxy validates the original Host and Origin before forwarding to the API on port 3210. SQLite lives in `.data/yakjev.sqlite` (gitignored).
+
+No provider key is required: absent `TYPESAFE_API_KEY`, evaluations are recorded as unavailable, with no fabricated judgments. Set the key server-side to enable Jev. Source URLs are pointers, not automatically fetched documents.
 
 ```sh
-bun run verify  # formatting, types, tests, web build, deployment subprocess tests
+bun run verify  # formatting, types, server/MCP/UI tests, HTTP acceptance, build, deployment tests
 bun run build
-bun run start  # serve the built app at http://127.0.0.1:3210
+YAKJEV_DEV_AUTH=true bun run start  # built app at http://127.0.0.1:3210
 ```
 
 Deployment tests also require Bash, Python 3, and curl. See `.env.example` for configuration; never commit secrets or personal graphs.
@@ -29,7 +31,9 @@ Deployment tests also require Bash, Python 3, and curl. See `.env.example` for c
 | ------------------- | ------------------------------------------------------------ |
 | `packages/protocol` | Shared validated wire contracts                              |
 | `packages/server`   | Authoritative application operations and SQLite lifecycle    |
-| `apps/web`          | React client; future graph renderer                          |
+| `packages/mcp`      | Streamable HTTP tools over the shared server services        |
+| `apps/web`          | React/Sigma graph, persistent inspector, capture and editing |
+| `tests/acceptance`  | Black-box HTTP/SSE graph-loop acceptance                     |
 | `deploy`            | Railway image, Tailscale startup, synthetic deployment tests |
 | `.agents`           | Orb setup/resume and vendored Jev skill                      |
 
@@ -41,9 +45,9 @@ The official TypeSafe skill is vendored in `.agents/skills/typesafe-ai`, with it
 
 ## Private deployment
 
-Public code, private graph. The planned deployment joins **your** tailnet and exposes a browser-accessible HTTPS address to permitted tailnet clients. It does not open a public Railway domain. Read [the deployment guide](docs/deployment.md) for configuration, grants, credential lifecycle, and validation steps.
+Public code, private graph. The deployment joins **your** tailnet and exposes HTTPS to permitted tailnet clients. It does not open a public Railway domain. Reads and writes require application authentication: owner-token exchange for a browser session, or owner bearer for HTTP/MCP. Read [the deployment guide](docs/deployment.md) for configuration, grants, credential lifecycle, and validation steps; see [MCP configuration](docs/mcp.md) for agent access.
 
-**Nothing is deployed by cloning, building, running CI, or starting an orb.** Configured orbs join the tailnet on resume; this does not deploy Yakjev. Railway deployment and service enrollment remain separate operator actions. The scaffold exposes only a shell and `/healthz`, not application data or an MCP server.
+**Nothing is deployed by cloning, building, running CI, or starting an orb.** Configured orbs join the tailnet on resume; this does not deploy Yakjev. Deployment, enrollment, and network grants remain separately authorized operations. Production requires `YAKJEV_OWNER_TOKEN` of at least 32 characters and rejects `YAKJEV_DEV_AUTH`.
 
 ## Product direction
 
