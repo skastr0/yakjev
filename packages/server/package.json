@@ -7,7 +7,8 @@
     "./auth": "./src/auth.ts",
     "./domain": "./src/domain.ts",
     "./store": "./src/store.ts",
-    "./discovery": "./src/discovery.ts"
+    "./discovery": "./src/discovery.ts",
+    "./evaluation": "./src/evaluation.ts"
   },
   "scripts": {
     "dev": "bun --watch src/main.ts"

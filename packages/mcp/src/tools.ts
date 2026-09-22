@@ -1,4 +1,10 @@
-import { CommandRequest, CommandResult, type Actor } from "@yakjev/protocol";
+import {
+  CommandRequest,
+  CommandResult,
+  EvaluationRequest,
+  EvaluationResult,
+  type Actor,
+} from "@yakjev/protocol";
 import { Effect, Layer, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { neighborhood, searchNodes } from "@yakjev/server/domain";
@@ -7,6 +13,7 @@ import {
   DiscoveryError,
   DiscoveryRequest,
 } from "@yakjev/server/discovery";
+import { Evaluations } from "@yakjev/server/evaluation";
 import { Store } from "@yakjev/server/store";
 import { ToolFailure, invalid, mapFailure } from "./failure.ts";
 
@@ -91,6 +98,18 @@ export const YakjevToolkit = Toolkit.make(
     .annotate(Tool.Idempotent, true)
     .annotate(Tool.OpenWorld, false)
     .annotate(Tool.Strict, true),
+  Tool.make("graph_evaluate", {
+    description:
+      "Run Evaluations.evaluate. Same operation as POST /api/evaluations. Replay is checked before the provider call. Do not send actor, user, role, or channel.",
+    parameters: EvaluationRequest,
+    success: EvaluationResult,
+    failure: ToolFailure,
+    failureMode: "return",
+  })
+    .annotate(Tool.Destructive, true)
+    .annotate(Tool.Idempotent, true)
+    .annotate(Tool.OpenWorld, true)
+    .annotate(Tool.Strict, true),
 );
 
 const runDiscover = (
@@ -109,6 +128,7 @@ export const toolkitLayer = (actor: () => Effect.Effect<Actor, ToolFailure>) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const store = yield* Store;
+      const evaluations = yield* Evaluations;
       return YakjevToolkit.toLayer({
         graph_read: (input) =>
           Effect.gen(function* () {
@@ -147,17 +167,9 @@ export const toolkitLayer = (actor: () => Effect.Effect<Actor, ToolFailure>) =>
               case "evaluation": {
                 if (input.id === undefined)
                   return yield* Effect.fail(invalid("evaluation requires id."));
-                const found = graph.evaluations.find(
-                  (item) => item.id === input.id,
-                );
-                if (!found)
-                  return yield* Effect.fail(
-                    new ToolFailure({
-                      error: "NotFound",
-                      message: "Unknown evaluation",
-                    }),
-                  );
-                return found;
+                return yield* store
+                  .evaluation(input.id)
+                  .pipe(Effect.mapError(mapFailure));
               }
             }
           }),
@@ -188,6 +200,19 @@ export const toolkitLayer = (actor: () => Effect.Effect<Actor, ToolFailure>) =>
               yield* store.read.pipe(Effect.mapError(mapFailure)),
               input,
             );
+          }),
+        graph_evaluate: (input) =>
+          Effect.gen(function* () {
+            yield* rejectActorClaims(input);
+            const who = yield* actor();
+            if (who.channel !== "mcp") {
+              return yield* Effect.fail(
+                invalid("MCP tools require an mcp actor."),
+              );
+            }
+            return yield* evaluations
+              .evaluate(who, input)
+              .pipe(Effect.mapError(mapFailure));
           }),
       });
     }),

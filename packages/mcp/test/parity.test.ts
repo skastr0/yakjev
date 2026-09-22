@@ -5,6 +5,8 @@ import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServer } from "effect/unstable/http";
 import { BunServices } from "@effect/platform-bun";
 import { Auth } from "@yakjev/server/auth";
+import { DiscoveryLive } from "@yakjev/server/discovery";
+import { Evaluations } from "@yakjev/server/evaluation";
 import { Store, storeLayer } from "@yakjev/server/store";
 import { mcpLayer, provideActor } from "../src/index.ts";
 
@@ -18,7 +20,8 @@ afterEach(async () => {
 const open = async (databasePath: string) => {
   const app = HttpRouter.toWebHandler(
     mcpLayer({ origin }).pipe(
-      Layer.provide(storeLayer(databasePath)),
+      Layer.provide(Evaluations.layer),
+      Layer.provide(Layer.mergeAll(storeLayer(databasePath), DiscoveryLive)),
       Layer.provide(
         Auth.layer({ origin, ownerToken: token, ownerId: "owner" }),
       ),
