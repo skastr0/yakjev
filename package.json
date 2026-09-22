@@ -17,6 +17,7 @@
     "test": "bun test packages apps/web",
     "test:deploy": "bash deploy/tests/run.sh && bash deploy/tests/resume.sh",
     "test:acceptance": "bun test tests/acceptance",
+    "jev:eval": "bun packages/server/scripts/jev-eval.ts",
     "format": "prettier --write .",
     "check:format": "prettier --check .",
     "verify": "bun run check:format && bun run typecheck && bun run test && bun run test:acceptance && bun run build && bun run test:deploy"
