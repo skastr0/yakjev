@@ -37,6 +37,12 @@ export type CanvasHandle = {
   fit: () => void;
 };
 
+declare global {
+  interface Window {
+    __yakjevCanvas?: CanvasHandle;
+  }
+}
+
 type Props = {
   data: Graph;
   selection: Selection;
@@ -153,6 +159,26 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
       },
       fit,
     }));
+
+    // Acceptance aims a trusted shift-drag at these CSS-pixel anchors.
+    // Installed once: the functions read refs, and a later effect would
+    // replace a canvas element a test stored on this same property.
+    useEffect(() => {
+      const hook: CanvasHandle = {
+        anchorNode: clientAnchor,
+        anchorBetween: (source, target) => {
+          const from = clientAnchor(source);
+          const to = clientAnchor(target);
+          if (!from || !to) return null;
+          return { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+        },
+        fit,
+      };
+      window.__yakjevCanvas = hook;
+      return () => {
+        if (window.__yakjevCanvas === hook) delete window.__yakjevCanvas;
+      };
+    }, []);
 
     function hideBand() {
       band.current?.setAttribute("visibility", "hidden");
