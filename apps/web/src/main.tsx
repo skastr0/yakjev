@@ -392,20 +392,8 @@ function App() {
                 setMode({ kind: "edge", id: existing.id });
                 return;
               }
-              const generation = ++linkGeneration.current;
-              void jev.preselect(source, target).then((preview) => {
-                if (linkGeneration.current !== generation) return;
-                const useful = preview?.judgments.some(
-                  (item) => item.nodeId === target,
-                )
-                  ? preview
-                  : undefined;
-                setMode(
-                  useful
-                    ? { kind: "assert", source, target, preview: useful }
-                    : { kind: "assert", source, target },
-                );
-              });
+              linkGeneration.current += 1;
+              setMode({ kind: "assert", source, target });
             }}
             onDragStart={jev.onStart}
             onDragMove={jev.onMove}
@@ -652,19 +640,6 @@ function useDragConnect(
           data?.revision ?? 0,
         );
         if (!saved) break;
-      }
-    },
-    async preselect(source: string, target: string) {
-      begin();
-      try {
-        return await previewJev({
-          focusNodeId: source,
-          includeNodeIds: [target],
-        });
-      } catch {
-        return null;
-      } finally {
-        finish();
       }
     },
   };
