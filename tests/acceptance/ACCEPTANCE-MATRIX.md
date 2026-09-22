@@ -114,9 +114,13 @@ items.
 
 The Arrange step measures rendered node discs from canvas pixels (nodes share one colour, so
 overlapping discs merge into larger blobs). It reports distinct discs and merged blobs against the
-node count and fails when both a merged blob and missing discs indicate a collapse. On the tree
-without the UI increments it reports 3 distinct discs and 1 merged blob for 8 nodes; with them it
-reports 8 distinct discs and 0 merged blobs.
+node count and requires one separate disc per node with no merged blobs. Missing discs can also
+mean clipping or label occlusion, so the capture remains necessary to diagnose a failure.
+On the pre-polish capture the geometric classifier reports 3 distinct discs and 2 merged blobs for
+8 nodes; the final capture has 8 distinct discs and 0 merged blobs. Components below 400 pixels are
+excluded as text or antialiasing noise. This corrects the earlier area-band classifier's undercount
+of one merged blob; that version still caught the original collapse but could miss fully overlapped
+nodes. Both primary captures were checked again with the corrected classifier.
 
 Narrow layout measured at 390x844: `scrollWidth` 390 = `innerWidth` 390, `graphBottom` = `inspectorTop`,
 and the node list scrolls clear of the sticky footer.
@@ -133,8 +137,16 @@ backend is superseded.
 
 ## Deployment
 
-Not verified. No deployed instance has been exercised; the read-only deploy smoke
-(`deploy-smoke.ts`) runs only after the parent deploys, and this document must not claim otherwise.
+The application at [b26f875](https://github.com/skastr0/yakjev/commit/b26f875b94885cc6a0725fc4d181189906b6692d)
+was deployed to the existing private Railway service on 2026-09-22. Railway reports SUCCESS;
+fresh container logs confirm authorized Tailscale registration, the loopback health readiness gate,
+HTTPS Serve, and the entrypoint's ready message. There are no public domains or TCP proxies.
+
+External reachability remains unverified: the configured hostname fails resolution from two orbs;
+a TLS-validated probe using the node address from deployment logs times out connecting to port 443.
+The read-only smoke reached none of the HTTP endpoints (only its hostname-shape check passed).
+These observations do not identify a policy or DNS cause. No tailnet policy was changed, and no
+production graph data was read or written by the verification probes.
 
 ## Not yet verifiable, and why
 
@@ -142,5 +154,5 @@ Not verified. No deployed instance has been exercised; the read-only deploy smok
   I reproduce the credential-free behavior only and report the owner's receipts as
   their receipts.
 - **MCP round trip from another project's orb**: needs the deployed instance and an
-  authorized client; planned as a read-only smoke after deployment.
-- **Deployed-instance smoke**: read-only checks only, after the parent deploys.
+  authorized client; blocked on private ingress from the orbs.
+- **Deployed-instance smoke**: attempted after deployment; blocked at name resolution.

@@ -248,16 +248,12 @@ async function discCensus(
     const width = Number(match[1]);
     const height = Number(match[2]);
     const area = Number(match[3]);
-    if (area > 1500) merged += 1;
-    else if (
-      area >= 600 &&
-      area <= 1200 &&
-      Math.abs(width - height) <= 4 &&
-      width >= 28 &&
-      width <= 40
-    ) {
-      discs += 1;
-    }
+    // Ignore text/antialiasing specks, then distinguish discs by geometry.
+    // Overlapping discs can have the same area as one disc or fall between
+    // area bands, but extend beyond a single 2x-rendered node's diameter.
+    if (area < 400) continue;
+    if (Math.max(width, height) <= 40) discs += 1;
+    else merged += 1;
   }
   return { discs, merged };
 }
@@ -835,9 +831,9 @@ async function main(): Promise<void> {
           );
         }
         const expected = graph.nodes.length;
-        if (census.merged > 0 && census.discs < expected - 1) {
+        if (census.merged > 0 || census.discs !== expected) {
           throw new Error(
-            `the arranged layout collapsed: ${census.discs} distinct discs and ${census.merged} merged blob(s) for ${expected} nodes`,
+            `the arranged layout is not fully separated: ${census.discs} distinct discs and ${census.merged} merged blob(s) for ${expected} nodes`,
           );
         }
         return {
