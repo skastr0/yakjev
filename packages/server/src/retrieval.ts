@@ -113,10 +113,12 @@ const SEMANTIC_FLOOR = 0.4;
 // requests keep running. A cold 1,000-node graph is about 11 sequential
 // batches, so that first call does not finish inside this budget.
 export const EMBED_BUDGET_MS = 250;
-// One OpenAI request at a time, this many texts. Not parallel.
+// One embeddings request at a time, this many texts. Not parallel.
 export const EMBED_BATCH = 96;
 const EMBED_MODEL = "text-embedding-3-small";
-const EMBED_URL = "https://api.openai.com/v1/embeddings";
+// Same OpenAI-compatible embeddings route Quasar and Tether use. The key is
+// SYNTHETIC_API_KEY. SYNTHETIC_OPENAI_BASE_URL overrides the host.
+const SYNTHETIC_EMBEDDINGS_BASE = "https://api.synthetic.new/openai/v1";
 // One input's token cap is 8191. Characters stay under that for ordinary text.
 const EMBED_CHARS = 8000;
 
@@ -285,14 +287,20 @@ export function hybridRetrieval(
   };
 }
 
-function openAiEmbeddings(apiKey: string): EmbeddingClient {
+function syntheticEmbeddingsUrl(): string {
+  const base =
+    process.env.SYNTHETIC_OPENAI_BASE_URL?.trim() || SYNTHETIC_EMBEDDINGS_BASE;
+  return `${base.replace(/\/$/, "")}/embeddings`;
+}
+
+function syntheticEmbeddings(apiKey: string): EmbeddingClient {
   return {
     embed: async (texts) => {
-      const response = await fetch(EMBED_URL, {
+      const response = await fetch(syntheticEmbeddingsUrl(), {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
         },
         body: JSON.stringify({ model: EMBED_MODEL, input: [...texts] }),
       });
@@ -330,15 +338,15 @@ function openAiEmbeddings(apiKey: string): EmbeddingClient {
 let liveKey = "";
 let liveHybrid: RetrievalService | null = null;
 
-// Hybrid when OPENAI_API_KEY is set; otherwise lexical. The key stays in this
-// process. A missing key, a slow response, or any error ranks lexically.
+// Hybrid when SYNTHETIC_API_KEY is set; otherwise lexical. The key stays in
+// this process. A missing key, a slow response, or any error ranks lexically.
 export const RetrievalLive: Layer.Layer<Retrieval> = Layer.succeed(Retrieval)({
   rank: (input) => {
-    const key = process.env.OPENAI_API_KEY?.trim() ?? "";
+    const key = process.env.SYNTHETIC_API_KEY?.trim() ?? "";
     if (!key) return lexicalRetrieval.rank(input);
     if (key !== liveKey || !liveHybrid) {
       liveKey = key;
-      liveHybrid = hybridRetrieval(openAiEmbeddings(key));
+      liveHybrid = hybridRetrieval(syntheticEmbeddings(key));
     }
     return liveHybrid.rank(input);
   },

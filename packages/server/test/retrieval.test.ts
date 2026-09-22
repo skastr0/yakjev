@@ -116,8 +116,8 @@ describe("lexical retrieval", () => {
   });
 
   test("the live layer is lexical and does not fail", async () => {
-    const previous = process.env.OPENAI_API_KEY;
-    delete process.env.OPENAI_API_KEY;
+    const previous = process.env.SYNTHETIC_API_KEY;
+    delete process.env.SYNTHETIC_API_KEY;
     try {
       const focus = node("focus", "Run a 5k", "Build endurance");
       const snapshot = graph([
@@ -151,8 +151,8 @@ describe("lexical retrieval", () => {
         ).map((candidate) => candidate.nodeId),
       ).toEqual(["focus", "shoes"]);
     } finally {
-      if (previous === undefined) delete process.env.OPENAI_API_KEY;
-      else process.env.OPENAI_API_KEY = previous;
+      if (previous === undefined) delete process.env.SYNTHETIC_API_KEY;
+      else process.env.SYNTHETIC_API_KEY = previous;
     }
   });
 });
