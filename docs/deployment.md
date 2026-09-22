@@ -24,6 +24,7 @@ Keep `YAKJEV_OWNER_TOKEN` only in Railway service secrets. Never put it in Vite,
 | `YAKJEV_OWNER_TOKEN` | at least 32 random characters                                             |
 | `YAKJEV_ORIGIN`      | `https://<generated-domain>` if not inferred from `RAILWAY_PUBLIC_DOMAIN` |
 | `TYPESAFE_API_KEY`   | server-side Jev calls; never a `VITE_` name                               |
+| `SYNTHETIC_API_KEY`  | semantic retrieval embeddings (Synthetic nomic); absent means lexical     |
 | `YAKJEV_DATA_DIR`    | `/data/yakjev`                                                            |
 | `YAKJEV_LISTEN_HOST` | `0.0.0.0`                                                                 |
 

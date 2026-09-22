@@ -13,6 +13,7 @@ Setup installs Bun 1.4.2, dependencies, a web build, GitHub CLI if missing, Rail
 | `YAKJEV_REMOTE_URL`                                                  | Public origin, `https://<service>.up.railway.app`                 |
 | `YAKJEV_OWNER_TOKEN`                                                 | Same owner token as the Railway service. Required for MCP writes. |
 | `TYPESAFE_API_KEY`                                                   | Server-side Jev calls                                             |
+| `SYNTHETIC_API_KEY`                                                  | Semantic retrieval embeddings; absent means lexical ranking       |
 | `RAILWAY_API_TOKEN`                                                  | Railway CLI                                                       |
 | `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID`, `RAILWAY_SERVICE_ID` | This app's deployment                                             |
 | `QUASAR_SERVER_URL`                                                  | Session-memory endpoint                                           |
