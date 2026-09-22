@@ -332,3 +332,73 @@ describe("hybrid retrieval", () => {
     ).toBe("coverage");
   });
 });
+
+describe("RetrievalLive Synthetic adapter", () => {
+  test("posts the nomic payload with the Synthetic key and no network", async () => {
+    const previousKey = process.env.SYNTHETIC_API_KEY;
+    const previousBase = process.env.SYNTHETIC_OPENAI_BASE_URL;
+    const previousFetch = globalThis.fetch;
+    const key = "synthetic-test-key";
+    process.env.SYNTHETIC_API_KEY = key;
+    delete process.env.SYNTHETIC_OPENAI_BASE_URL;
+    let requested: { url: string; init: RequestInit } | undefined;
+    globalThis.fetch = (async (
+      url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      requested = { url: String(url), init: init ?? {} };
+      const payload = JSON.parse(String(init?.body)) as { input: string[] };
+      return new Response(
+        JSON.stringify({
+          data: payload.input.map((_, index) => ({
+            index,
+            embedding: [1, 0],
+          })),
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+    const focus = node("focus", "Arrange a routine teeth checkup", "");
+    const snapshot = graph([
+      focus,
+      node("paraphrase", "Schedule an oral health examination", ""),
+    ]);
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const retrieval = yield* Retrieval;
+          return yield* retrieval.rank({
+            graph: snapshot,
+            focus: { id: "focus", text: textOf(focus) },
+            explicit: new Set(),
+            only: false,
+          });
+        }).pipe(Effect.provide(RetrievalLive)),
+      );
+      expect(requested?.url).toBe(
+        "https://api.synthetic.new/openai/v1/embeddings",
+      );
+      const headers = new Headers(requested?.init.headers);
+      expect(headers.get("authorization")).toBe(`Bearer ${key}`);
+      const body = JSON.parse(String(requested?.init.body)) as {
+        model: string;
+        dimensions: number;
+        input: string[];
+      };
+      expect(body.model).toBe("hf:nomic-ai/nomic-embed-text-v1.5");
+      expect(body.dimensions).toBe(768);
+      expect(body.input).toEqual([
+        "search_query: Arrange a routine teeth checkup ",
+        "search_document: Schedule an oral health examination ",
+      ]);
+      expect(JSON.stringify(body)).not.toContain(key);
+    } finally {
+      globalThis.fetch = previousFetch;
+      if (previousKey === undefined) delete process.env.SYNTHETIC_API_KEY;
+      else process.env.SYNTHETIC_API_KEY = previousKey;
+      if (previousBase === undefined)
+        delete process.env.SYNTHETIC_OPENAI_BASE_URL;
+      else process.env.SYNTHETIC_OPENAI_BASE_URL = previousBase;
+    }
+  });
+});
