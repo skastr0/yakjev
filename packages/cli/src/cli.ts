@@ -14,6 +14,7 @@ import {
   defaultClientConfigPath,
 } from "./config";
 import { fail, ok, writeJson } from "./json";
+import { COMMAND_REFERENCE, EXAMPLES, READ_REFERENCE } from "./reference";
 
 const valueOptionNames = new Set(["--server", "--token", "--timeout-ms"]);
 const booleanOptionNames = new Set(["--help", "--version", "-h", "-v"]);
@@ -31,7 +32,8 @@ Usage:
                                       includeNodeIds?}
   yakjev doctor                       resolve config, check health and auth
   yakjev capabilities                 list commands and read views
-  yakjev schema                       command and view reference
+  yakjev schema [name]                field reference per command type or view
+  yakjev examples [name]              copy-pastable JSON payloads
 
 Config: YAKJEV_REMOTE_URL + YAKJEV_OWNER_TOKEN, or
 ${defaultClientConfigPath()} with {"remoteUrl": "...", "ownerToken": "..."}.
@@ -348,9 +350,40 @@ const main = async (): Promise<void> => {
     case "capabilities":
       writeJson(ok("capabilities", capabilities));
       return;
-    case "schema":
-      writeJson(ok("schema", capabilities));
+    case "schema": {
+      const name = rest[0];
+      if (name === undefined) {
+        writeJson(
+          ok("schema", {
+            commands: COMMAND_REFERENCE,
+            reads: READ_REFERENCE,
+          }),
+        );
+        return;
+      }
+      const entry = COMMAND_REFERENCE[name] ?? READ_REFERENCE[name];
+      if (entry === undefined)
+        throw new CliInputError(`Unknown schema entry: ${name}`, {
+          commands: Object.keys(COMMAND_REFERENCE),
+          reads: Object.keys(READ_REFERENCE),
+        });
+      writeJson(ok(`schema ${name}`, entry));
       return;
+    }
+    case "examples": {
+      const name = rest[0];
+      if (name === undefined) {
+        writeJson(ok("examples", EXAMPLES));
+        return;
+      }
+      const example = EXAMPLES[name];
+      if (example === undefined)
+        throw new CliInputError(`Unknown example: ${name}`, {
+          names: Object.keys(EXAMPLES),
+        });
+      writeJson(ok(`examples ${name}`, example));
+      return;
+    }
     default:
       throw new CliInputError(`Unknown command: ${head}`, {
         hint: "yakjev --help",
