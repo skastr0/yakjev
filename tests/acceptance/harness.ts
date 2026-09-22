@@ -188,6 +188,7 @@ async function pickPort(): Promise<number> {
 function startChild(
   port: number,
   dataDir: string,
+  token: string,
   extraEnv: Record<string, string> = {},
 ): Subprocess {
   return spawn({
@@ -201,7 +202,7 @@ function startChild(
       NODE_ENV: "test",
       YAKJEV_LISTEN_PORT: String(port),
       YAKJEV_DATA_DIR: dataDir,
-      YAKJEV_OWNER_TOKEN: acceptanceToken,
+      YAKJEV_OWNER_TOKEN: token,
       ...extraEnv,
     },
     stdout: "pipe",
@@ -267,14 +268,17 @@ export async function startServer(
     dataDir?: string;
     port?: number;
     env?: Record<string, string>;
+    /** Bearer token for this run; defaults to the synthetic acceptance token. */
+    token?: string;
   } = {},
 ): Promise<ServerHandle> {
+  const token = options.token ?? acceptanceToken;
   const dataDir =
     options.dataDir ?? (await mkdtemp(join(tmpdir(), "yakjev-acceptance-")));
   const port = options.port ?? (await pickPort());
   const origin = `http://127.0.0.1:${port}`;
   const extraEnv = options.env ?? {};
-  let child = startChild(port, dataDir, extraEnv);
+  let child = startChild(port, dataDir, token, extraEnv);
   let stdout = collect(child.stdout as ReadableStream<Uint8Array>);
   let stderr = collect(child.stderr as ReadableStream<Uint8Array>);
   const logs = () => `${stdout()}\n${stderr()}`.trim();
@@ -299,7 +303,7 @@ export async function startServer(
       // Never overwrite a caller-supplied credential: tests must be able to send
       // a wrong or missing one and observe the server's answer.
       if (!headers.has("authorization")) {
-        headers.set("authorization", `Bearer ${acceptanceToken}`);
+        headers.set("authorization", `Bearer ${token}`);
       }
       return fetch(`${origin}${path}`, { ...init, headers });
     },
@@ -330,7 +334,7 @@ export async function startServer(
       const response = await fetch(url, {
         headers: {
           accept: "text/event-stream",
-          authorization: `Bearer ${acceptanceToken}`,
+          authorization: `Bearer ${token}`,
         },
         signal: stream.signal,
       });
@@ -367,7 +371,7 @@ export async function startServer(
     },
     async restart() {
       await stopChild(child);
-      child = startChild(port, dataDir, extraEnv);
+      child = startChild(port, dataDir, token, extraEnv);
       stdout = collect(child.stdout as ReadableStream<Uint8Array>);
       stderr = collect(child.stderr as ReadableStream<Uint8Array>);
       try {

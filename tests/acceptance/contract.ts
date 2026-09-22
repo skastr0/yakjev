@@ -4,7 +4,7 @@
 // a black-box test may depend on the public contract, and deriving them here
 // means this file cannot silently drift from the schema it asserts. The payload
 // builders and the independently written assertions live in the tests.
-import * as protocol from "@yakjev/protocol";
+import * as protocol from "../../packages/protocol/src/index.ts";
 import type { ServerHandle } from "./harness";
 
 export type Id = typeof protocol.Id.Type;

@@ -12,6 +12,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   edgeById,
+  edgeBetween,
   neighborhood,
   nodeById,
   readGraph,
@@ -25,11 +26,13 @@ import {
   reframeEdgeId,
   suggestion as fixtureSuggestion,
 } from "../fixtures";
-import { acceptanceToken, startServer, type ServerHandle } from "../harness";
+import { startServer, type ServerHandle } from "../harness";
 
 const session = "yakjev-accept";
 const artifacts = resolve(import.meta.dir, "../../../.amp/in/artifacts");
 const discover = process.argv.includes("--discover");
+const devToken = "synthetic-yakjev-owner-token-local-only";
+const wrongToken = "synthetic-wrong-token-value";
 
 type Status = "pass" | "fail" | "blocked";
 type Step = {
@@ -78,8 +81,6 @@ function blocked(reason: string): never {
 
 // ---------------------------------------------------------------- agent-browser
 
-type RunResult = { stdout: string; stderr: string; code: number };
-
 async function sh(cmd: string[], allowFailure = false): Promise<string> {
   const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([
@@ -106,10 +107,9 @@ async function ab(args: string[], allowFailure = false): Promise<string> {
 }
 
 async function js<T>(expression: string): Promise<T> {
-  const raw = await ab([
-    "eval",
-    `(async () => JSON.stringify(await (${expression})))()`,
-  ]);
+  // The CLI prints the resolved value JSON-encoded, so wrap only to await the
+  // expression. Wrapping in JSON.stringify would double-encode it.
+  const raw = await ab(["eval", `(async () => (${expression}))()`]);
   try {
     return JSON.parse(raw) as T;
   } catch {
@@ -141,10 +141,6 @@ async function frame(): Promise<void> {
   ]);
 }
 
-async function waitForText(text: string, timeoutMs = 8_000): Promise<void> {
-  await ab(["wait", "--text", text, "--timeout", String(timeoutMs)]);
-}
-
 // `agent-browser find <locator> <value> <action> [--options]`: the action comes
 // before any option flag, and a miss prints a marker while still exiting 0.
 function found(output: string): boolean {
@@ -166,6 +162,47 @@ async function findText(
   return found(result) ? result : undefined;
 }
 
+async function fillLabel(label: string, value: string): Promise<boolean> {
+  return found(await ab(["find", "label", label, "fill", value], true));
+}
+
+async function clickButton(name: string): Promise<boolean> {
+  return findClick(["role", "button"], ["--name", name]);
+}
+
+/** Click the node, connection, or suggestion card whose text contains the text. */
+async function clickCard(text: string): Promise<boolean> {
+  return js<boolean>(`(() => {
+    const wanted = ${JSON.stringify(text)};
+    const cards = Array.from(
+      document.querySelectorAll(".connection-card, .node-card"),
+    );
+    const target = cards.find((card) =>
+      (card.textContent || "").replace(/\\s+/g, " ").includes(wanted),
+    );
+    if (!target) return false;
+    target.click();
+    return true;
+  })()`);
+}
+
+/** Select an option in the select inside the label whose text starts with label. */
+async function selectByLabel(label: string, value: string): Promise<boolean> {
+  const id = await js<string | null>(`(() => {
+    const wanted = ${JSON.stringify(label)};
+    const label = Array.from(document.querySelectorAll("label")).find((item) =>
+      (item.textContent || "").trim().startsWith(wanted),
+    );
+    const select = label ? label.querySelector("select") : null;
+    if (!select) return null;
+    select.id = "yakjev-e2e-" + wanted.replace(/\\W+/g, "-").toLowerCase();
+    return select.id;
+  })()`);
+  if (!id) return false;
+  const result = await ab(["select", `#${id}`, value], true);
+  return !/not found|error/i.test(result);
+}
+
 // ---------------------------------------------------------------- pixel checks
 
 async function changedFraction(before: string, after: string): Promise<number> {
@@ -183,7 +220,8 @@ async function changedFraction(before: string, after: string): Promise<number> {
     ],
     true,
   );
-  const changed = Number(metric.split(/\s+/).filter(Boolean).pop());
+  const match = metric.match(/\d+(\.\d+)?/);
+  const changed = match ? Number(match[0]) : Number.NaN;
   const dims = await sh(["magick", "identify", "-format", "%w %h", before]);
   const [width, height] = dims.trim().split(" ").map(Number);
   if (!Number.isFinite(changed) || !width || !height) {
@@ -192,10 +230,23 @@ async function changedFraction(before: string, after: string): Promise<number> {
   return changed / (width * height);
 }
 
-// ---------------------------------------------------------------- flow
+/** Wait until a node title is observable in the rendered node list. */
+async function waitForNodeTitle(
+  title: string,
+  timeoutMs: number,
+): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const inDom = await js<boolean>(
+      `document.body.innerText.includes(${JSON.stringify(title)})`,
+    );
+    if (inDom) return Date.now();
+    await Bun.sleep(150);
+  }
+  throw new Error(`node "${title}" never appeared in the rendered graph`);
+}
 
-const devToken = "synthetic-yakjev-owner-token-local-only";
-const wrongToken = "synthetic-wrong-token-value";
+// ---------------------------------------------------------------- auth flow
 
 async function graphStatus(): Promise<number> {
   return js<number>(
@@ -208,16 +259,8 @@ async function fillToken(value: string): Promise<boolean> {
     ["label", "Owner access token"],
     ["placeholder", "Owner access token"],
     ["placeholder", "token"],
-    ["label", "token"],
   ]) {
     if (found(await ab(["find", ...base, "fill", value], true))) return true;
-  }
-  return false;
-}
-
-async function submitLogin(): Promise<boolean> {
-  for (const name of ["Unlock graph", "Connect", "Sign in", "Log in"]) {
-    if (await findClick(["role", "button"], ["--name", name])) return true;
   }
   return false;
 }
@@ -226,27 +269,29 @@ async function login(): Promise<void> {
   if ((await graphStatus()) === 200) return;
   if (!(await fillToken(devToken))) {
     blocked(
-      "no 'Owner access token' field found; the driver needs the UI's token input",
+      "no 'Owner access token' field found; the driver needs the token input",
     );
   }
-  if (!(await submitLogin())) {
+  if (!(await clickButton("Unlock graph"))) {
     blocked(
       "no 'Unlock graph' button found; the driver needs the submit control",
     );
   }
-  await ab(["wait", "--load", "networkidle"], true);
-  const status = await graphStatus();
-  if (status !== 200) {
-    blocked(
-      `login did not establish a session (/api/graph returned ${status})`,
-    );
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if ((await graphStatus()) === 200) return;
+    await Bun.sleep(200);
   }
+  blocked("login did not establish a session");
 }
+
+// ---------------------------------------------------------------- flow
 
 async function main(): Promise<void> {
   await mkdir(artifacts, { recursive: true });
   const server = await startServer({
     env: { YAKJEV_DEV_AUTH: "true" },
+    token: devToken,
   });
   console.log(`server ${server.origin} (data ${server.dataDir})`);
   try {
@@ -261,9 +306,7 @@ async function main(): Promise<void> {
       const canvases = await js<number>(
         "document.querySelectorAll('canvas').length",
       );
-      const status = await js<number>(
-        "fetch('/api/graph',{headers:{accept:'application/json'}}).then(r=>r.status)",
-      );
+      const status = await graphStatus();
       await screenshot("discover");
       console.log(`\ncanvas elements: ${canvases}\n/api/graph: ${status}\n`);
       console.log(text);
@@ -271,54 +314,36 @@ async function main(): Promise<void> {
       return;
     }
 
-    await run("open the graph page authenticated", async () => {
-      await login();
-      await js(
-        "window.__yakjevCanvas = document.querySelector('canvas'), true",
-      );
-      const canvases = await js<number>(
-        "document.querySelectorAll('canvas').length",
-      );
-      if (canvases === 0) {
-        blocked("the page rendered without a graph canvas");
-      }
-      await screenshot("01-empty-graph");
-      return {
-        detail: `authenticated, ${canvases} canvas element(s)`,
-        artifacts: [join(artifacts, "01-empty-graph.png")],
-      };
-    });
-
     await run(
-      "E0 the unauthenticated state renders a login surface, not an empty graph",
+      "E0 unauthenticated state, rejected token, then a real login",
       async () => {
         await ab(["cookies", "clear"]);
-        await ab(["open", server.origin]);
-        await ab(["set", "viewport", "1280", "720", "2"]);
         await ab(["eval", "localStorage.clear(); sessionStorage.clear()"]);
         await ab(["reload"]);
         await frame();
 
-        const field = await findText(["label", "Owner access token"]);
+        const fieldCount = await js<number>(
+          "document.querySelectorAll('input[type=password]').length",
+        );
         const button = await findText(
           ["role", "button"],
           ["--name", "Unlock graph"],
         );
         const alert = await findText(["role", "alert"]);
         await screenshot("00-login");
-        if (!field || !button) {
+        if (fieldCount === 0 || !button) {
           blocked(
             "the unauthenticated page does not expose the 'Owner access token' field and 'Unlock graph' button",
           );
         }
         if (!alert) {
           blocked(
-            "the unauthenticated page renders no role=alert error state with the server's message",
+            "the unauthenticated page renders no role=alert with the server's message",
           );
         }
 
         await fillToken(wrongToken);
-        await submitLogin();
+        await clickButton("Unlock graph");
         await frame();
         const cleared = await js<string>(
           "document.querySelector('input[type=password]')?.value ?? 'MISSING'",
@@ -335,17 +360,21 @@ async function main(): Promise<void> {
         }
 
         await login();
+        await frame();
+        const canvases = await js<number>(
+          "document.querySelectorAll('canvas').length",
+        );
         const stored = await js<number>(
           "localStorage.length + sessionStorage.length",
         );
+        if (canvases === 0) throw new Error("no graph canvas after login");
         if (stored !== 0) {
           throw new Error(
             `the session persisted ${stored} storage entries; the token must not be stored client-side`,
           );
         }
         return {
-          detail:
-            "login surface, role=alert error, cleared field after a rejected token, no client-side token storage",
+          detail: `login surface, rejected-token error, cleared field, ${canvases} canvas, no client-side token storage`,
           artifacts: [
             join(artifacts, "00-login.png"),
             join(artifacts, "00b-rejected-token.png"),
@@ -369,102 +398,194 @@ async function main(): Promise<void> {
           edges: fixtureEdges,
         });
         const receiptAt = Date.now();
-        const revision = result.receipt.revision;
-        // The receipt is durable; the UI must catch up on its own.
-        await waitForVisibleNode("Multi-machine skills blocker", 8_000);
-        const renderedAt = Date.now();
+        const renderedAt = await waitForNodeTitle(
+          "Multi-machine skills blocker",
+          10_000,
+        );
         const canvasAfter = await screenshotElement(
           "canvas",
           "e1-canvas-after",
         );
         const changed = await changedFraction(canvasBefore, canvasAfter);
-        await screenshot("01b-after-capture");
+        await screenshot("01-after-capture");
         if (changed < 0.005) {
           throw new Error(
-            `receipt landed at revision ${revision} but the canvas did not change (changed fraction ${changed.toFixed(4)})`,
+            `revision ${result.receipt.revision} landed but the canvas did not change (${(changed * 100).toFixed(2)}%)`,
           );
         }
         return {
-          detail: `revision ${revision}; receipt->DOM ${renderedAt - receiptAt}ms; command->render ${renderedAt - started}ms; canvas changed ${(changed * 100).toFixed(1)}%`,
-          artifacts: [canvasAfter, join(artifacts, "01b-after-capture.png")],
+          detail: `revision ${result.receipt.revision}; receipt->render ${renderedAt - receiptAt}ms; command->render ${renderedAt - started}ms; canvas changed ${(changed * 100).toFixed(1)}%`,
+          artifacts: [canvasAfter, join(artifacts, "01-after-capture.png")],
         };
       },
     );
 
-    await run(
-      "E1b the canvas instance and camera survive a live update",
-      async () => {
-        const same = await js<boolean>(
-          "document.querySelector('canvas') === window.__yakjevCanvas",
+    await run("E1b the canvas instance survives a live update", async () => {
+      await js(
+        "window.__yakjevCanvas = document.querySelector('canvas'), true",
+      );
+      const before = await readGraph(server);
+      await sendCommand(server, before.revision, {
+        type: "node.put",
+        node: {
+          id: "live_extra_node",
+          title: "Live extra node",
+          description: "Synthetic node added while the graph is on screen.",
+          project: "synthetic-project",
+          status: "idea",
+          sources: [],
+        },
+      });
+      await waitForNodeTitle("Live extra node", 10_000);
+      const same = await js<boolean>(
+        "document.querySelector('canvas') === window.__yakjevCanvas",
+      );
+      if (!same) {
+        throw new Error(
+          "the graph canvas was replaced on a live update, which resets the user's view",
         );
-        if (!same) {
-          throw new Error(
-            "the graph canvas was replaced on a live update, which resets the user's view",
-          );
-        }
-        return {
-          detail: "same canvas element across the live update",
-          artifacts: [],
-        };
-      },
-    );
+      }
+      return {
+        detail: "same canvas element across the live update",
+        artifacts: [],
+      };
+    });
 
     await run(
-      "E2 an asserted edge is visible with its rationale reachable",
+      "E2 selecting the delayed node exposes its blocking edge and rationale",
       async () => {
+        if (!(await clickButton("Multi-machine skills blocker"))) {
+          blocked(
+            "the node list does not expose 'Multi-machine skills blocker'",
+          );
+        }
+        await frame();
+        const interpretation = await findText(["text", "Expand neighborhood"]);
+        const edgeCard = await findText(["text", "Prism harness installs"]);
+        await screenshot("02-node-inspector");
+        if (!interpretation || !edgeCard) {
+          blocked(
+            "the node inspector does not show the neighborhood control and its connection",
+          );
+        }
+        if (
+          !(await clickCard(
+            "Prism harness installs → Multi-machine skills blocker",
+          ))
+        ) {
+          blocked(
+            "no connection card matched 'Prism harness installs → Multi-machine skills blocker'",
+          );
+        }
+        await frame();
+        const rationale = await findText(["text", "Current rationale"]);
+        const original = await findText(["text", "Original assertion"]);
+        const reframe = await findText(["text", "Reframe this relationship"]);
+        await screenshot("02b-edge-inspector");
+        if (!rationale || !original || !reframe) {
+          blocked(
+            "the edge inspector does not expose rationale, original assertion, and reframe",
+          );
+        }
         const graph = await readGraph(server);
         const edge = edgeById(graph, reframeEdgeId);
         if (!edge)
-          throw new Error("fixture edge missing from the server graph");
-        const visible = await findClick([
-          "text",
-          edge.rationale.split(" ").slice(0, 4).join(" "),
-        ]);
-        await screenshot("02-edge-inspector");
-        if (!visible) {
-          blocked(
-            "no DOM affordance surfaced the edge rationale; the driver needs the UI's edge-inspector selector",
-          );
-        }
+          throw new Error("the fixture edge is missing from the server");
         return {
-          detail: `edge ${edge.id} rationale reachable in the UI`,
-          artifacts: [join(artifacts, "02-edge-inspector.png")],
+          detail: `edge ${edge.id} (${edge.relation}) exposes rationale, original assertion, and reframe`,
+          artifacts: [
+            join(artifacts, "02-node-inspector.png"),
+            join(artifacts, "02b-edge-inspector.png"),
+          ],
         };
       },
     );
 
     await run(
-      "E3 a suggestion renders as a proposal, not an asserted edge",
+      "E3 a suggestion renders as a proposal and is accepted explicitly",
       async () => {
         const graph = await readGraph(server);
         await sendCommand(server, graph.revision, {
           type: "suggestion.record",
           suggestion: { ...fixtureSuggestion, basedOnRevision: graph.revision },
         });
-        const shown = await findText(["text", "Suggested"]);
-        await screenshot("03-suggestion");
-        if (!shown) {
+        await ab(["wait", "--text", "Jev & suggestions", "--timeout", "5000"]);
+        if (!(await clickButton("Jev & suggestions"))) {
+          blocked("the sidebar does not expose the 'Jev & suggestions' panel");
+        }
+        await frame();
+        // The client learns about the recorded suggestion from the change stream.
+        const cardDeadline = Date.now() + 8_000;
+        let card = false;
+        while (Date.now() < cardDeadline && !card) {
+          card = await clickCard("Jev in projects → Prism harness installs");
+          if (!card) await Bun.sleep(250);
+        }
+        if (!card) {
           blocked(
-            "no visible 'Suggested' affordance; needs the UI's suggestion marker",
+            "the suggestions list does not expose 'Jev in projects → Prism harness installs'",
           );
         }
-        const evidence = await findText([
+        await frame();
+        const proposal = await findText([
           "text",
-          "not independent confirmation",
+          "A proposal, not a dependency",
         ]);
-        if (!evidence) {
-          blocked(
-            "the suggestion is visible but its unverified-context evidence label is not; " +
-              "a judgment must not look like independent confirmation",
+        const evidence = await findText(["text", "Synthetic lexical overlap"]);
+        const provenance = await findText(["text", "Machine suggestion"]);
+        await screenshot("03-suggestion");
+        if (!proposal) {
+          blocked("the suggestion panel does not state that it is a proposal");
+        }
+        if (!provenance) {
+          throw new Error(
+            "the suggestion does not identify itself as a machine suggestion",
           );
         }
-        const after = await readGraph(server);
-        if (edgeById(after, "suggestion_jev_projects_prism")) {
+        if (!evidence) {
+          throw new Error(
+            "the suggestion renders without its recorded evidence list",
+          );
+        }
+        const afterRecord = await readGraph(server);
+        if (
+          edgeBetween(
+            afterRecord,
+            fixtureSuggestion.source,
+            fixtureSuggestion.target,
+          )
+        ) {
           throw new Error("recording a suggestion created an asserted edge");
         }
+        if (!(await clickButton("Accept suggestion"))) {
+          blocked("no 'Accept suggestion' control found");
+        }
+        const deadline = Date.now() + 8_000;
+        let accepted = false;
+        while (Date.now() < deadline && !accepted) {
+          const current = await readGraph(server);
+          accepted = Boolean(
+            edgeBetween(
+              current,
+              fixtureSuggestion.source,
+              fixtureSuggestion.target,
+            ),
+          );
+          if (!accepted) await Bun.sleep(200);
+        }
+        await screenshot("03b-suggestion-accepted");
+        if (!accepted) {
+          throw new Error(
+            "accepting the suggestion did not create the asserted edge",
+          );
+        }
         return {
-          detail: "suggestion visible as a proposal and not an assertion",
-          artifacts: [join(artifacts, "03-suggestion.png")],
+          detail:
+            "proposal labelling with unverified-context evidence, no edge before acceptance, edge after explicit acceptance",
+          artifacts: [
+            join(artifacts, "03-suggestion.png"),
+            join(artifacts, "03b-suggestion-accepted.png"),
+          ],
         };
       },
     );
@@ -472,24 +593,34 @@ async function main(): Promise<void> {
     await run(
       "E4 expanding the delayed node shows why it is stuck",
       async () => {
-        const opened = await findClick([
-          "text",
-          "Multi-machine skills blocker",
-        ]);
-        if (!opened)
-          blocked(
-            "node title is not a DOM affordance (canvas-only rendering?)",
-          );
+        if (!(await clickButton("Prism harness installs"))) {
+          blocked("the node list does not expose the delayed work node");
+        }
         await frame();
-        const expanded = await neighborhood(server, {
-          id: "prism_harness_installs",
-          direction: "outgoing",
-          blocking: true,
-        });
-        await screenshot("04-expand");
+        if (!(await clickButton("Expand neighborhood"))) {
+          blocked("no 'Expand neighborhood' control found");
+        }
+        const deadline = Date.now() + 8_000;
+        let interpretation: string | undefined;
+        while (Date.now() < deadline && !interpretation) {
+          interpretation = await findText(["text", "cycle"]);
+          if (!interpretation) {
+            interpretation =
+              (await js<string | null>(
+                "document.querySelector('.interpretation')?.textContent ?? null",
+              )) ?? undefined;
+          }
+          if (!interpretation) await Bun.sleep(200);
+        }
+        await screenshot("04-expanded");
+        if (!interpretation) {
+          throw new Error(
+            "expanding the neighborhood produced no interpretation",
+          );
+        }
         return {
-          detail: `blocking edges reported by the server: ${expanded.blockingEdges.join(", ")}`,
-          artifacts: [join(artifacts, "04-expand.png")],
+          detail: `interpretation shown: ${interpretation.slice(0, 160)}`,
+          artifacts: [join(artifacts, "04-expanded.png")],
         };
       },
     );
@@ -497,30 +628,49 @@ async function main(): Promise<void> {
     await run(
       "E5 reframe requires -> would benefit from in the UI",
       async () => {
-        const before = await readGraph(server);
-        const opened = await findClick([
-          "text",
-          "Multi-machine skills blocker",
-        ]);
-        if (!opened) blocked("cannot open the delayed node to reach its edge");
-        const reframed = await findClick(["text", "Would benefit from"]);
-        if (!reframed) {
-          blocked(
-            "no 'Would benefit from' control; needs the UI's reframe affordance selector",
-          );
+        if (!(await clickButton("Multi-machine skills blocker"))) {
+          blocked("the node list does not expose the delayed node");
         }
         await frame();
-        const after = await readGraph(server);
-        if (after.revision === before.revision) {
-          throw new Error(
-            "reframe did not reach the server (revision unchanged)",
-          );
+        if (
+          !(await clickCard(
+            "Prism harness installs → Multi-machine skills blocker",
+          ))
+        ) {
+          blocked("the connection card for the reframe target was not found");
         }
-        const edge = edgeById(after, reframeEdgeId);
+        await frame();
+        const before = await readGraph(server);
+        if (!(await selectByLabel("Reframe as", optionalRelationId))) {
+          blocked("no 'Reframe as' select found");
+        }
+        if (
+          !(await fillLabel(
+            "Reason for this correction",
+            "Synthetic acceptance reframe: helpful, not a prerequisite.",
+          ))
+        ) {
+          blocked("no 'Reason for this correction' field found");
+        }
+        if (!(await clickButton("Save reframe"))) {
+          blocked("no 'Save reframe' control found");
+        }
+        const deadline = Date.now() + 8_000;
+        let edge = edgeById(before, reframeEdgeId);
+        while (Date.now() < deadline) {
+          const current = await readGraph(server);
+          edge = edgeById(current, reframeEdgeId);
+          if (edge?.relation === optionalRelationId) break;
+          await Bun.sleep(200);
+        }
+        await screenshot("05-reframed");
         if (edge?.relation !== optionalRelationId) {
           throw new Error(
-            `edge relation is ${edge?.relation}, expected ${optionalRelationId}`,
+            `the reframe did not reach the server; relation is ${edge?.relation}`,
           );
+        }
+        if (edge.assertion.relation !== "requires") {
+          throw new Error("the original assertion was lost by the reframe");
         }
         const blocking = await neighborhood(server, {
           id: "prism_harness_installs",
@@ -530,33 +680,41 @@ async function main(): Promise<void> {
         if (blocking.blockingEdges.includes(reframeEdgeId)) {
           throw new Error("the reframed edge still counts as blocking");
         }
-        await screenshot("05-reframed");
         return {
-          detail: `revision ${before.revision} -> ${after.revision}; blocking interpretation changed`,
+          detail: `revision ${before.revision} -> ${(await readGraph(server)).revision}; blocking interpretation changed, original assertion retained`,
           artifacts: [join(artifacts, "05-reframed.png")],
         };
       },
     );
 
     await run("E6 undo restores the blocking interpretation", async () => {
-      const before = await readGraph(server);
-      const undone = await findClick(["role", "button"], ["--name", "Undo"]);
-      if (!undone)
-        blocked("no Undo control; needs the UI's undo affordance selector");
-      await frame();
-      const after = await readGraph(server);
-      if (after.revision <= before.revision) {
-        throw new Error("undo did not reach the server");
+      if (!(await clickButton("Undo last edit"))) {
+        blocked("no 'Undo last edit' control found");
       }
-      const edge = edgeById(after, reframeEdgeId);
+      const deadline = Date.now() + 8_000;
+      let edge = undefined;
+      while (Date.now() < deadline) {
+        const current = await readGraph(server);
+        edge = edgeById(current, reframeEdgeId);
+        if (edge?.relation === "requires") break;
+        await Bun.sleep(200);
+      }
+      await screenshot("06-undone");
       if (edge?.relation !== "requires") {
         throw new Error(
           `after undo the relation is ${edge?.relation}, expected requires`,
         );
       }
-      await screenshot("06-undone");
+      const blocking = await neighborhood(server, {
+        id: "prism_harness_installs",
+        direction: "outgoing",
+        blocking: true,
+      });
+      if (!blocking.blockingEdges.includes(reframeEdgeId)) {
+        throw new Error("undo did not restore the blocking interpretation");
+      }
       return {
-        detail: `revision ${before.revision} -> ${after.revision}; relation restored to requires`,
+        detail: "relation restored to requires and the edge blocks again",
         artifacts: [join(artifacts, "06-undone.png")],
       };
     });
@@ -569,8 +727,8 @@ async function main(): Promise<void> {
         await ab(["open", server.origin]);
         await ab(["set", "viewport", "1280", "720", "2"]);
         await login();
+        await waitForNodeTitle("Multi-machine skills blocker", 10_000);
         await frame();
-        await waitForVisibleNode("Multi-machine skills blocker", 8_000);
         const after = await readGraph(server);
         if (after.revision !== before.revision) {
           throw new Error(
@@ -583,12 +741,62 @@ async function main(): Promise<void> {
         )?.position;
         const positionAfter = nodeById(after, "multi_machine_skills")?.position;
         if (JSON.stringify(positionBefore) !== JSON.stringify(positionAfter)) {
-          throw new Error("saved node position changed across restart");
+          throw new Error("the saved node position changed across restart");
         }
         await screenshot("07-after-restart");
         return {
           detail: `revision ${after.revision} and node positions recovered after restart`,
           artifacts: [join(artifacts, "07-after-restart.png")],
+        };
+      },
+    );
+
+    await run(
+      "E7b Jev without a configured key renders an explicit unavailable state",
+      async () => {
+        if (!(await clickButton("Jev & suggestions"))) {
+          blocked("the sidebar does not expose the 'Jev & suggestions' panel");
+        }
+        await frame();
+        const before = await readGraph(server);
+        if (
+          !(await fillLabel(
+            "Search context",
+            "synthetic acceptance query without a provider key",
+          ))
+        ) {
+          blocked("no 'Search context' field found in the Jev panel");
+        }
+        if (!(await clickButton("Evaluate with Jev"))) {
+          blocked("no 'Evaluate with Jev' control found");
+        }
+        const deadline = Date.now() + 15_000;
+        let message: string | undefined;
+        while (Date.now() < deadline && !message) {
+          message =
+            (await js<string | null>(
+              "document.querySelector('.inspector [role=alert]')?.textContent ?? null",
+            )) ?? undefined;
+          if (!message) await Bun.sleep(250);
+        }
+        await screenshot("07b-jev-unavailable");
+        if (!message) {
+          throw new Error(
+            "evaluating without a provider key produced no visible unavailable state",
+          );
+        }
+        if (!/unavailable|not configured/i.test(message)) {
+          throw new Error(`unexpected evaluation message: ${message}`);
+        }
+        const after = await readGraph(server);
+        if (after.suggestions.length !== before.suggestions.length) {
+          throw new Error(
+            "an unavailable evaluation still recorded a suggestion",
+          );
+        }
+        return {
+          detail: `explicit unavailable state: ${message.slice(0, 140)}`,
+          artifacts: [join(artifacts, "07b-jev-unavailable.png")],
         };
       },
     );
@@ -613,10 +821,15 @@ async function main(): Promise<void> {
       "E9 accessibility audit finds no serious or critical violations",
       async () => {
         const raw = await ab(["a11y", "--json"]);
-        let violations: { id?: string; impact?: string }[] | undefined;
+        let violations:
+          | { id?: string; impact?: string; nodes?: unknown[] }[]
+          | undefined;
         try {
-          const parsed = JSON.parse(raw) as { violations?: typeof violations };
-          violations = parsed.violations;
+          const parsed = JSON.parse(raw) as {
+            violations?: typeof violations;
+            data?: { violations?: typeof violations };
+          };
+          violations = parsed.violations ?? parsed.data?.violations;
         } catch {
           blocked(`the a11y report was not JSON: ${raw.slice(0, 200)}`);
         }
@@ -630,10 +843,14 @@ async function main(): Promise<void> {
             violation.impact === "serious" || violation.impact === "critical",
         );
         if (severe.length > 0) {
+          const detail = severe
+            .map(
+              (violation) =>
+                `${violation.id} (${violation.impact}, ${violation.nodes?.length ?? 0} node(s))`,
+            )
+            .join(", ");
           throw new Error(
-            `${severe.length} serious/critical accessibility violations: ${severe
-              .map((violation) => violation.id)
-              .join(", ")}`,
+            `${severe.length} serious/critical accessibility violations: ${detail}. Full report: ${raw.slice(0, 600)}`,
           );
         }
         return {
@@ -665,30 +882,6 @@ async function main(): Promise<void> {
   }
 }
 
-/**
- * Wait until a node is observable in the rendered UI. Canvas-only renderers put
- * nothing in the DOM, so this accepts either a DOM match or a canvas change and
- * reports which one it saw.
- */
-async function waitForVisibleNode(
-  title: string,
-  timeoutMs: number,
-): Promise<"dom" | "canvas"> {
-  const deadline = Date.now() + timeoutMs;
-  const before = await screenshotElement("canvas", "e1-canvas-watch-before");
-  while (Date.now() < deadline) {
-    const inDom = await js<boolean>(
-      `document.body.innerText.includes(${JSON.stringify(title)})`,
-    );
-    if (inDom) return "dom";
-    await Bun.sleep(250);
-  }
-  const after = await screenshotElement("canvas", "e1-canvas-watch-after");
-  const changed = await changedFraction(before, after);
-  if (changed > 0.005) return "canvas";
-  throw new Error(
-    `node "${title}" never became observable within ${timeoutMs}ms (DOM text absent, canvas changed ${(changed * 100).toFixed(2)}%)`,
-  );
-}
-
-await main();
+void (async () => {
+  await main();
+})();
