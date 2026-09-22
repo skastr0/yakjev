@@ -417,3 +417,39 @@ test("editing an intention's words reconnects it; status changes do not", async 
   expect(calls).toBe(1);
   expect(graph.edges[0]).toMatchObject({ source: "site", target: "designer" });
 });
+
+test("rounded provider probabilities do not fail a whole batch", async () => {
+  // Jev rounds: an 11-label distribution can sum to 0.9996.
+  const rounded = (request: Request): Response => {
+    const response = judge({
+      "Book flights": {
+        related: 2,
+        match: true,
+        relation: "candidate_to_focus_0",
+      },
+    })(request);
+    const answers = { ...response.answers };
+    for (const [key, answer] of Object.entries(answers))
+      if (answer.type === "choice" && key.startsWith("relation"))
+        answers[key] = {
+          ...answer,
+          probabilities: Object.fromEntries(
+            Object.entries(answer.probabilities).map(([label, value]) => [
+              label,
+              value === 1 ? 0.9 : 0.0099,
+            ]),
+          ),
+        };
+    return { ...response, answers };
+  };
+  const { call, capture } = await fixture(controlled(rounded));
+  await capture("flights", "Book flights", false);
+  const preview = await call("/api/jev/preview", {
+    draft: { title: "Plan the Lisbon trip" },
+  });
+  expect(preview.body.status).toBe("succeeded");
+  expect(preview.body.judgments[0]).toMatchObject({
+    nodeId: "flights",
+    connect: true,
+  });
+});

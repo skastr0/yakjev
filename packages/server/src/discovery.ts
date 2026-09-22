@@ -26,9 +26,12 @@ import type {
 
 export const CANDIDATE_LIMIT = 24;
 export const PROMPT_VERSION = "yakjev-discovery-3";
-// Connect policy: Jev connects a pair when it restates the same intention, or
-// when it matches, names a relation, and is at least directly relevant.
-export const CONNECT_RELATEDNESS = 0.5;
+// Connect policy: Jev connects a pair when it restates the same intention,
+// when it matches and names a relation with relatedness >= CONNECT_RELATEDNESS,
+// or when it matches with relatedness >= STRONG_RELATEDNESS (linked as related).
+// Tuned with `bun run jev:eval` (golden graph: P 0.76, R 1.00 on 2026-09-22).
+export const CONNECT_RELATEDNESS = 0.66;
+export const STRONG_RELATEDNESS = 0.9;
 export const MAX_CONNECTIONS = 4;
 const MAX_CORRECTIONS = 24;
 const DRAFT_ID = "draft";
@@ -426,6 +429,38 @@ export function evaluationIsCurrent(
   );
 }
 
+// Jev rounds probabilities, so a many-label distribution can sum to 0.9999.
+// DecisionModel requires 1 within 1e-6 and would reject the whole batch.
+// Rescale near-unit distributions; leave real garbage for validation to catch.
+const SUM_SLACK = 0.02;
+export function renormalize(
+  response: typeof TypeSafeSchema.SystemOneResponse.Type,
+): typeof TypeSafeSchema.SystemOneResponse.Type {
+  const answers: Record<string, (typeof response.answers)[string]> = {};
+  for (const [key, answer] of Object.entries(response.answers)) {
+    if (answer.type !== "choice" && answer.type !== "score") {
+      answers[key] = answer;
+      continue;
+    }
+    const entries = Object.entries(answer.probabilities);
+    const total = entries.reduce((sum, [, value]) => sum + value, 0);
+    const near =
+      entries.length > 0 &&
+      entries.every(([, value]) => Number.isFinite(value) && value >= 0) &&
+      total !== 1 &&
+      Math.abs(total - 1) <= SUM_SLACK;
+    answers[key] = near
+      ? {
+          ...answer,
+          probabilities: Object.fromEntries(
+            entries.map(([label, value]) => [label, value / total]),
+          ),
+        }
+      : answer;
+  }
+  return { ...response, answers };
+}
+
 export class Discovery extends Context.Service<
   Discovery,
   {
@@ -504,6 +539,7 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
       ...client,
       systemOne: (payload) =>
         client.systemOne(payload).pipe(
+          Effect.map(renormalize),
           Effect.tap((response) =>
             Effect.sync(() => {
               raw = response;
@@ -642,10 +678,12 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
       const score = relatedness.score / (RELATEDNESS_LEVELS.length - 1);
       const confidence =
         relation?.type === "choice" ? relation.confidence : match.confidence;
-      // A restatement is linked as related, whatever relation Jev guessed.
+      // A restatement, or a strong match without a named relation, is linked
+      // as related, whatever relation Jev guessed.
+      const strong = match.choice === "match" && score >= STRONG_RELATEDNESS;
       const effective =
         (isSame && fallbackRelation ? undefined : selected) ??
-        (isSame && fallbackRelation
+        ((isSame || strong) && fallbackRelation
           ? {
               relation: fallbackRelation,
               direction: "focus_to_candidate" as const,
@@ -656,7 +694,9 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
         effective &&
         !suppressed &&
         !linked &&
-        (isSame || (match.choice === "match" && score >= CONNECT_RELATEDNESS))
+        (isSame ||
+          strong ||
+          (match.choice === "match" && score >= CONNECT_RELATEDNESS))
       )
         eligible.push({
           index,
