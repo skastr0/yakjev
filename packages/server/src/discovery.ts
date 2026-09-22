@@ -57,6 +57,15 @@ const CHARS_PER_TOKEN = 3.9;
 const OUTPUT_TOKENS_PER_QUESTION = 60;
 export const estimateTokens = (text: string) =>
   Math.ceil(text.length / CHARS_PER_TOKEN);
+// Coarse pass: on large graphs, before packing, Jev rates the top of the
+// ranking with one relatedness question each, in parallel batches, so a
+// paraphrase that embeddings rank low can still reach the full judgment.
+// One short question per candidate costs ~1/10 of the full four.
+export const COARSE_WINDOW = 480;
+const COARSE_MIN = 48;
+const COARSE_BATCH_TOKENS = 20_000;
+const COARSE_TIMEOUT_MS = 8_000;
+const COARSE_DESCRIPTION = 280;
 export const PROMPT_VERSION = "yakjev-discovery-4";
 // Connect policy: Jev connects a pair when it restates the same intention,
 // when it matches and names a relation with relatedness >= CONNECT_RELATEDNESS,
@@ -109,13 +118,35 @@ export interface Coverage {
   readonly estimatedTokens: number;
 }
 
+// One coarse relatedness batch Jev ran to reorder a large ranking.
+export interface CoarseCall {
+  readonly status: "succeeded" | "failed";
+  readonly candidates: number;
+  readonly elapsedMs: number;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly model: string | null;
+  readonly failure: string | null;
+}
+
 export interface DiscoveryResult {
   readonly basedOnRevision: number;
   readonly candidates: readonly Candidate[];
   readonly coverage: Coverage;
+  readonly coarse: readonly CoarseCall[];
 }
 
-interface Validated {
+// Reorders a ranking before packing; the default keeps it as is.
+export type Reranker = (
+  graph: Graph,
+  valid: Validated,
+  ranked: readonly RankedCandidate[],
+) => Effect.Effect<{
+  readonly ranked: readonly RankedCandidate[];
+  readonly calls: readonly CoarseCall[];
+}>;
+
+export interface Validated {
   readonly request: DiscoveryRequest;
   // The existing focus node, or a draft standing in for one.
   readonly focus: Node | undefined;
@@ -275,6 +306,7 @@ function pack(
       strategy: candidates.length === valid.eligible ? "full" : "budget",
       estimatedTokens: measure(candidates.length).input,
     },
+    coarse: [],
   };
 }
 
@@ -283,6 +315,7 @@ export const shortlist = (
   graph: Graph,
   input: unknown,
   retrieval: RetrievalService,
+  rerank?: Reranker,
 ): Effect.Effect<DiscoveryResult, DiscoveryError> =>
   Effect.gen(function* () {
     const valid = yield* Effect.try({
@@ -292,14 +325,18 @@ export const shortlist = (
           ? cause
           : new DiscoveryError({ message: "Invalid discovery request" }),
     });
-    const ranked = yield* retrieval.rank(valid.rank);
-    return yield* Effect.try({
-      try: () => pack(graph, valid, ranked),
+    const first = yield* retrieval.rank(valid.rank);
+    const reranked = rerank
+      ? yield* rerank(graph, valid, first)
+      : { ranked: first, calls: [] };
+    const packed = yield* Effect.try({
+      try: () => pack(graph, valid, reranked.ranked),
       catch: (cause) =>
         cause instanceof DiscoveryError
           ? cause
           : new DiscoveryError({ message: "Invalid graph or discovery input" }),
     });
+    return { ...packed, coarse: reranked.calls };
   });
 
 /** shortlist() with lexical ranking, synchronously. Throws DiscoveryError. */
@@ -643,11 +680,155 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
   retrieval: RetrievalService = lexicalRetrieval,
 ) {
   const permits = yield* Semaphore.make(4);
+  const coarse: Reranker = (graph, valid, ranked) =>
+    Effect.gen(function* () {
+      const unchanged = { ranked, calls: [] as CoarseCall[] };
+      if (!client || valid.rank.only || valid.eligible <= FULL_COVERAGE)
+        return unchanged;
+      const explicit = ranked.filter((c) => valid.rank.explicit.has(c.nodeId));
+      const rest = ranked.filter((c) => !valid.rank.explicit.has(c.nodeId));
+      if (rest.length <= COARSE_MIN) return unchanged;
+      const window = rest.slice(0, COARSE_WINDOW);
+      const byId = new Map(graph.nodes.map((node) => [node.id, node]));
+      const item = (candidate: RankedCandidate) => {
+        const node = byId.get(candidate.nodeId)!;
+        return {
+          title: node.title,
+          description: node.description.slice(0, COARSE_DESCRIPTION),
+        };
+      };
+      const question = (index: number) =>
+        Decision.rate({
+          instructions: `How relevant is \`candidates[${index}]\` to \`focus\`? Judge meaning, not shared words; follow \`workspaceContext\` when present.`,
+          criteria: RELATEDNESS_LEVELS,
+        });
+      const fixed = estimateTokens(
+        JSON.stringify({
+          focus: valid.rank.focus.text,
+          workspaceContext: graph.jevContext?.text ?? null,
+        }),
+      );
+      const batches: RankedCandidate[][] = [[]];
+      let used = fixed;
+      for (const candidate of window) {
+        const cost =
+          estimateTokens(JSON.stringify(item(candidate))) +
+          estimateTokens(JSON.stringify(question(0))) +
+          OUTPUT_TOKENS_PER_QUESTION;
+        if (used + cost > COARSE_BATCH_TOKENS && batches.at(-1)!.length > 0) {
+          batches.push([]);
+          used = fixed;
+        }
+        batches.at(-1)!.push(candidate);
+        used += cost;
+      }
+      const runBatch = (batch: RankedCandidate[]) =>
+        Effect.gen(function* () {
+          const started = yield* Clock.currentTimeMillis;
+          const decisions: Record<string, Decision.Any> = {};
+          for (const [index] of batch.entries())
+            decisions[`coarse_${index}`] = question(index);
+          const state = {
+            focus: valid.rank.focus.text,
+            workspaceContext: graph.jevContext?.text ?? null,
+            candidates: batch.map(item),
+          };
+          let raw: typeof TypeSafeSchema.SystemOneResponse.Type | undefined;
+          const observing: TypeSafeClient.Service = {
+            ...client,
+            systemOne: (payload) =>
+              client.systemOne(payload).pipe(
+                Effect.map(renormalize),
+                Effect.tap((response) =>
+                  Effect.sync(() => {
+                    raw = response;
+                  }),
+                ),
+              ),
+          };
+          const result = yield* permits
+            .withPermits(1)(
+              Effect.gen(function* () {
+                const model = yield* TypeSafeDecisionModel.make({
+                  model: REQUESTED_MODEL,
+                }).pipe(
+                  Effect.provideService(
+                    TypeSafeClient.TypeSafeClient,
+                    observing,
+                  ),
+                );
+                return yield* model.decide(
+                  Decision.make({ input: Schema.Json, decisions }),
+                  { input: Schema.decodeUnknownSync(Schema.Json)(state) },
+                );
+              }),
+            )
+            .pipe(Effect.timeout(COARSE_TIMEOUT_MS), Effect.result);
+          const elapsedMs = (yield* Clock.currentTimeMillis) - started;
+          const response = raw;
+          const scores =
+            result._tag === "Success" && response
+              ? batch.map((_, index) => {
+                  const answer = response.answers[`coarse_${index}`];
+                  return answer?.type === "score"
+                    ? answer.score / (RELATEDNESS_LEVELS.length - 1)
+                    : null;
+                })
+              : null;
+          const call: CoarseCall = {
+            status:
+              scores && scores.every((v) => v !== null)
+                ? "succeeded"
+                : "failed",
+            candidates: batch.length,
+            elapsedMs,
+            inputTokens: response?.usage?.input_tokens ?? null,
+            outputTokens: response?.usage?.output_tokens ?? null,
+            model: response?.model ?? null,
+            failure:
+              result._tag === "Failure"
+                ? result.failure._tag === "TimeoutError"
+                  ? "Timeout"
+                  : result.failure.reason._tag
+                : scores
+                  ? null
+                  : "InvalidOutput",
+          };
+          return { batch, scores, call };
+        });
+      const results = yield* Effect.forEach(batches, runBatch, {
+        concurrency: "unbounded",
+      });
+      const calls = results.map((result) => result.call);
+      // Any failed batch: keep retrieval's order rather than a partial one.
+      if (calls.some((call) => call.status === "failed"))
+        return { ranked, calls };
+      const scored = results.flatMap((result) =>
+        result.batch.map((candidate, index) => ({
+          candidate,
+          score: result.scores![index]!,
+        })),
+      );
+      const order = new Map(window.map((c, index) => [c.nodeId, index]));
+      scored.sort(
+        (a, b) =>
+          b.score - a.score ||
+          order.get(a.candidate.nodeId)! - order.get(b.candidate.nodeId)!,
+      );
+      return {
+        ranked: [
+          ...explicit,
+          ...scored.map((entry) => entry.candidate),
+          ...rest.slice(COARSE_WINDOW),
+        ],
+        calls,
+      };
+    });
   const evaluate = Effect.fn("Discovery.evaluate")(function* (
     graph: Graph,
     request: DiscoveryRequest,
   ) {
-    const listed = yield* shortlist(graph, request, retrieval);
+    const listed = yield* shortlist(graph, request, retrieval, coarse);
     const prepared = yield* Effect.try({
       try: () => prepare(graph, request, listed),
       catch: (cause) =>
@@ -978,7 +1159,7 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
   });
   return Discovery.of({
     evaluate,
-    shortlist: (graph, request) => shortlist(graph, request, retrieval),
+    shortlist: (graph, request) => shortlist(graph, request, retrieval, coarse),
   });
 });
 

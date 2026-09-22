@@ -53,6 +53,21 @@ const judge =
     for (const [index, candidate] of state.candidates.entries()) {
       const verdict = verdicts[candidate.title] ?? {};
       const score = verdict.related ?? 0;
+      if (request.questions[`coarse_${index}`]) {
+        // A coarse rerank batch asks one relatedness question per candidate.
+        answers[`coarse_${index}`] = {
+          type: "score",
+          score,
+          probabilities: {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            [String(Math.round(score))]: 1,
+          },
+          confidence: 1,
+        };
+        continue;
+      }
       answers[`relatedness_${index}`] = {
         type: "score",
         score,
@@ -602,4 +617,37 @@ test("workspace context is journaled and reaches every Jev call", async () => {
   expect((await graph()).jevContext?.text).toBe(
     "I live in Lisbon; trips mean work travel.",
   );
+});
+
+test("on a large graph, a coarse Jev pass lifts a buried paraphrase into the judged bag", async () => {
+  const { call, capture } = await fixture(
+    controlled(
+      judge({
+        "Book a dentist appointment": {
+          related: 2,
+          match: true,
+          relation: "focus_to_candidate_3",
+        },
+      }),
+    ),
+  );
+  // 60 word-overlap traps rank above the target, which shares no words.
+  for (let i = 0; i < 60; i++)
+    await capture(
+      `trap${i.toString().padStart(2, "0")}`,
+      `Schedule a checkup of the car ${i}`,
+      false,
+    );
+  await capture("dentist", "Book a dentist appointment", false);
+  const preview = await call("/api/jev/preview", {
+    draft: { title: "Schedule a dental checkup" },
+  });
+  expect(preview.body.status).toBe("succeeded");
+  expect(
+    preview.body.judgments.find((j: any) => j.nodeId === "dentist"),
+  ).toMatchObject({ connect: true });
+  const log = (await call("/api/jev/calls")).body;
+  const purposes = log.calls.map((c: any) => c.purpose);
+  expect(purposes).toContain("rerank");
+  expect(purposes[0]).toBe("preview");
 });

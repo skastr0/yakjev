@@ -23,6 +23,7 @@ import {
   Discovery,
   DiscoveryError,
   PROMPT_VERSION,
+  type CoarseCall,
   type Evaluation,
 } from "./discovery";
 import { DomainError } from "./domain";
@@ -42,7 +43,8 @@ export class Evaluations extends Context.Service<Evaluations>()(
       const permit = yield* Semaphore.make(1);
       const scope = yield* Effect.scope;
       // In-memory Jev call log for the dev panel: resets when the server
-      // restarts. TypeSafe publishes no per-token price, so cost needs rates.
+      // restarts. Cost uses the configured rates (jev-1.13: $0.042 per
+      // million input tokens, output free).
       const inputRate = yield* Config.option(
         Config.Number("YAKJEV_JEV_USD_PER_MTOK_INPUT"),
       );
@@ -66,40 +68,53 @@ export class Evaluations extends Context.Service<Evaluations>()(
         elapsedMs: 0,
         costUsd: pricing ? 0 : null,
       };
+      const record = (entry: Omit<JevCall, "at" | "costUsd">) =>
+        Effect.gen(function* () {
+          const costUsd = pricing
+            ? ((entry.inputTokens ?? 0) * pricing.inputUsdPerMTok +
+                (entry.outputTokens ?? 0) * pricing.outputUsdPerMTok) /
+              1_000_000
+            : null;
+          log.unshift({
+            ...entry,
+            at: DateTime.formatIso(yield* DateTime.now),
+            costUsd,
+          });
+          log.length = Math.min(log.length, JEV_CALL_LOG_LIMIT);
+          totals.calls += 1;
+          if (entry.status === "failed") totals.failed += 1;
+          totals.inputTokens += entry.inputTokens ?? 0;
+          totals.outputTokens += entry.outputTokens ?? 0;
+          totals.elapsedMs += entry.elapsedMs;
+          if (totals.costUsd !== null && costUsd !== null)
+            totals.costUsd += costUsd;
+        });
+      const trackCoarse = (calls: readonly CoarseCall[]) =>
+        Effect.forEach(
+          calls,
+          (call) => record({ purpose: "rerank", ...call }),
+          {
+            discard: true,
+          },
+        );
       const track = (purpose: JevCall["purpose"], evaluated: Evaluation) =>
         Effect.gen(function* () {
+          yield* trackCoarse(evaluated.coarse);
           // Only calls that reached the provider: no key and empty candidate
           // sets never leave the server.
           const called =
             evaluated.status === "failed" || evaluated.rawResponse !== null;
           if (!called) return;
-          const input = evaluated.usage.inputTokens;
-          const output = evaluated.usage.outputTokens;
-          const costUsd = pricing
-            ? ((input ?? 0) * pricing.inputUsdPerMTok +
-                (output ?? 0) * pricing.outputUsdPerMTok) /
-              1_000_000
-            : null;
-          log.unshift({
-            at: DateTime.formatIso(yield* DateTime.now),
+          yield* record({
             purpose,
             status: evaluated.status === "failed" ? "failed" : "succeeded",
             candidates: evaluated.coverage.considered,
             elapsedMs: evaluated.elapsedMs,
-            inputTokens: input,
-            outputTokens: output,
-            costUsd,
+            inputTokens: evaluated.usage.inputTokens,
+            outputTokens: evaluated.usage.outputTokens,
             model: evaluated.resolvedModel,
             failure: evaluated.failure?.code ?? null,
           });
-          log.length = Math.min(log.length, JEV_CALL_LOG_LIMIT);
-          totals.calls += 1;
-          if (evaluated.status === "failed") totals.failed += 1;
-          totals.inputTokens += input ?? 0;
-          totals.outputTokens += output ?? 0;
-          totals.elapsedMs += evaluated.elapsedMs;
-          if (totals.costUsd !== null && costUsd !== null)
-            totals.costUsd += costUsd;
         });
       const calls = Effect.sync(
         (): JevCalls => ({
@@ -366,7 +381,7 @@ export class Evaluations extends Context.Service<Evaluations>()(
         input: unknown,
       ) {
         const graph = yield* store.read;
-        return yield* discovery
+        const listed = yield* discovery
           .shortlist(graph, input)
           .pipe(
             Effect.mapError(
@@ -374,6 +389,8 @@ export class Evaluations extends Context.Service<Evaluations>()(
                 new DomainError({ code: "Invalid", message: error.message }),
             ),
           );
+        yield* trackCoarse(listed.coarse);
+        return listed;
       });
       return { evaluate, preview, command, connectNode, calls, shortlist };
     }),

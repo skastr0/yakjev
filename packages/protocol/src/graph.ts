@@ -340,6 +340,7 @@ export const JevCall = Schema.Struct({
     "preview",
     "auto-connect",
     "evaluate",
+    "rerank",
   ]),
   status: Schema.Literals(["succeeded", "failed"]),
   candidates: Schema.Int,
