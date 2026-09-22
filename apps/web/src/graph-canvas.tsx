@@ -22,9 +22,11 @@ import {
   DRAG_REACH,
   idsWithinReach,
   layoutBounds,
+  settlePoint,
   syncGraph,
   type Selection,
 } from "./graph-model";
+import { ASSERTED_DISTANCE, BLOCKING_DISTANCE } from "./layout";
 import type { Ghost } from "./jev";
 
 export type Point = { x: number; y: number };
@@ -75,6 +77,8 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     const dragGesture = useRef<{ x: number; y: number; peak: number } | null>(
       null,
     );
+    const dragHome = useRef<Point | null>(null);
+    const settleFrame = useRef(0);
     const reachOf = useRef<(id: string) => string[]>(() => []);
     reachOf.current = (focusId: string) => {
       const sigma = renderer.current;
@@ -285,6 +289,65 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           if (!(original instanceof MouseEvent)) return;
           latest.current.onCreate({ x: original.clientX, y: original.clientY });
         });
+        const releaseNode = (focusId: string) => {
+          const home = dragHome.current;
+          if (!home || !graph.current.hasNode(focusId)) return;
+          const focus = {
+            x: graph.current.getNodeAttribute(focusId, "x") as number,
+            y: graph.current.getNodeAttribute(focusId, "y") as number,
+          };
+          const taxonomy = latest.current.data.taxonomy;
+          let best: {
+            x: number;
+            y: number;
+            distance: number;
+            gap: number;
+          } | null = null;
+          for (const ghost of latest.current.ghosts) {
+            if (ghost.kind !== "drag") continue;
+            const other = [ghost.from, ghost.to].find(
+              (end): end is string =>
+                typeof end === "string" && end !== focusId,
+            );
+            if (!other || !graph.current.hasNode(other)) continue;
+            const point = {
+              x: graph.current.getNodeAttribute(other, "x") as number,
+              y: graph.current.getNodeAttribute(other, "y") as number,
+            };
+            const gap = Math.hypot(focus.x - point.x, focus.y - point.y);
+            if (best && gap >= best.gap) continue;
+            const relation = taxonomy.relations.find(
+              (item) => item.label === ghost.label,
+            );
+            best = {
+              ...point,
+              gap,
+              distance: relation?.blocking
+                ? BLOCKING_DISTANCE
+                : ASSERTED_DISTANCE,
+            };
+          }
+          if (!best) return;
+          const dest = settlePoint(focus, home, best, best.distance);
+          if (!dest) return;
+          cancelAnimationFrame(settleFrame.current);
+          const started = performance.now();
+          const reduced = reduceMotion.current;
+          const step = (now: number) => {
+            const sigmaNow = renderer.current;
+            if (!sigmaNow || !graph.current.hasNode(focusId)) return;
+            const t = reduced ? 1 : Math.min(1, (now - started) / 300);
+            const eased = 1 - (1 - t) ** 3;
+            const x = focus.x + (dest.x - focus.x) * eased;
+            const y = focus.y + (dest.y - focus.y) * eased;
+            graph.current.setNodeAttribute(focusId, "x", x);
+            graph.current.setNodeAttribute(focusId, "y", y);
+            positions.current.set(focusId, { x, y });
+            sigmaNow.refresh();
+            if (t < 1) settleFrame.current = requestAnimationFrame(step);
+          };
+          settleFrame.current = requestAnimationFrame(step);
+        };
         sigma.on("nodeDragStart", (payload) => {
           const shift =
             payload.event.original instanceof MouseEvent &&
@@ -303,6 +366,11 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             x: payload.event.x,
             y: payload.event.y,
             peak: 0,
+          };
+          cancelAnimationFrame(settleFrame.current);
+          dragHome.current = {
+            x: graph.current.getNodeAttribute(payload.node, "x") as number,
+            y: graph.current.getNodeAttribute(payload.node, "y") as number,
           };
           latest.current.onDragStart(
             payload.node,
@@ -335,8 +403,10 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           const nearby = reachOf.current(node);
           const moved = (dragGesture.current?.peak ?? 0) > DRAG_COMMIT_PX;
           dragGesture.current = null;
-          if (moved) latest.current.onDragEnd(node, nearby);
-          else latest.current.onDragCancel();
+          if (moved) {
+            releaseNode(node);
+            latest.current.onDragEnd(node, nearby);
+          } else latest.current.onDragCancel();
         });
         sigma.on("moveBody", ({ event }) => {
           const current = link.current;
@@ -373,6 +443,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         resize.observe(container.current);
         return () => {
           cancelAnimationFrame(frame);
+          cancelAnimationFrame(settleFrame.current);
           resize.disconnect();
           sigma.kill();
           renderer.current = null;

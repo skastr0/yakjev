@@ -2,8 +2,8 @@ import type { Graph } from "@yakjev/protocol";
 
 export type Point = { readonly x: number; readonly y: number };
 
-const BLOCKING = 140;
-const ASSERTED = 230;
+export const BLOCKING_DISTANCE = 140;
+export const ASSERTED_DISTANCE = 230;
 const SUGGESTED = 310;
 const EXTENT = 700;
 const ITERATIONS = 80;
@@ -44,7 +44,7 @@ export function placeGraph(graph: Graph): Map<string, Point> {
     link(
       edge.source,
       edge.target,
-      blocking.has(edge.relation) ? BLOCKING : ASSERTED,
+      blocking.has(edge.relation) ? BLOCKING_DISTANCE : ASSERTED_DISTANCE,
     );
   for (const suggestion of graph.suggestions)
     if (suggestion.status === "pending")

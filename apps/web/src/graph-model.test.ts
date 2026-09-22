@@ -16,6 +16,7 @@ import {
   searchNodes,
   syncGraph,
   unjudgedIds,
+  settlePoint,
   visibleGraph,
 } from "./graph-model";
 
@@ -298,6 +299,18 @@ describe("render projection", () => {
     expect(missing).toHaveLength(24);
     expect(missing[0]).toBe("n1");
     expect(missing).not.toContain("n0");
+  });
+
+  test("a dropped node springs back to the layout link length", () => {
+    expect(
+      settlePoint({ x: 10, y: 0 }, { x: 400, y: 0 }, { x: 0, y: 0 }, 230),
+    ).toEqual({ x: 230, y: 0 });
+    expect(
+      settlePoint({ x: 200, y: 0 }, { x: 400, y: 0 }, { x: 0, y: 0 }, 230),
+    ).toBeNull();
+    expect(
+      settlePoint({ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }, 140),
+    ).toEqual({ x: 140, y: 0 });
   });
 
   test("canonical source rendering never turns an executable URI into a link", () => {

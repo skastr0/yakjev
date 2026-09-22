@@ -163,6 +163,36 @@ export function unjudgedIds(
   return missing;
 }
 
+// Where a dropped node should rest so the new edge is as long as the layout's
+// link. Null when it is already far enough from the target. Direction is back
+// toward where the drag started.
+export function settlePoint(
+  focus: { x: number; y: number },
+  home: { x: number; y: number },
+  target: { x: number; y: number },
+  distance: number,
+): { x: number; y: number } | null {
+  const gap = Math.hypot(focus.x - target.x, focus.y - target.y);
+  if (gap >= distance * 0.85) return null;
+  let dx = home.x - target.x;
+  let dy = home.y - target.y;
+  let length = Math.hypot(dx, dy);
+  if (length < 1) {
+    dx = focus.x - target.x;
+    dy = focus.y - target.y;
+    length = Math.hypot(dx, dy);
+  }
+  if (length < 1) {
+    dx = 1;
+    dy = 0;
+    length = 1;
+  }
+  return {
+    x: target.x + (dx / length) * distance,
+    y: target.y + (dy / length) * distance,
+  };
+}
+
 export function searchNodes(nodes: readonly Node[], query: string) {
   const terms = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   return nodes.filter((node) => {
