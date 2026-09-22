@@ -109,8 +109,12 @@ export const lexicalRetrieval: RetrievalService = {
 // text-embedding-3-small cosines for a real paraphrase sit well above this.
 // Below it, a zero-overlap node stays coverage and the packer can drop it.
 const SEMANTIC_FLOOR = 0.4;
-const EMBED_BUDGET_MS = 250;
-const EMBED_BATCH = 96;
+// First rank waits this long, then returns lexical order. The embedding
+// requests keep running. A cold 1,000-node graph is about 11 sequential
+// batches, so that first call does not finish inside this budget.
+export const EMBED_BUDGET_MS = 250;
+// One OpenAI request at a time, this many texts. Not parallel.
+export const EMBED_BATCH = 96;
 const EMBED_MODEL = "text-embedding-3-small";
 const EMBED_URL = "https://api.openai.com/v1/embeddings";
 // One input's token cap is 8191. Characters stay under that for ordinary text.
@@ -233,6 +237,11 @@ function hybridRanker(client: EmbeddingClient, budgetMs: number) {
       if (text.trim() !== "") needed.push({ hash, text });
     }
     const missing = needed.filter((item) => !cache.has(item.hash));
+    // Cold start embeds every missing text in sequential EMBED_BATCH requests.
+    // 1,000 nodes is about 11 calls, which will not finish inside the budget,
+    // so this rank returns lexical order while the rest of the warm continues.
+    // A partial cache is not fused: one semantic score makes the packer drop
+    // every remaining coverage node, including a paraphrase still in flight.
     if (missing.length > 0) {
       const pending = warm(missing);
       const ready = await new Promise<boolean>((resolve) => {

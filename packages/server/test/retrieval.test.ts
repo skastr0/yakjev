@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { discover } from "../src/discovery.ts";
 import {
+  EMBED_BATCH,
   hybridRetrieval,
   lexicalRank,
   lexicalRetrieval,
@@ -255,6 +256,58 @@ describe("hybrid retrieval", () => {
     expect(
       second.find((candidate) => candidate.nodeId === "paraphrase")?.via,
     ).toBe("semantic");
+  });
+
+  test("a cold multi-batch warm stays lexical until every batch finishes", async () => {
+    const releases: Array<() => void> = [];
+    const calls: number[] = [];
+    const client: EmbeddingClient = {
+      embed: (texts) =>
+        new Promise((resolve) => {
+          calls.push(texts.length);
+          releases.push(() => resolve(texts.map(() => [1, 0] as const)));
+        }),
+    };
+    const focus = node("focus", "Arrange a routine teeth checkup", "");
+    const snapshot = graph([
+      focus,
+      ...Array.from({ length: EMBED_BATCH }, (_, index) =>
+        node(`n-${index}`, `Note ${index}`, "unrelated"),
+      ),
+    ]);
+    const rankInput = {
+      graph: snapshot,
+      focus: { id: "focus" as const, text: textOf(focus) },
+      explicit: new Set<string>(),
+      only: false,
+    };
+    const retrieval = hybridRetrieval(client, { budgetMs: 20 });
+    const first = await Effect.runPromise(retrieval.rank(rankInput));
+    expect(first.every((candidate) => candidate.semanticScore === null)).toBe(
+      true,
+    );
+    expect(calls).toEqual([EMBED_BATCH]);
+
+    releases[0]?.();
+    for (let attempt = 0; calls.length < 2 && attempt < 20; attempt += 1)
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toEqual([EMBED_BATCH, 1]);
+
+    const partial = await Effect.runPromise(retrieval.rank(rankInput));
+    expect(partial.every((candidate) => candidate.semanticScore === null)).toBe(
+      true,
+    );
+
+    releases[1]?.();
+    for (let attempt = 0; attempt < 5; attempt += 1)
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    const warmed = await Effect.runPromise(retrieval.rank(rankInput));
+    expect(warmed.every((candidate) => candidate.semanticScore === 1)).toBe(
+      true,
+    );
+    expect(warmed.every((candidate) => candidate.via === "semantic")).toBe(
+      true,
+    );
   });
 
   test("an embedding error stays lexical and does not fail", async () => {
