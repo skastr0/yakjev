@@ -368,6 +368,16 @@ async function main(): Promise<void> {
             "no visible 'Suggested' affordance; needs the UI's suggestion marker",
           );
         }
+        const evidence = await findText([
+          "text",
+          "not independent confirmation",
+        ]);
+        if (!evidence) {
+          blocked(
+            "the suggestion is visible but its unverified-context evidence label is not; " +
+              "a judgment must not look like independent confirmation",
+          );
+        }
         const after = await readGraph(server);
         if (edgeById(after, "suggestion_jev_projects_prism")) {
           throw new Error("recording a suggestion created an asserted edge");
