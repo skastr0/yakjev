@@ -6,6 +6,7 @@ import {
   Graph,
   HistoryEntry,
   initialTaxonomy,
+  type LayoutPoint,
   Receipt,
 } from "@yakjev/protocol";
 import { Context, Data, DateTime, Effect, Layer, Schema } from "effect";
@@ -53,6 +54,12 @@ export class Store extends Context.Service<Store>()("@yakjev/Store", {
       )`;
         yield* sql`INSERT OR IGNORE INTO graph_state (singleton, revision, graph)
         VALUES (1, 0, ${JSON.stringify(empty)})`;
+        // Canvas positions: display state, deliberately outside the journal.
+        yield* sql`CREATE TABLE IF NOT EXISTS node_layout (
+        node_id TEXT PRIMARY KEY,
+        x REAL NOT NULL,
+        y REAL NOT NULL
+      )`;
       }),
     );
 
@@ -125,6 +132,37 @@ export class Store extends Context.Service<Store>()("@yakjev/Store", {
         cause instanceof DomainError ? cause : new StorageError({ cause }),
       ),
     );
+    const layoutRows = Effect.gen(function* () {
+      const graph = yield* snapshot();
+      const ids = new Set(graph.nodes.map((node) => node.id));
+      const rows =
+        yield* sql`SELECT node_id, x, y FROM node_layout ORDER BY node_id`;
+      // Removed nodes keep a harmless row; only live nodes are returned.
+      return rows.flatMap((row) =>
+        ids.has(String(row.node_id))
+          ? [{ id: String(row.node_id), x: Number(row.x), y: Number(row.y) }]
+          : [],
+      );
+    });
+    const layout = layoutRows.pipe(
+      Effect.map((positions) => ({ positions })),
+      Effect.mapError((cause) => new StorageError({ cause })),
+    );
+    const saveLayout = Effect.fn("Store.saveLayout")(
+      function* (positions: readonly LayoutPoint[]) {
+        yield* sql.withTransaction(
+          Effect.forEach(
+            positions,
+            (point) =>
+              sql`INSERT INTO node_layout (node_id, x, y) VALUES (${point.id}, ${point.x}, ${point.y})
+              ON CONFLICT(node_id) DO UPDATE SET x = excluded.x, y = excluded.y`,
+            { discard: true },
+          ),
+        );
+        return { saved: positions.length };
+      },
+      Effect.mapError((cause) => new StorageError({ cause })),
+    );
     const exportGraph = sql
       .withTransaction(
         Effect.gen(function* () {
@@ -134,7 +172,8 @@ export class Store extends Context.Service<Store>()("@yakjev/Store", {
           const history = yield* Effect.forEach(rows, (row) =>
             Schema.decodeUnknownEffect(HistoryJson)(row.entry),
           );
-          return { graph, history };
+          const positions = yield* layoutRows;
+          return { graph, history, layout: { positions } };
         }),
       )
       .pipe(Effect.mapError((cause) => new StorageError({ cause })));
@@ -261,6 +300,8 @@ export class Store extends Context.Service<Store>()("@yakjev/Store", {
       findRequest,
       execute,
       exportGraph,
+      layout,
+      saveLayout,
       check: read.pipe(Effect.asVoid),
     };
   }).pipe(Effect.mapError((cause) => new StorageError({ cause }))),

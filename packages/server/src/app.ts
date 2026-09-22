@@ -1,5 +1,5 @@
 import { BunServices } from "@effect/platform-bun";
-import { Health, Id, Revision } from "@yakjev/protocol";
+import { Health, Id, LayoutSave, Revision } from "@yakjev/protocol";
 import { Effect, Layer, Schema, Stream } from "effect";
 import {
   HttpRouter,
@@ -131,11 +131,22 @@ export function createApp(
             return json(yield* evaluations.preview(yield* bodyJson));
           if (url.pathname === "/api/evaluations" && request.method === "POST")
             return json(yield* evaluations.evaluate(actor, yield* bodyJson));
+          if (url.pathname === "/api/layout" && request.method === "PUT") {
+            const body = yield* bodyJson.pipe(
+              Effect.flatMap(
+                Schema.decodeUnknownEffect(LayoutSave, {
+                  onExcessProperty: "error",
+                }),
+              ),
+            );
+            return json(yield* store.saveLayout(body.positions));
+          }
           if (request.method !== "GET")
             return json(
               { error: "Invalid", message: "Method not allowed" },
               405,
             );
+          if (url.pathname === "/api/layout") return json(yield* store.layout);
           if (url.pathname === "/api/graph") return json(yield* store.read);
           if (url.pathname === "/api/jev/calls")
             return json(yield* evaluations.calls);

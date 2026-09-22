@@ -169,6 +169,23 @@ export const Graph = Schema.Struct({
 });
 export type Graph = typeof Graph.Type;
 
+// Where nodes sit on the owner's canvas. Display state, not a claim: saved
+// outside the journal, so moving a node creates no revision or undo step.
+export const LAYOUT_BATCH_MAX = 2000;
+export const LayoutPoint = Schema.Struct({
+  id: Id,
+  x: Schema.Finite,
+  y: Schema.Finite,
+});
+export type LayoutPoint = typeof LayoutPoint.Type;
+export const LayoutSave = Schema.Struct({
+  positions: Schema.Array(LayoutPoint).check(
+    Schema.isMaxLength(LAYOUT_BATCH_MAX),
+  ),
+});
+export const Layout = Schema.Struct({ positions: Schema.Array(LayoutPoint) });
+export type Layout = typeof Layout.Type;
+
 export const Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("capture"),
