@@ -144,8 +144,8 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         y: graph.current.getNodeAttribute(id, "y") as number,
       }));
       const bounds = layoutBounds(points);
-      const padX = Math.max(120, (bounds.x[1] - bounds.x[0]) * 0.45);
-      const padY = Math.max(120, (bounds.y[1] - bounds.y[0]) * 0.45);
+      const padX = Math.max(120, (bounds.x[1] - bounds.x[0]) * 0.2);
+      const padY = Math.max(120, (bounds.y[1] - bounds.y[0]) * 0.2);
       sigma.setCustomBBox({
         x: [bounds.x[0] - padX, bounds.x[1] + padX],
         y: [bounds.y[0] - padY, bounds.y[1] + padY],
@@ -158,7 +158,8 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
 
     function layoutUnit() {
       const sigma = renderer.current;
-      return sigma ? graphUnitsPerPixel(sigma) : 1;
+      if (!sigma) return 1;
+      return Math.min(1.5, graphUnitsPerPixel(sigma));
     }
 
     useImperativeHandle(ref, () => ({
@@ -306,22 +307,6 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           },
         });
         renderer.current = sigma;
-        fit(0);
-        const fitted = graphUnitsPerPixel(sigma);
-        if (fitted > 1.05) {
-          positions.current = rememberLayout(
-            new Map(),
-            latest.current.data,
-            fitted,
-          );
-          syncGraph(
-            graph.current,
-            latest.current.data,
-            positions.current,
-            blendedColors(latest.current.data, latest.current.paint),
-          );
-          fit(0);
-        }
         fit();
         let frame = 0;
         sigma.getCamera().on("updated", () => {
