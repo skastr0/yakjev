@@ -236,7 +236,12 @@ export class Store extends Context.Service<Store>()("@yakjev/Store", {
               ...receipt,
               command: request.command,
             };
-            yield* sql`UPDATE graph_state SET revision = ${after.revision}, graph = ${JSON.stringify(after)} WHERE singleton = 1`;
+            // The stored document must decode on every read. Check the exact
+            // bytes before commit: a state that cannot round-trip the schema
+            // fails this command instead of wedging every later read.
+            const afterJson = JSON.stringify(after);
+            yield* Schema.decodeUnknownEffect(GraphJson)(afterJson);
+            yield* sql`UPDATE graph_state SET revision = ${after.revision}, graph = ${afterJson} WHERE singleton = 1`;
             yield* sql`INSERT INTO graph_history (revision, actor_id, request_id, request, receipt, entry, before_graph)
           VALUES (${receipt.revision}, ${actor.id}, ${receipt.requestId}, ${encoded}, ${JSON.stringify(receipt)}, ${JSON.stringify(entry)}, ${JSON.stringify(before)})`;
             return { receipt, replayed: false } satisfies CommandResult;
