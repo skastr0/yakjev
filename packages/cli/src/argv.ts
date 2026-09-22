@@ -1,0 +1,47 @@
+type ParsedOption = {
+  readonly name: string;
+  readonly value: string | undefined;
+};
+
+export type ParsedCliArguments = {
+  readonly positionals: readonly string[];
+  readonly optionNames: readonly string[];
+  readonly missingValueOptions: readonly string[];
+  readonly first: (name: string) => string | undefined;
+  readonly has: (name: string) => boolean;
+};
+
+export const parseCliArguments = (
+  argv: readonly string[],
+  valueOptionNames: ReadonlySet<string>,
+): ParsedCliArguments => {
+  const options: ParsedOption[] = [];
+  const positionals: string[] = [];
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index]!;
+    if (valueOptionNames.has(token)) {
+      const value = argv[index + 1];
+      options.push({ name: token, value });
+      if (value !== undefined) index += 1;
+      continue;
+    }
+    if (token !== "-" && token.startsWith("-")) {
+      options.push({ name: token, value: undefined });
+      continue;
+    }
+    positionals.push(token);
+  }
+
+  return {
+    positionals,
+    optionNames: options.map((option) => option.name),
+    missingValueOptions: options.flatMap((option) =>
+      valueOptionNames.has(option.name) && option.value === undefined
+        ? [option.name]
+        : [],
+    ),
+    first: (name) => options.find((option) => option.name === name)?.value,
+    has: (name) => options.some((option) => option.name === name),
+  };
+};

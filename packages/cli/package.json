@@ -1,0 +1,22 @@
+{
+  "name": "@yakjev/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "yakjev": "bin/yakjev.js"
+  },
+  "exports": {
+    ".": "./src/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run ./src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@yakjev/protocol": "workspace:*",
+    "effect": "4.0.0-rc.117"
+  }
+}
