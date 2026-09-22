@@ -5,7 +5,7 @@ import {
   type Graph,
   type Node,
 } from "@yakjev/protocol";
-import { placeGraph, type Point } from "./layout";
+import { placeGraph, rememberLayout, type Point } from "./layout";
 
 const provenance = {
   actor: { id: "synthetic", channel: "browser" as const },
@@ -101,7 +101,9 @@ describe("placeGraph", () => {
     const related = placeGraph(
       snapshot([node("a"), node("b")], [edge("ab", "a", "b", "related_to")]),
     );
-    expect(between(requires, "a", "b")).toBeLessThan(between(related, "a", "b"));
+    expect(between(requires, "a", "b")).toBeLessThan(
+      between(related, "a", "b"),
+    );
   });
   test("in a requires chain a-b-c, distance(a,c) exceeds distance(a,b)", () => {
     const placed = placeGraph(
@@ -110,7 +112,9 @@ describe("placeGraph", () => {
         [edge("ab", "a", "b"), edge("bc", "b", "c")],
       ),
     );
-    expect(between(placed, "a", "c")).toBeGreaterThan(between(placed, "a", "b"));
+    expect(between(placed, "a", "c")).toBeGreaterThan(
+      between(placed, "a", "b"),
+    );
   });
   test("coordinates are always finite", () => {
     const graph = snapshot(
@@ -157,5 +161,21 @@ describe("placeGraph", () => {
     expect(between(hinted, "a", "b")).toBeGreaterThan(
       between(related, "a", "b"),
     );
+  });
+  test("adding a node keeps every node that was already placed", () => {
+    const first = placeGraph(
+      snapshot([node("a"), node("b")], [edge("ab", "a", "b")]),
+    );
+    const next = rememberLayout(
+      first,
+      snapshot(
+        [node("a"), node("b"), node("c")],
+        [edge("ab", "a", "b"), edge("bc", "b", "c")],
+      ),
+    );
+    expect(next.get("a")).toEqual(first.get("a"));
+    expect(next.get("b")).toEqual(first.get("b"));
+    expect(between(next, "c", "b")).toBeGreaterThan(40);
+    expect(between(next, "c", "a")).toBeGreaterThan(40);
   });
 });

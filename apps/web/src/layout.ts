@@ -139,3 +139,59 @@ export function placeGraph(graph: Graph): Map<string, Point> {
   }
   return placed;
 }
+
+// A newcomer sits near the nodes it already touches. Existing coordinates stay
+// put: recomputing the whole map on every capture is what throws the canvas.
+export function placeNewcomer(
+  id: string,
+  neighbors: readonly Point[],
+  fallback: readonly Point[] = [],
+): Point {
+  const anchors = neighbors.length > 0 ? neighbors : fallback;
+  let hash = 2166136261;
+  for (const char of id)
+    hash = Math.imul(hash ^ char.charCodeAt(0), 16777619) >>> 0;
+  const angle = ((hash % 360) * Math.PI) / 180;
+  const distance = 180;
+  if (anchors.length === 0)
+    return { x: Math.cos(angle) * distance, y: Math.sin(angle) * distance };
+  let x = 0;
+  let y = 0;
+  for (const point of anchors) {
+    x += point.x;
+    y += point.y;
+  }
+  x /= anchors.length;
+  y /= anchors.length;
+  return {
+    x: x + Math.cos(angle) * distance,
+    y: y + Math.sin(angle) * distance,
+  };
+}
+
+export function rememberLayout(
+  previous: ReadonlyMap<string, Point>,
+  graph: Graph,
+): Map<string, Point> {
+  if (previous.size === 0 && graph.nodes.length > 0) return placeGraph(graph);
+  const next = new Map(previous);
+  for (const node of graph.nodes) {
+    if (next.has(node.id)) continue;
+    const neighbors: Point[] = [];
+    const consider = (other: string) => {
+      const point = next.get(other);
+      if (point) neighbors.push(point);
+    };
+    for (const edge of graph.edges) {
+      if (edge.source === node.id) consider(edge.target);
+      if (edge.target === node.id) consider(edge.source);
+    }
+    for (const suggestion of graph.suggestions) {
+      if (suggestion.status !== "pending") continue;
+      if (suggestion.source === node.id) consider(suggestion.target);
+      if (suggestion.target === node.id) consider(suggestion.source);
+    }
+    next.set(node.id, placeNewcomer(node.id, neighbors, [...next.values()]));
+  }
+  return next;
+}
