@@ -208,6 +208,60 @@ async function selectByLabel(label: string, value: string): Promise<boolean> {
 
 type CanvasDiff = { pixels: number; fraction: number };
 
+/**
+ * Count rendered node discs from canvas pixels. Nodes are drawn in one colour, so
+ * overlapping discs merge into larger blobs: a collapsed layout shows fewer,
+ * bigger blobs even when the graph-space positions look reasonable.
+ */
+async function discCensus(
+  shot: string,
+): Promise<{ discs: number; merged: number }> {
+  const raw = await sh(
+    [
+      "magick",
+      shot,
+      "-fuzz",
+      "6%",
+      "-fill",
+      "white",
+      "-opaque",
+      "#396354",
+      "-fill",
+      "black",
+      "+opaque",
+      "white",
+      "-define",
+      "connected-components:verbose=true",
+      "-connected-components",
+      "8",
+      "null:",
+    ],
+    true,
+  );
+  let discs = 0;
+  let merged = 0;
+  for (const line of raw.split("\n")) {
+    const match = line.match(
+      /^\s*\d+:\s+(\d+)x(\d+)\+\d+\+\d+\s+[\d.,]+\s+(\d+)\s+srgb\(255,255,255\)/,
+    );
+    if (!match) continue;
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    const area = Number(match[3]);
+    if (area > 1500) merged += 1;
+    else if (
+      area >= 600 &&
+      area <= 1200 &&
+      Math.abs(width - height) <= 4 &&
+      width >= 28 &&
+      width <= 40
+    ) {
+      discs += 1;
+    }
+  }
+  return { discs, merged };
+}
+
 async function diffCanvas(before: string, after: string): Promise<CanvasDiff> {
   const metric = await sh(
     [
@@ -741,7 +795,8 @@ async function main(): Promise<void> {
           if (!positioned) await Bun.sleep(250);
         }
         await frame();
-        await screenshot("04b-arranged-six-nodes");
+        const arrangedShot = await screenshot("04b-arranged-six-nodes");
+        const census = await discCensus(arrangedShot);
         const graph = await readGraph(server);
         const cluster = graph.nodes.filter(
           (node) => node.id !== "local_jev_experiment" && node.position,
@@ -779,12 +834,14 @@ async function main(): Promise<void> {
             `the unconnected intention dominates the layout: isolated node is ${ratio.toFixed(1)}x the cluster radius (cluster radius ${radius.toFixed(1)}, isolated distance ${isolatedDistance.toFixed(1)})`,
           );
         }
-        // Honest limit: the arranged layout is a screen-space property. Sigma draws
-        // nodes and labels on the canvas, so neither DOM geometry nor the data
-        // ratio can judge overlap; this step records the numbers and the capture,
-        // and the layout itself is judged by inspecting the screenshot.
+        const expected = graph.nodes.length;
+        if (census.merged > 0 && census.discs < expected - 1) {
+          throw new Error(
+            `the arranged layout collapsed: ${census.discs} distinct discs and ${census.merged} merged blob(s) for ${expected} nodes`,
+          );
+        }
         return {
-          detail: `positions saved for all nodes; cluster radius ${radius.toFixed(1)}, isolated distance ${isolatedDistance.toFixed(1)} (${ratio.toFixed(1)}x); layout quality is a visual check, see the capture`,
+          detail: `positions saved for all nodes; ${census.discs} distinct discs, ${census.merged} merged blob(s) for ${expected} nodes; data ratio ${ratio.toFixed(1)}x`,
           artifacts: [join(artifacts, "04b-arranged-six-nodes.png")],
         };
       },

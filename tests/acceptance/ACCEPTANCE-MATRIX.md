@@ -108,8 +108,16 @@ Findings from earlier rounds, all closed and re-verified on this patch:
 | Edge label truncated to "Re" where it met a node label                     | closed | all "Requires" labels render in full; `polish-01-after-capture.png`   |
 | Six-node Arrange collapsed the connected cluster                           | closed | arranged layout spread with no overlap; `polish-04b-arranged.png`     |
 
-Axe still reports a small number of `incomplete` colour-contrast items, which are the `○` status
-glyphs and text drawn over the canvas. Axe cannot measure those; they are unverified, not failures.
+Axe still reports `incomplete` colour-contrast items, which are the `○` status glyphs, gradient fills,
+and text drawn over the canvas. Axe cannot measure those; they are unverified, not failures. The UI
+owner's selected-inspector run reports 40 passes, 0 violations, and the same class of unmeasurable
+items.
+
+The Arrange step measures rendered node discs from canvas pixels (nodes share one colour, so
+overlapping discs merge into larger blobs). It reports distinct discs and merged blobs against the
+node count and fails when both a merged blob and missing discs indicate a collapse. On the tree
+without the UI increments it reports 3 distinct discs and 1 merged blob for 8 nodes; with them it
+reports 8 distinct discs and 0 merged blobs.
 
 Narrow layout measured at 390x844: `scrollWidth` 390 = `innerWidth` 390, `graphBottom` = `inspectorTop`,
 and the node list scrolls clear of the sticky footer.
