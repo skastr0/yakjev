@@ -23,7 +23,7 @@ import {
   reframeEdgeId,
   suggestion,
 } from "./fixtures";
-import { startServer, type ServerHandle } from "./harness";
+import { acceptanceToken, startServer, type ServerHandle } from "./harness";
 
 let server: ServerHandle | undefined;
 
@@ -59,7 +59,8 @@ test("capture persists nodes, sources, asserted edges, and capture provenance", 
   const captured = graph.captures[0];
   expect(captured?.text).toContain("Synthetic capture");
   expect(captured?.sources[0]?.uri).toBe("synthetic://session/worked-example");
-  expect(captured?.provenance.actor.channel).toBe("mcp");
+  // Channel is entrypoint-derived: /api/* is the browser channel even for bearer.
+  expect(captured?.provenance.actor.channel).toBe("browser");
   expect(captured?.provenance.revision).toBe(revision);
 
   const node = nodeById(graph, "jev_in_projects");
@@ -313,6 +314,52 @@ test("undo restores the prior relation, and is rejected after an intervening edi
   expect(edgeById(graph, reframeEdgeId)?.relation).toBe(optionalRelationId);
 });
 
+test("node edits never mutate captures or sources, and archived nodes keep references", async () => {
+  const { server: active, revision } = await seeded();
+  const before = await readGraph(active);
+  const captureBefore = before.captures[0];
+  const sourcesBefore = nodeById(before, "jev_skill")?.sources;
+
+  const edited = await sendCommand(active, revision, {
+    type: "node.put",
+    node: {
+      id: "jev_skill",
+      title: "Jev skill",
+      description:
+        "Edited description that must not touch the capture or sources.",
+      project: "synthetic-project",
+      status: "archived",
+      sources: [
+        {
+          uri: "synthetic://document/jev-skill",
+          label: "Synthetic skill note",
+        },
+      ],
+    },
+  });
+
+  const after = await readGraph(active);
+  expect(after.captures[0]).toEqual(captureBefore);
+  const node = nodeById(after, "jev_skill");
+  expect(node?.description).toContain("Edited description");
+  expect(node?.status).toBe("archived");
+  expect(node?.sources).toEqual(sourcesBefore ?? []);
+  expect(node?.created.revision).toBeLessThan(edited.receipt.revision);
+  expect(node?.updated.revision).toBe(edited.receipt.revision);
+
+  // References from an archived node stay valid and readable.
+  const graph = await readGraph(active);
+  expect(edgeBetween(graph, "jev_skill", "skills_in_projects")).toBeDefined();
+  expect(edgeBetween(graph, "skills_in_projects", "jev_skill")).toBeDefined();
+  const neighborhoodOfArchived = await neighborhood(active, {
+    id: "jev_skill",
+    direction: "both",
+  });
+  expect(neighborhoodOfArchived.nodes.map((entry) => entry.id)).toContain(
+    "skills_in_projects",
+  );
+});
+
 test("suggestions stay distinct from assertions and are decided explicitly", async () => {
   const { server: active, revision } = await seeded();
   const recorded = await sendCommand(active, revision, {
@@ -408,6 +455,10 @@ test("graph reads and writes fail closed without a credential", async () => {
   expect(read.status).toBe(401);
   const body = (await read.json()) as { error?: string };
   expect(body.error).toBe("Unauthorized");
+  const wrongToken = await active.fetch("/api/graph", {
+    headers: { authorization: `Bearer ${acceptanceToken}-wrong` },
+  });
+  expect(wrongToken.status).toBe(401);
   const write = await active.fetchAnonymous("/api/commands", {
     method: "POST",
     headers: { "content-type": "application/json" },

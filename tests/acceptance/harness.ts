@@ -185,7 +185,11 @@ async function pickPort(): Promise<number> {
   return port;
 }
 
-function startChild(port: number, dataDir: string): Subprocess {
+function startChild(
+  port: number,
+  dataDir: string,
+  extraEnv: Record<string, string> = {},
+): Subprocess {
   return spawn({
     cmd: ["bun", serverEntry],
     cwd: repoRoot,
@@ -198,6 +202,7 @@ function startChild(port: number, dataDir: string): Subprocess {
       YAKJEV_LISTEN_PORT: String(port),
       YAKJEV_DATA_DIR: dataDir,
       YAKJEV_OWNER_TOKEN: acceptanceToken,
+      ...extraEnv,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -258,13 +263,18 @@ async function stopChild(child: Subprocess): Promise<void> {
 }
 
 export async function startServer(
-  options: { dataDir?: string; port?: number } = {},
+  options: {
+    dataDir?: string;
+    port?: number;
+    env?: Record<string, string>;
+  } = {},
 ): Promise<ServerHandle> {
   const dataDir =
     options.dataDir ?? (await mkdtemp(join(tmpdir(), "yakjev-acceptance-")));
   const port = options.port ?? (await pickPort());
   const origin = `http://127.0.0.1:${port}`;
-  let child = startChild(port, dataDir);
+  const extraEnv = options.env ?? {};
+  let child = startChild(port, dataDir, extraEnv);
   let stdout = collect(child.stdout as ReadableStream<Uint8Array>);
   let stderr = collect(child.stderr as ReadableStream<Uint8Array>);
   const logs = () => `${stdout()}\n${stderr()}`.trim();
@@ -345,7 +355,7 @@ export async function startServer(
     },
     async restart() {
       await stopChild(child);
-      child = startChild(port, dataDir);
+      child = startChild(port, dataDir, extraEnv);
       stdout = collect(child.stdout as ReadableStream<Uint8Array>);
       stderr = collect(child.stderr as ReadableStream<Uint8Array>);
       await waitForReady(origin, child, logs);
