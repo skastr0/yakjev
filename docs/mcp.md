@@ -2,6 +2,8 @@
 
 MCP calls server `Store`, `Auth.bearer`, and `discover`. It does not open SQLite. Amp uses tools only, over Streamable HTTP.
 
+Agents without MCP support (e.g. hermes) can use the yakjev CLI instead; see docs/cli.md — same bearer auth and capability surface over /api.
+
 ## Tools
 
 - `graph_read`: `graph`, `history`, `search`, `neighborhood`, `export`, `evaluation`, `node`, `edge`.
