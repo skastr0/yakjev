@@ -71,28 +71,48 @@ reframing changes the blocking interpretation while the original assertion stays
 restores it; a restart recovers revision, positions, and the correction; an evaluation without a
 provider key is recorded as unavailable with no suggestion.
 
-## Acceptance findings after the UI final patch
+## Acceptance status after the UI polish patch
 
-Verified on the integrated tree (published base + parent integration series + this suite + UI final,
-commit ee444406442dd9769517959872ad04e0a88c89d1). `bun run verify` exit 0: 41 package tests, 20
-acceptance tests (149 assertions), 13 deployment checks, 4 resume checks. Browser run: 12 pass,
-1 fail, 0 blocked.
+Verified on the integrated tree (published base + parent integration series + this suite + UI final
 
-| Finding                                                                                                                                                    | Status                         | Evidence                                                                                                      |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| Default camera after a live capture rendered the graph cramped with overlapping labels                                                                     | fixed                          | five of five labels legible at default after a live capture; canvas change 5.6%; `final-01-after-capture.png` |
-| Contrast below WCAG AA on `.tagline`, `.node-list > .hint`, `.sidebar-foot > p`                                                                            | fixed                          | axe no longer reports these                                                                                   |
-| `aria-label` on `div.graph-actions` without a role                                                                                                         | fixed                          | axe no longer reports `aria-prohibited-attr`                                                                  |
-| Contrast below AA on `.node-card small` (project and status meta)                                                                                          | open, minor, with the UI owner | 4.22 (#637565 on #efeee4) and 4.00 on the selected card background #e6e9df, 10px normal, needs 4.5:1          |
-| Arrange with six nodes (the five-node fixture plus an unconnected intention) leaves the isolated node as an outlier and collapses the five connected nodes | open, with the UI owner        | found by the parent on the final workbench; parent artifact `workbench-final-parent-arranged.png`             |
-| One edge label truncated to "Re" where it meets the `Multi-machine skills blocker` label                                                                   | open, cosmetic                 | `final-01-after-capture.png`                                                                                  |
+- UI polish, commit 6246a5ba35509668833681d2749ce76e6a70b2a8). `bun run verify` exit 0: 41 package
+  tests, 20 acceptance tests (149 assertions), 13 deployment checks, 4 resume checks.
 
-Not findings: axe reports 15 `incomplete` colour-contrast nodes (the `○` status glyphs and text over
-the canvas). Axe cannot measure those; they are unverified, not failures.
+Browser run: **14 steps, 14 pass, 0 fail, 0 blocked.**
 
-Narrow layout measured at 390x844: `scrollWidth` 390 = `innerWidth` 390 (no horizontal overflow),
-`graphBottom` 1059 = `inspectorTop` 1059 (inspector stacked with no gap), and the node list scrolls
-clear of the sticky footer (last card bottom 381.98 above footer top 387 after scrolling).
+| Check                                                               | Result                                                                                    |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Login surface, rejected token, no client-side token storage         | pass                                                                                      |
+| HTTP capture live without reload                                    | revision 1, receipt to rendered node 2949ms, canvas +5.1%                                 |
+| MCP capture live without reload                                     | revision 3, receipt to rendered node 791ms, canvas +2292px, channel `mcp`                 |
+| Canvas instance preserved across live updates                       | pass                                                                                      |
+| Edge rationale, original assertion, reframe reachable               | pass                                                                                      |
+| Suggestion as a proposal; explicit acceptance creates the assertion | pass                                                                                      |
+| Expand reports the blocking interpretation honestly                 | "Claimed prerequisites remain in this neighborhood; these claims are not verified facts." |
+| Arrange with an unconnected intention                               | positions saved for every node; layout inspected, spread with no overlap                  |
+| Reframe changes blocking, original assertion retained               | revision 7 -> 8                                                                           |
+| Undo restores the blocking interpretation                           | pass                                                                                      |
+| Restart recovers revision, positions, correction                    | pass                                                                                      |
+| Evaluation without a provider key                                   | recorded unavailable, no suggestion                                                       |
+| Narrow layout at 390px                                              | no horizontal overflow                                                                    |
+| Accessibility                                                       | axe-core 4.12.1: 0 violations                                                             |
+
+Findings from earlier rounds, all closed and re-verified on this patch:
+
+| Finding                                                                    | Status | Evidence                                                              |
+| -------------------------------------------------------------------------- | ------ | --------------------------------------------------------------------- |
+| Default camera rendered the graph cramped with overlapping labels          | closed | five of five labels legible at default; `polish-01-after-capture.png` |
+| Contrast below AA on `.tagline`, `.node-list > .hint`, `.sidebar-foot > p` | closed | axe reports 0 violations                                              |
+| Contrast below AA on `.node-card small` and other metadata text            | closed | axe reports 0 violations; metadata colour now #566853                 |
+| `aria-label` on `div.graph-actions` without a role                         | closed | axe no longer reports `aria-prohibited-attr`                          |
+| Edge label truncated to "Re" where it met a node label                     | closed | all "Requires" labels render in full; `polish-01-after-capture.png`   |
+| Six-node Arrange collapsed the connected cluster                           | closed | arranged layout spread with no overlap; `polish-04b-arranged.png`     |
+
+Axe still reports a small number of `incomplete` colour-contrast items, which are the `○` status
+glyphs and text drawn over the canvas. Axe cannot measure those; they are unverified, not failures.
+
+Narrow layout measured at 390x844: `scrollWidth` 390 = `innerWidth` 390, `graphBottom` = `inspectorTop`,
+and the node list scrolls clear of the sticky footer.
 
 ## Correction: the 401/403 observation was stale
 
