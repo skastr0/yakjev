@@ -20,7 +20,10 @@ export function useGraph() {
   const [lastEdit, setLastEdit] = useState<Receipt | null>(null);
   const [session, setSession] = useState(0);
   const current = useRef<Graph | null>(null);
-  const busy = useRef(false);
+  const queue = useRef<
+    Array<{ command: Command; resolve: (saved: boolean) => void }>
+  >([]);
+  const draining = useRef(false);
   const generation = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -102,45 +105,85 @@ export function useGraph() {
     };
   }, [session, refresh]);
 
-  const execute = useCallback(
-    async (command: Command, expectedRevision: number) => {
-      if (busy.current) {
-        setError(
-          "Not saved: another edit is still saving. Try again when it finishes.",
-        );
-        return false;
-      }
-      busy.current = true;
-      setPending(true);
-      setError("");
-      setNotice("");
-      try {
-        const result = await sendCommand(command, expectedRevision);
+  const saveError = (cause: unknown) =>
+    cause instanceof ApiFailure && cause.status === 409
+      ? `Not saved: the graph changed. Your draft is kept. Reload latest before trying again. ${cause.message}`
+      : cause instanceof ApiFailure && cause.status < 500
+        ? `Not saved: ${errorMessage(cause)}`
+        : `Save could not be confirmed. Check history before retrying: ${errorMessage(cause)}`;
+
+  // One send attempt: the revision is read from the live snapshot at send
+  // time, and undo always targets that revision. Each sendCommand call mints
+  // a fresh requestId, so the 409 retry below is never a replayed request.
+  const attempt = useCallback(
+    async (command: Command): Promise<boolean> => {
+      const wire = (revision: number): Command =>
+        command.type === "undo" ? { type: "undo", revision } : command;
+      const send = async (revision: number) => {
+        const result = await sendCommand(wire(revision), revision);
         setLastEdit(result.receipt);
-        setNotice(`Saved · revision ${result.receipt.revision}`);
         await refresh().catch((cause: unknown) =>
           setError(
             `Saved at revision ${result.receipt.revision}, but refreshing the view failed: ${errorMessage(cause)}`,
           ),
         );
         return true;
+      };
+      const revision = current.current?.revision ?? 0;
+      try {
+        return await send(revision);
       } catch (cause) {
-        setError(
-          cause instanceof ApiFailure && cause.status === 409
-            ? `Not saved: the graph changed. Your draft is kept. Reload latest before trying again. ${cause.message}`
-            : cause instanceof ApiFailure && cause.status < 500
-              ? `Not saved: ${errorMessage(cause)}`
-              : `Save could not be confirmed. Check history before retrying: ${errorMessage(cause)}`,
+        if (!(cause instanceof ApiFailure && cause.status === 409)) {
+          setError(saveError(cause));
+          return false;
+        }
+      }
+      // One conflict pass: reload the latest graph, then retry once against
+      // the revision just observed. A second failure surfaces for the caller.
+      const latest = await refresh().catch(() => null);
+      try {
+        return await send(
+          latest?.revision ?? current.current?.revision ?? revision,
         );
+      } catch (cause) {
+        setError(saveError(cause));
         if (cause instanceof ApiFailure && cause.status === 409)
           await refresh().catch(() => {});
         return false;
-      } finally {
-        busy.current = false;
-        setPending(false);
       }
     },
     [refresh],
+  );
+
+  const execute = useCallback(
+    (command: Command, _expectedRevision: number) =>
+      new Promise<boolean>((resolve) => {
+        queue.current.push({ command, resolve });
+        if (draining.current) return;
+        draining.current = true;
+        setPending(true);
+        void (async () => {
+          try {
+            // Re-check the queue after each drain pass and keep going until
+            // it is empty; only then release the drain.
+            for (;;) {
+              let next:
+                | { command: Command; resolve: (saved: boolean) => void }
+                | undefined;
+              while ((next = queue.current.shift())) {
+                setError("");
+                setNotice("");
+                next.resolve(await attempt(next.command));
+              }
+              if (queue.current.length === 0) break;
+            }
+          } finally {
+            draining.current = false;
+            setPending(false);
+          }
+        })();
+      }),
+    [attempt],
   );
 
   async function login(token: string) {
