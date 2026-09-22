@@ -3,9 +3,7 @@ import { resolve } from "node:path";
 import { createApp } from "./app";
 
 const root = resolve(import.meta.dir, "../../..");
-const port = Number(
-  process.env.PORT ?? process.env.YAKJEV_LISTEN_PORT ?? 3210,
-);
+const port = Number(process.env.PORT ?? process.env.YAKJEV_LISTEN_PORT ?? 3210);
 if (!Number.isInteger(port) || port < 1 || port > 65535)
   throw new Error("Invalid listen port");
 const listenHost = process.env.YAKJEV_LISTEN_HOST ?? "127.0.0.1";

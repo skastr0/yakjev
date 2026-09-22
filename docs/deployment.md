@@ -4,13 +4,13 @@ Public HTTPS on Railway. The owner token is the lock. There is no private networ
 
 Keep `YAKJEV_OWNER_TOKEN` only in Railway service secrets. Never put it in Vite, a `VITE_` name, or the page source.
 
-| Piece | Choice |
-| --- | --- |
-| Runtime | Bun, `packages/server/src/main.ts` |
-| Process | `deploy/entrypoint.sh` |
-| Ingress | Railway service domain → `PORT` |
-| Data | one volume at `/data` |
-| Auth | `Authorization: Bearer <YAKJEV_OWNER_TOKEN>` and the browser session cookie |
+| Piece   | Choice                                                                      |
+| ------- | --------------------------------------------------------------------------- |
+| Runtime | Bun, `packages/server/src/main.ts`                                          |
+| Process | `deploy/entrypoint.sh`                                                      |
+| Ingress | Railway service domain → `PORT`                                             |
+| Data    | one volume at `/data`                                                       |
+| Auth    | `Authorization: Bearer <YAKJEV_OWNER_TOKEN>` and the browser session cookie |
 
 ## Railway
 
@@ -19,13 +19,13 @@ Keep `YAKJEV_OWNER_TOKEN` only in Railway service secrets. Never put it in Vite,
 3. Generate a Railway service domain. Do not add a TCP proxy.
 4. Set service variables:
 
-| Name | Value |
-| --- | --- |
-| `YAKJEV_OWNER_TOKEN` | at least 32 random characters |
-| `YAKJEV_ORIGIN` | `https://<generated-domain>` if not inferred from `RAILWAY_PUBLIC_DOMAIN` |
-| `TYPESAFE_API_KEY` | server-side Jev calls; never a `VITE_` name |
-| `YAKJEV_DATA_DIR` | `/data/yakjev` |
-| `YAKJEV_LISTEN_HOST` | `0.0.0.0` |
+| Name                 | Value                                                                     |
+| -------------------- | ------------------------------------------------------------------------- |
+| `YAKJEV_OWNER_TOKEN` | at least 32 random characters                                             |
+| `YAKJEV_ORIGIN`      | `https://<generated-domain>` if not inferred from `RAILWAY_PUBLIC_DOMAIN` |
+| `TYPESAFE_API_KEY`   | server-side Jev calls; never a `VITE_` name                               |
+| `YAKJEV_DATA_DIR`    | `/data/yakjev`                                                            |
+| `YAKJEV_LISTEN_HOST` | `0.0.0.0`                                                                 |
 
 Do not set `YAKJEV_DEV_AUTH` in Railway. The image runs with `NODE_ENV=production`, and the server exits if that flag is set.
 
