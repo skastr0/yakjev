@@ -2,12 +2,16 @@
 
 ## Intent
 
-A persistent, editable graph of intentions and claimed dependencies. Preserve the user's understanding across sessions. Original captures, assertions, machine judgments, and user overrides are distinct; recurrence is not priority. Cycles are meaningful, not invalid input.
+A persistent, editable graph of intentions and claimed dependencies: an index over canonical sources, not another content store or a whole-life priority engine. Preserve the user's understanding across sessions. Original captures, assertions, machine judgments, and user overrides are distinct; recurrence is not priority. Cycles are meaningful, not invalid input.
+
+Read `docs/product-direction-entanglement-graph.md` before product work. It owns product scope and acceptance; `docs/architecture.md` maps that direction to implementation. Full documents remain in their canonical stores. Completing or pruning a graph node never authorizes deleting its sources.
 
 ## Stack and boundaries
 
-- Bun 1.3.14, strict TypeScript, Effect services and schemas, SQLite as the authoritative store, React/Vite for the client. Sigma.js/Graphology is the planned renderer, not implemented yet.
+- Settled stack: **Effect v4**, **Bun 1.4 or newer stable**, and **Sigma.js v4 beta** with Graphology; strict TypeScript, React/Vite, and SQLite as the authoritative graph store. Use current releases in these selected lines and pin exact versions. Effect v4 prereleases and Sigma v4 beta are deliberate choices, not reasons to fall back to older majors.
+- The scaffold's Effect v3 and Bun 1.3 pins are obsolete implementation debt, not competing architectural decisions. Migrate dependencies, code, setup/resume, CI, and the deployment image together before product implementation. Do not relitigate or downgrade the selected stack without an explicit user change of direction.
 - The server owns graph semantics and writes. Future HTTP and MCP surfaces share operations; neither owns a second database or rule engine.
+- Authorized Amp orbs must be able to use Yakjev as MCP clients, including from the owner's other projects. Tailnet connectivity and application authorization are separate requirements; access to Yakjev does not grant Railway deployment authority or access to unrelated tailnet services.
 - Use the checked-in TypeSafe skill when implementing Jev. Keep provider credentials server-side, judgments versioned, and edits reversible. Never treat confidence as permission.
 - Deployment is private Tailscale Serve HTTPS to a loopback app on Railway. Public source does not mean public user data. Read `docs/deployment.md` before deployment changes.
 

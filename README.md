@@ -4,9 +4,11 @@ A lasting map of intentions, dependencies, and the things that get in the way.
 
 **Status: scaffold, not a usable graph editor yet.** The repository contains a React web shell, a Bun/Effect server with SQLite health checks, CI, Amp orb setup, and a private Railway/Tailscale deployment baseline. Graph capture, Jev evaluation, and MCP editing are the next milestone.
 
-## Run locally
+**Settled stack: Effect v4, Bun 1.4 or newer stable, Sigma.js v4 beta.** The old scaffold pins have not been migrated yet; updating code, dependencies, setup, CI, and the deployment image is the first implementation task. Those pins are not an alternative stack decision. See [architecture](docs/architecture.md#settled-stack-migration-comes-first).
 
-Install [Bun 1.3.14](https://bun.com), then:
+## Run the current scaffold locally
+
+The current scaffold uses [Bun 1.3.14](https://bun.com). This is a reproduction note for the unmigrated code, not the target runtime:
 
 ```sh
 bun install --frozen-lockfile
@@ -47,7 +49,7 @@ Public code, private graph. The planned deployment joins **your** tailnet and ex
 
 ## Product direction
 
-See [architecture and first milestone](docs/architecture.md). Contributions should keep graph facts, user policy, inference, and layout separate; avoid expanding into integrations before the graph loop works.
+Read [the entanglement graph product direction](docs/product-direction-entanglement-graph.md) for scope and acceptance, then [architecture and first milestone](docs/architecture.md). Yakjev indexes intentions and relationships over canonical sources; it does not mirror full documents or own whole-life prioritization. Authorized agents, including Amp orbs from other projects, must use the same graph as the visual interface. Keep graph facts, user policy, inference, and layout separate.
 
 ## License
 
