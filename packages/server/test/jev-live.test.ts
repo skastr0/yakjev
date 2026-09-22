@@ -558,3 +558,48 @@ test("an only-preview judges just the nodes it names", async () => {
   const log = (await call("/api/jev/calls")).body;
   expect(log.calls[0]).toMatchObject({ purpose: "drag", candidates: 1 });
 });
+
+test("workspace context is journaled and reaches every Jev call", async () => {
+  const seen: Request[] = [];
+  const { call, capture, command, graph, settle } = await fixture(
+    controlled(
+      judge(
+        {
+          "Book flights": {
+            related: 2,
+            match: true,
+            relation: "focus_to_candidate_1",
+          },
+        },
+        seen,
+      ),
+    ),
+  );
+  await capture("flights", "Book flights", false);
+  await command({
+    type: "jev.context.set",
+    text: "  I live in Lisbon; trips mean work travel.  ",
+  });
+  expect((await graph()).jevContext).toMatchObject({
+    text: "I live in Lisbon; trips mean work travel.",
+    updated: { revision: 2 },
+  });
+  await call("/api/jev/preview", { draft: { title: "Plan the trip" } });
+  await capture("trip", "Plan the trip");
+  await settle((g) => g.edges.length === 1);
+  const contexts = seen.map(
+    (request) =>
+      (request.state as { workspaceContext: unknown }).workspaceContext,
+  );
+  expect(contexts).toEqual([
+    "I live in Lisbon; trips mean work travel.",
+    "I live in Lisbon; trips mean work travel.",
+  ]);
+  await command({ type: "jev.context.set", text: "   " });
+  expect((await graph()).jevContext).toBeNull();
+  const current = await graph();
+  await command({ type: "undo", revision: current.revision });
+  expect((await graph()).jevContext?.text).toBe(
+    "I live in Lisbon; trips mean work travel.",
+  );
+});

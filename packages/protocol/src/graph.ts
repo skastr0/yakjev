@@ -146,6 +146,17 @@ export const Evaluation = Schema.Struct({
   status: Schema.Literals(["succeeded", "failed", "unavailable"]),
   provenance: Provenance,
 });
+// Long-term facts and preferences Jev reads on every call. Absent on graphs
+// saved before it existed; treat absent like null.
+export const JEV_CONTEXT_MAX = 4000;
+export const JevContext = Schema.Struct({
+  text: Schema.String.check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(JEV_CONTEXT_MAX),
+  ),
+  updated: Provenance,
+});
+export type JevContext = typeof JevContext.Type;
 export const Graph = Schema.Struct({
   revision: Revision,
   nodes: Schema.Array(Node),
@@ -154,6 +165,7 @@ export const Graph = Schema.Struct({
   suggestions: Schema.Array(Suggestion),
   evaluations: Schema.Array(Evaluation),
   taxonomy: Taxonomy,
+  jevContext: Schema.optionalKey(Schema.NullOr(JevContext)),
 });
 export type Graph = typeof Graph.Type;
 
@@ -232,6 +244,11 @@ export const Command = Schema.Union([
     id: Id,
     decision: Schema.Literals(["accept", "reject"]),
     rationale: ShortText,
+  }),
+  // Replace the workspace context Jev reads; blank text clears it.
+  Schema.Struct({
+    type: Schema.Literal("jev.context.set"),
+    text: Schema.String.check(Schema.isMaxLength(JEV_CONTEXT_MAX)),
   }),
   Schema.Struct({ type: Schema.Literal("undo"), revision: Revision }),
 ]);

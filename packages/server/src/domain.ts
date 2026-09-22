@@ -87,6 +87,7 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
   let suggestions = [...graph.suggestions];
   let evaluations = [...graph.evaluations];
   let taxonomy = graph.taxonomy;
+  let jevContext = graph.jevContext ?? null;
   const relationExists = (id: string) =>
     taxonomy.relations.some((relation) => relation.id === id);
   const nodeExists = (id: string) => nodes.some((node) => node.id === id);
@@ -533,6 +534,11 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
       );
       break;
     }
+    case "jev.context.set": {
+      const text = command.text.trim();
+      jevContext = text ? { text, updated: provenance } : null;
+      break;
+    }
     default: {
       // New Command members must name their semantics here, never no-op.
       const exhaustive: never = command;
@@ -547,6 +553,7 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
     suggestions,
     evaluations,
     taxonomy,
+    jevContext,
   });
 });
 

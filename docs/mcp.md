@@ -28,6 +28,7 @@ Every mutation is one `graph_command` call: `{ requestId, expectedRevision, comm
 - `edge.remove`: resolve by `id` or by a directed `source` + `target` pair; a mismatched `id`/pair combination and a reverse-only pair fail. `suppress` records the pair as rejected for machine inference: it defaults on for corrected or disputed edges, whose suppression would otherwise die with the edge, and off for plain assertions. Suppression blocks `suggestion.record` in both directions but never an explicit `edge.put`, and it is permanent. Pending suggestions for exactly that pair become superseded.
 - `layout.set`: `{ id, x, y, pinned }` positions, or `{ id, clear: true }` to un-place a node.
 - `taxonomy.replace`: replace relation definitions; referenced types cannot be dropped.
+- `jev.context.set`: `{ text }` (max 4000) replaces the workspace context: long-term facts and preferences Jev reads on every call. Blank text clears it. Stored as `graph.jevContext`.
 - `suggestion.record` / `suggestion.decide`: record a machine proposal; explicitly accept or reject it.
 - `evaluation.record`: record an evaluation result and its batched suggestions.
 - `undo`: reverts only the current revision, so an intervening edit cannot be erased. To remove earlier work, use the remove commands. Undo restores entities as new edits, which supersedes pending suggestions.
