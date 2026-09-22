@@ -142,7 +142,6 @@ export function createApp(
           if (url.pathname === "/api/export")
             return json(yield* store.exportGraph);
           if (url.pathname === "/api/discovery") {
-            const graph = yield* store.read;
             const request = {
               query: url.searchParams.get("query") ?? "",
               ...(url.searchParams.has("focusNodeId")
@@ -156,13 +155,7 @@ export function createApp(
                   }
                 : {}),
             };
-            return json(
-              yield* Effect.try({
-                try: () => discover(graph, request),
-                catch: () =>
-                  new DiscoveryError({ message: "Invalid discovery request" }),
-              }),
-            );
+            return json(yield* evaluations.shortlist(request));
           }
           if (url.pathname.startsWith("/api/evaluations/")) {
             const segment = yield* Effect.try(() =>

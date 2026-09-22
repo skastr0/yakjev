@@ -23,8 +23,40 @@ import type {
   Node,
   SuggestionInput,
 } from "../../protocol/src/graph.ts";
+import {
+  lexicalRank,
+  lexicalRetrieval,
+  Retrieval,
+  RetrievalLive,
+  type RankedCandidate,
+  type RankInput,
+  type RetrievalService,
+} from "./retrieval.ts";
 
-export const CANDIDATE_LIMIT = 24;
+// TypeSafe Jev 1.13 limits per request: 64k tokens in total, 32k for state
+// plus the longest question, 128 KB payload. They are ceilings, never
+// targets: unrelated state lowers Jev's accuracy, so the packer judges only
+// candidates with evidence and stops at a soft quality target.
+export const JEV_LIMITS = {
+  totalTokens: 64_000,
+  stateAndLongestQuestionTokens: 32_000,
+  payloadBytes: 128_000,
+} as const;
+const HEADROOM = 0.85;
+// About what 24 fully questioned candidates cost; more only when an id is
+// explicit. A query without a focus asks two short questions per candidate,
+// so the same target judges more of them.
+export const TARGET_INPUT_TOKENS = 26_000;
+// Small graphs are judged whole, so zero-overlap paraphrases still surface.
+export const FULL_COVERAGE = 24;
+// Explicit ids a request may force in.
+export const MAX_EXPLICIT = 96;
+// Calibrated on live jev-1.13.0 calls (2026-09-22): 18 candidates, 19,020
+// real input tokens; 8 candidates, 8,836. Output ran ~54 per question.
+const CHARS_PER_TOKEN = 3.9;
+const OUTPUT_TOKENS_PER_QUESTION = 60;
+export const estimateTokens = (text: string) =>
+  Math.ceil(text.length / CHARS_PER_TOKEN);
 export const PROMPT_VERSION = "yakjev-discovery-4";
 // Connect policy: Jev connects a pair when it restates the same intention,
 // when it matches and names a relation with relatedness >= CONNECT_RELATEDNESS,
@@ -54,7 +86,7 @@ export const DiscoveryRequest = Schema.Struct({
   ),
   focusNodeId: Schema.optionalKey(Schema.String),
   includeNodeIds: Schema.optionalKey(
-    Schema.Array(Schema.String).check(Schema.isMaxLength(CANDIDATE_LIMIT)),
+    Schema.Array(Schema.String).check(Schema.isMaxLength(MAX_EXPLICIT)),
   ),
   only: Schema.optionalKey(Schema.Boolean),
 });
@@ -64,19 +96,17 @@ export class DiscoveryError extends Data.TaggedError("DiscoveryError")<{
   readonly message: string;
 }> {}
 
-export interface Candidate {
-  readonly nodeId: string;
-  readonly lexicalScore: number;
-  readonly sharedTokens: readonly string[];
-  readonly via: "explicit" | "lexical" | "graph" | "coverage";
-}
+export type Candidate = RankedCandidate;
+const compareId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 export interface Coverage {
   readonly eligible: number;
   readonly considered: number;
   readonly limit: number;
   readonly truncated: boolean;
-  readonly strategy: "full" | "lexical_graph_shortlist";
+  // full: every eligible node is judged. budget: the packer chose a subset.
+  readonly strategy: "full" | "budget";
+  readonly estimatedTokens: number;
 }
 
 export interface DiscoveryResult {
@@ -85,35 +115,30 @@ export interface DiscoveryResult {
   readonly coverage: Coverage;
 }
 
-const tokens = (value: string) =>
-  new Set(
-    value
-      .normalize("NFKC")
-      .toLowerCase()
-      .match(/[\p{L}\p{N}]+/gu) ?? [],
-  );
-const nodeText = (node: Node) => `${node.title} ${node.description}`;
-const compareId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+interface Validated {
+  readonly request: DiscoveryRequest;
+  // The existing focus node, or a draft standing in for one.
+  readonly focus: Node | undefined;
+  readonly focusNode: Node | undefined;
+  readonly eligible: number;
+  readonly rank: RankInput;
+}
 
-/** Pure bounded retrieval. A zero lexical score is not a semantic no-match. */
-export function discover(
-  graph: Graph,
-  input: DiscoveryRequest,
-): DiscoveryResult {
+function validate(graph: Graph, input: unknown): Validated {
   const parsed = Schema.decodeUnknownExit(DiscoveryRequest)(input);
   if (parsed._tag === "Failure")
     throw new DiscoveryError({ message: "Invalid discovery request" });
   const request = parsed.value;
-  const focus = graph.nodes.find((node) => node.id === request.focusNodeId);
-  if (request.focusNodeId !== undefined && !focus)
+  const focusNode = graph.nodes.find((node) => node.id === request.focusNodeId);
+  if (request.focusNodeId !== undefined && !focusNode)
     throw new DiscoveryError({ message: "Focus node does not exist" });
   const draftText = request.draft
     ? `${request.draft.title} ${request.draft.description ?? ""}`.trim()
     : "";
-  if (!focus && !draftText && !request.query.trim())
+  if (!focusNode && !draftText && !request.query.trim())
     throw new DiscoveryError({ message: "Search query is required" });
   const eligible = graph.nodes.filter(
-    (node) => node.status !== "archived" && node.id !== focus?.id,
+    (node) => node.status !== "archived" && node.id !== focusNode?.id,
   );
   const explicit = new Set(request.includeNodeIds ?? []);
   for (const id of explicit) {
@@ -122,66 +147,159 @@ export function discover(
         message: `Explicit candidate ${id} is unavailable`,
       });
   }
-  const queryTokens = tokens(
-    focus ? nodeText(focus) : draftText || request.query,
-  );
-  const neighbours = new Set<string>();
-  for (const edge of graph.edges) {
-    if (edge.source === focus?.id) neighbours.add(edge.target);
-    if (edge.target === focus?.id) neighbours.add(edge.source);
-  }
-  const candidates: Candidate[] = eligible.map((node) => {
-    const candidateTokens = tokens(nodeText(node));
-    const sharedTokens = [...queryTokens]
-      .filter((token) => candidateTokens.has(token))
-      .sort(compareId);
-    const union = queryTokens.size + candidateTokens.size - sharedTokens.length;
-    return {
-      nodeId: node.id,
-      lexicalScore: union === 0 ? 0 : sharedTokens.length / union,
-      sharedTokens,
-      via: explicit.has(node.id)
-        ? "explicit"
-        : neighbours.has(node.id)
-          ? "graph"
-          : sharedTokens.length
-            ? "lexical"
-            : "coverage",
-    };
-  });
-  if (request.only && explicit.size > 0)
-    return {
-      basedOnRevision: graph.revision,
-      candidates: candidates.filter((candidate) =>
-        explicit.has(candidate.nodeId),
-      ),
-      coverage: {
-        eligible: eligible.length,
-        considered: explicit.size,
-        limit: CANDIDATE_LIMIT,
-        truncated: eligible.length > explicit.size,
-        strategy: "lexical_graph_shortlist",
-      },
-    };
-  candidates.sort(
-    (a, b) =>
-      Number(explicit.has(b.nodeId)) - Number(explicit.has(a.nodeId)) ||
-      Number(neighbours.has(b.nodeId)) - Number(neighbours.has(a.nodeId)) ||
-      b.lexicalScore - a.lexicalScore ||
-      compareId(a.nodeId, b.nodeId),
-  );
+  const focus: Node | undefined =
+    focusNode ??
+    (request.draft && request.draft.title.trim()
+      ? {
+          id: DRAFT_ID,
+          title: request.draft.title.trim(),
+          description: request.draft.description ?? "",
+          project: "",
+          status: "idea",
+          sources: [],
+          position: null,
+          created: {
+            actor: { id: "draft", channel: "browser" },
+            at: "",
+            revision: graph.revision,
+          },
+          updated: {
+            actor: { id: "draft", channel: "browser" },
+            at: "",
+            revision: graph.revision,
+          },
+        }
+      : undefined);
   return {
-    basedOnRevision: graph.revision,
-    candidates: candidates.slice(0, CANDIDATE_LIMIT),
-    coverage: {
-      eligible: eligible.length,
-      considered: Math.min(eligible.length, CANDIDATE_LIMIT),
-      limit: CANDIDATE_LIMIT,
-      truncated: eligible.length > CANDIDATE_LIMIT,
-      strategy:
-        eligible.length > CANDIDATE_LIMIT ? "lexical_graph_shortlist" : "full",
+    request,
+    focus,
+    focusNode,
+    eligible: eligible.length,
+    rank: {
+      graph,
+      focus: {
+        id: focusNode?.id ?? null,
+        text: focusNode
+          ? `${focusNode.title} ${focusNode.description}`
+          : draftText || request.query,
+      },
+      explicit,
+      only: request.only === true && explicit.size > 0,
     },
   };
+}
+
+// The largest best-first prefix of the ranking that is worth Jev's attention
+// and fits the soft target: every node when the graph is small; with semantic
+// ranking, only candidates with evidence. Explicit ids always stay.
+function pack(
+  graph: Graph,
+  valid: Validated,
+  ranked: readonly RankedCandidate[],
+): DiscoveryResult {
+  const byId = new Map(graph.nodes.map((node) => [node.id, node]));
+  const eligible = ranked.filter((candidate) => {
+    const node = byId.get(candidate.nodeId);
+    return (
+      node && node.status !== "archived" && node.id !== valid.focusNode?.id
+    );
+  });
+  // Without semantic scores, word-overlap-free nodes are the only way a
+  // paraphrase reaches Jev, so they fill the budget. Once the ranker scores
+  // meaning, a node with no evidence of any kind is left out.
+  const semantic = ranked.some((candidate) => candidate.semanticScore !== null);
+  const pool =
+    semantic && valid.eligible > FULL_COVERAGE && !valid.rank.only
+      ? eligible.filter(
+          (candidate) =>
+            candidate.via !== "coverage" ||
+            valid.rank.explicit.has(candidate.nodeId),
+        )
+      : eligible;
+  const explicitCount = pool.filter((candidate) =>
+    valid.rank.explicit.has(candidate.nodeId),
+  ).length;
+  const measure = (n: number) => {
+    const payload = buildPayload(
+      graph,
+      valid.request,
+      valid.focus,
+      pool.slice(0, n).map((candidate) => byId.get(candidate.nodeId)!),
+    );
+    const state = estimateTokens(JSON.stringify(payload.state));
+    const questions = questionTexts(payload.decisions).map(estimateTokens);
+    const input = state + questions.reduce((sum, value) => sum + value, 0);
+    return {
+      input,
+      state,
+      longest: Math.max(0, ...questions),
+      output: questions.length * OUTPUT_TOKENS_PER_QUESTION,
+    };
+  };
+  const fits = (n: number, soft: boolean) => {
+    const cost = measure(n);
+    return (
+      cost.state + cost.longest <=
+        JEV_LIMITS.stateAndLongestQuestionTokens * HEADROOM &&
+      cost.input + cost.output <= JEV_LIMITS.totalTokens * HEADROOM &&
+      (!soft || cost.input <= TARGET_INPUT_TOKENS)
+    );
+  };
+  if (explicitCount > 0 && !fits(explicitCount, false))
+    throw new DiscoveryError({
+      message:
+        "The requested candidates exceed Jev's request budget; no evidence was silently dropped.",
+    });
+  let low = explicitCount;
+  let high = pool.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (fits(middle, true)) low = middle;
+    else high = middle - 1;
+  }
+  const candidates = pool.slice(0, low);
+  return {
+    basedOnRevision: graph.revision,
+    candidates,
+    coverage: {
+      eligible: valid.eligible,
+      considered: candidates.length,
+      limit: candidates.length,
+      truncated: candidates.length < valid.eligible,
+      strategy: candidates.length === valid.eligible ? "full" : "budget",
+      estimatedTokens: measure(candidates.length).input,
+    },
+  };
+}
+
+/** The exact candidates Jev judges: ranking from `retrieval`, then packing. */
+export const shortlist = (
+  graph: Graph,
+  input: unknown,
+  retrieval: RetrievalService,
+): Effect.Effect<DiscoveryResult, DiscoveryError> =>
+  Effect.gen(function* () {
+    const valid = yield* Effect.try({
+      try: () => validate(graph, input),
+      catch: (cause) =>
+        cause instanceof DiscoveryError
+          ? cause
+          : new DiscoveryError({ message: "Invalid discovery request" }),
+    });
+    const ranked = yield* retrieval.rank(valid.rank);
+    return yield* Effect.try({
+      try: () => pack(graph, valid, ranked),
+      catch: (cause) =>
+        cause instanceof DiscoveryError
+          ? cause
+          : new DiscoveryError({ message: "Invalid graph or discovery input" }),
+    });
+  });
+
+/** shortlist() with lexical ranking, synchronously. Throws DiscoveryError. */
+export function discover(graph: Graph, input: unknown): DiscoveryResult {
+  const valid = validate(graph, input);
+  return pack(graph, valid, lexicalRank(valid.rank));
 }
 
 export interface Judgment {
@@ -259,35 +377,12 @@ export function ownerCorrections(graph: Graph) {
     .map(({ revision: _, ...rest }) => rest);
 }
 
-function prepare(graph: Graph, request: DiscoveryRequest) {
-  const retrieval = discover(graph, request);
-  const focusNode = graph.nodes.find((node) => node.id === request.focusNodeId);
-  const focus: Node | undefined =
-    focusNode ??
-    (request.draft && request.draft.title.trim()
-      ? {
-          id: DRAFT_ID,
-          title: request.draft.title.trim(),
-          description: request.draft.description ?? "",
-          project: "",
-          status: "idea",
-          sources: [],
-          position: null,
-          created: {
-            actor: { id: "draft", channel: "browser" },
-            at: "",
-            revision: graph.revision,
-          },
-          updated: {
-            actor: { id: "draft", channel: "browser" },
-            at: "",
-            revision: graph.revision,
-          },
-        }
-      : undefined);
-  const candidateNodes = retrieval.candidates.map(
-    (candidate) => graph.nodes.find((node) => node.id === candidate.nodeId)!,
-  );
+function buildPayload(
+  graph: Graph,
+  request: DiscoveryRequest,
+  focus: Node | undefined,
+  candidateNodes: readonly Node[],
+) {
   const selectedIds = new Set([
     ...candidateNodes.map((node) => node.id),
     ...(focus ? [focus.id] : []),
@@ -385,6 +480,25 @@ function prepare(graph: Graph, request: DiscoveryRequest) {
         },
       });
   }
+  return { state, decisions, labels, assertions, captures };
+}
+
+function questionTexts(decisions: Record<string, Decision.Any>) {
+  return Object.values(decisions).map((decision) => JSON.stringify(decision));
+}
+
+function prepare(graph: Graph, raw: unknown, retrieval: DiscoveryResult) {
+  const valid = validate(graph, raw);
+  const { request, focus, focusNode } = valid;
+  const candidateNodes = retrieval.candidates.map(
+    (candidate) => graph.nodes.find((node) => node.id === candidate.nodeId)!,
+  );
+  const { state, decisions, labels, assertions, captures } = buildPayload(
+    graph,
+    request,
+    focus,
+    candidateNodes,
+  );
   const input = Schema.decodeUnknownSync(Schema.Json)({
     basedOnRevision: graph.revision,
     promptVersion: PROMPT_VERSION,
@@ -488,6 +602,11 @@ export class Discovery extends Context.Service<
       graph: Graph,
       request: DiscoveryRequest,
     ) => Effect.Effect<Evaluation, DiscoveryError>;
+    // The exact candidates evaluate() would judge, without calling Jev.
+    readonly shortlist: (
+      graph: Graph,
+      request: unknown,
+    ) => Effect.Effect<DiscoveryResult, DiscoveryError>;
   }
 >()("yakjev/Discovery") {}
 
@@ -495,14 +614,16 @@ export class Discovery extends Context.Service<
 export const makeDiscovery = Effect.fn("Discovery.make")(function* (
   client: TypeSafeClient.Service | null,
   timeoutMs = 20_000,
+  retrieval: RetrievalService = lexicalRetrieval,
 ) {
   const permits = yield* Semaphore.make(4);
   const evaluate = Effect.fn("Discovery.evaluate")(function* (
     graph: Graph,
     request: DiscoveryRequest,
   ) {
+    const listed = yield* shortlist(graph, request, retrieval);
     const prepared = yield* Effect.try({
-      try: () => prepare(graph, request),
+      try: () => prepare(graph, request, listed),
       catch: (cause) =>
         cause instanceof DiscoveryError
           ? cause
@@ -829,7 +950,10 @@ export const makeDiscovery = Effect.fn("Discovery.make")(function* (
       failure: null,
     };
   });
-  return Discovery.of({ evaluate });
+  return Discovery.of({
+    evaluate,
+    shortlist: (graph, request) => shortlist(graph, request, retrieval),
+  });
 });
 
 export const DiscoveryLive = Layer.effect(
@@ -839,6 +963,7 @@ export const DiscoveryLive = Layer.effect(
     const client = Option.isSome(key)
       ? yield* TypeSafeClient.make({ apiKey: key.value })
       : null;
-    return yield* makeDiscovery(client);
+    const retrieval = yield* Retrieval;
+    return yield* makeDiscovery(client, 20_000, retrieval);
   }),
-).pipe(Layer.provide(FetchHttpClient.layer));
+).pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(RetrievalLive));

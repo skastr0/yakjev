@@ -7,6 +7,7 @@ import {
   Discovery,
   DiscoveryLive,
   discover,
+  TARGET_INPUT_TOKENS,
   evaluationIsCurrent,
   isProtectedPair,
   makeDiscovery,
@@ -95,13 +96,14 @@ const evaluate = (
 describe("discovery candidates", () => {
   test("full coverage includes synonyms with zero overlap, independently of lexical trap rank", () => {
     const result = discover(synonymGraph, { query: "multi machine skills" });
-    expect(result.coverage).toEqual({
+    expect(result.coverage).toMatchObject({
       eligible: 2,
       considered: 2,
-      limit: 24,
+      limit: 2,
       truncated: false,
       strategy: "full",
     });
+    expect(result.coverage.estimatedTokens).toBeGreaterThan(0);
     expect(result.candidates.map((candidate) => candidate.nodeId)).toEqual([
       "word-trap",
       "synonym",
@@ -110,28 +112,32 @@ describe("discovery candidates", () => {
     expect(result.candidates[1]?.sharedTokens).toEqual([]);
   });
 
-  test("24 boundary, explicit references, graph neighbours, and invalid requests", () => {
+  test("small graphs are judged whole; larger ones keep evidence and explicit ids", () => {
     const nodes = Array.from({ length: 25 }, (_, i) =>
       node(
         `n${i.toString().padStart(2, "0")}`,
         i < 23 ? "matching query" : "different",
       ),
     );
-    expect(
-      discover(graph(nodes.slice(0, 24)), { query: "matching" }).coverage
-        .truncated,
-    ).toBe(false);
+    // 24 eligible: every node is judged, even without shared words.
+    const small = discover(graph(nodes.slice(0, 24)), { query: "matching" });
+    expect(small.coverage).toMatchObject({
+      truncated: false,
+      strategy: "full",
+    });
+    expect(small.candidates).toHaveLength(24);
     const result = discover(graph(nodes), {
       query: "matching",
       includeNodeIds: ["n24"],
     });
-    expect(result.coverage.truncated).toBe(true);
-    expect(result.candidates).toHaveLength(24);
     expect(result.candidates[0]?.nodeId).toBe("n24");
+    // Lexical-only ranking keeps overlap-free nodes: they are the only way a
+    // paraphrase reaches Jev. Explicit ids still lead.
+    expect(result.candidates.map((c) => c.nodeId)).toContain("n23");
     expect(() =>
       discover(graph(nodes), {
         query: "matching",
-        includeNodeIds: nodes.map((n) => n.id),
+        includeNodeIds: Array.from({ length: 97 }, (_, i) => `x${i}`),
       }),
     ).toThrow("Invalid discovery request");
     expect(() =>
@@ -483,5 +489,42 @@ describe("native Effect TypeSafe workflow with controlled provider responses", (
     );
     expect(peak).toBe(4);
     expect(active).toBe(0);
+  });
+});
+
+describe("token-budget packing", () => {
+  test("a large graph is packed to the soft target, best first, explicit kept", () => {
+    const nodes = Array.from({ length: 300 }, (_, i) =>
+      node(
+        `m${i.toString().padStart(3, "0")}`,
+        `Deploy release candidate ${i}`,
+        "Ship the build to production after the checks pass.",
+      ),
+    );
+    const g = graph([node("focus", "Deploy the release"), ...nodes]);
+    const packed = discover(g, {
+      query: "",
+      focusNodeId: "focus",
+      includeNodeIds: ["m299"],
+    });
+    expect(packed.candidates[0]?.nodeId).toBe("m299");
+    expect(packed.candidates.length).toBeGreaterThan(8);
+    expect(packed.candidates.length).toBeLessThan(300);
+    expect(packed.coverage).toMatchObject({
+      eligible: 300,
+      truncated: true,
+      strategy: "budget",
+    });
+    expect(packed.coverage.estimatedTokens).toBeLessThanOrEqual(
+      TARGET_INPUT_TOKENS,
+    );
+    // Only-requests judge what they name, however large the graph.
+    const only = discover(g, {
+      query: "",
+      focusNodeId: "focus",
+      includeNodeIds: ["m001", "m002"],
+      only: true,
+    });
+    expect(only.candidates.map((c) => c.nodeId)).toEqual(["m001", "m002"]);
   });
 });

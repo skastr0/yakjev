@@ -93,7 +93,7 @@ export const YakjevToolkit = Toolkit.make(
     .annotate(Tool.Strict, true),
   Tool.make("graph_discover", {
     description:
-      "Bounded lexical and neighborhood candidate retrieval. Same function as discover(). Not semantic search. Does not write.",
+      "The exact candidates Jev would judge for this request: ranked retrieval (lexical, graph neighbours, semantic when configured) packed to Jev's token budget. Same as GET /api/discovery. Does not call Jev and does not write.",
     parameters: DiscoveryRequest,
     success: Schema.Unknown,
     failure: ToolFailure,
@@ -267,10 +267,9 @@ export const toolkitLayer = (actor: () => Effect.Effect<Actor, ToolFailure>) =>
                 invalid("MCP tools require an mcp actor."),
               );
             }
-            return yield* runDiscover(
-              yield* store.read.pipe(Effect.mapError(mapFailure)),
-              input,
-            );
+            return yield* evaluations
+              .shortlist(input)
+              .pipe(Effect.mapError(mapFailure));
           }),
         graph_preview: (input) =>
           Effect.gen(function* () {

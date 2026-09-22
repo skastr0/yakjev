@@ -235,7 +235,7 @@ export const Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("evaluation.record"),
     evaluation: EvaluationInput,
-    suggestions: Schema.Array(SuggestionInput).check(Schema.isMaxLength(24)),
+    suggestions: Schema.Array(SuggestionInput).check(Schema.isMaxLength(96)),
     // true: each suggestion becomes an accepted Jev edge in the same revision.
     connect: Schema.optionalKey(Schema.Boolean),
   }),
@@ -278,7 +278,7 @@ export const EvaluationRequest = Schema.Struct({
   query: Schema.String.check(Schema.isMaxLength(2000)),
   focusNodeId: Schema.optionalKey(Id),
   includeNodeIds: Schema.optionalKey(
-    Schema.Array(Id).check(Schema.isMaxLength(24)),
+    Schema.Array(Id).check(Schema.isMaxLength(96)),
   ),
   connect: Schema.optionalKey(Schema.Boolean),
 });
@@ -294,7 +294,7 @@ export const PreviewRequest = Schema.Struct({
   ),
   focusNodeId: Schema.optionalKey(Id),
   includeNodeIds: Schema.optionalKey(
-    Schema.Array(Id).check(Schema.isMaxLength(24)),
+    Schema.Array(Id).check(Schema.isMaxLength(96)),
   ),
   // Judge only includeNodeIds, not a full 24-candidate shortlist.
   only: Schema.optionalKey(Schema.Boolean),

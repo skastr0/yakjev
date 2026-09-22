@@ -361,7 +361,21 @@ export class Evaluations extends Context.Service<Evaluations>()(
         }
         return result;
       });
-      return { evaluate, preview, command, connectNode, calls };
+      // The exact candidates a Jev call would judge right now.
+      const shortlist = Effect.fn("Evaluations.shortlist")(function* (
+        input: unknown,
+      ) {
+        const graph = yield* store.read;
+        return yield* discovery
+          .shortlist(graph, input)
+          .pipe(
+            Effect.mapError(
+              (error: DiscoveryError) =>
+                new DomainError({ code: "Invalid", message: error.message }),
+            ),
+          );
+      });
+      return { evaluate, preview, command, connectNode, calls, shortlist };
     }),
   },
 ) {

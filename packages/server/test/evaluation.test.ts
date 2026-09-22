@@ -122,6 +122,7 @@ test("concurrent duplicate evaluation invokes provider once; raw audit is never 
     Effect.gen(function* () {
       const base = yield* makeDiscovery(null);
       return Discovery.of({
+        shortlist: base.shortlist,
         evaluate: (graph, request) =>
           Effect.gen(function* () {
             calls++;
@@ -189,6 +190,7 @@ test("graph edit while provider is evaluating rejects stale result atomically", 
     Effect.gen(function* () {
       const base = yield* makeDiscovery(null);
       return Discovery.of({
+        shortlist: base.shortlist,
         evaluate: (graph, request) =>
           Effect.gen(function* () {
             yield* Effect.sync(started);
