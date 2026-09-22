@@ -126,7 +126,9 @@ export function createApp(
           if (url.pathname === "/api/session" && request.method === "GET")
             return json({ actor });
           if (url.pathname === "/api/commands" && request.method === "POST")
-            return json(yield* store.execute(actor, yield* bodyJson));
+            return json(yield* evaluations.command(actor, yield* bodyJson));
+          if (url.pathname === "/api/jev/preview" && request.method === "POST")
+            return json(yield* evaluations.preview(yield* bodyJson));
           if (url.pathname === "/api/evaluations" && request.method === "POST")
             return json(yield* evaluations.evaluate(actor, yield* bodyJson));
           if (request.method !== "GET")

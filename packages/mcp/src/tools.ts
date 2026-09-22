@@ -79,7 +79,7 @@ export const YakjevToolkit = Toolkit.make(
     .annotate(Tool.Strict, true),
   Tool.make("graph_command", {
     description:
-      "Apply one graph command through the same envelope as POST /api/commands. Commands: capture (nodes+edges+capture atomically), capture.remove, node.put (set status archived to retire a node without deleting it), node.remove (ids[]; incident edges refuse unless removeEdges:true cascades), edge.put (new pairs only), edge.reframe (correct an existing edge), edge.remove (id or directed source+target; suppress keeps the pair rejected for machine inference and defaults on for corrected or disputed edges), layout.set (positions or {id,clear:true}), taxonomy.replace, suggestion.record, suggestion.decide, evaluation.record, undo (reverts only the current revision; to remove earlier work use the remove commands). Exact requestId replay returns the original receipt; a changed payload for that requestId conflicts. expectedRevision must equal the current graph revision — read it first. Do not send actor, user, role, or channel.",
+      "Apply one graph command through the same envelope as POST /api/commands. Commands: capture (nodes+edges+capture atomically; Jev then connects each new node to related intentions in the background unless autoConnect:false), capture.remove, node.put (set status archived to retire a node without deleting it), node.remove (ids[]; incident edges refuse unless removeEdges:true cascades), edge.put (new pairs only), edge.reframe (correct an existing edge), edge.remove (id or directed source+target; suppress keeps the pair rejected for machine inference and defaults on for corrected or disputed edges), layout.set (positions or {id,clear:true}), taxonomy.replace, suggestion.record, suggestion.decide, evaluation.record, undo (reverts only the current revision; to remove earlier work use the remove commands). Exact requestId replay returns the original receipt; a changed payload for that requestId conflicts. expectedRevision must equal the current graph revision — read it first. Do not send actor, user, role, or channel.",
     parameters: CommandRequest,
     success: CommandResult,
     failure: ToolFailure,
@@ -239,8 +239,8 @@ export const toolkitLayer = (actor: () => Effect.Effect<Actor, ToolFailure>) =>
                 invalid("MCP tools require an mcp actor."),
               );
             }
-            return yield* store
-              .execute(who, input)
+            return yield* evaluations
+              .command(who, input)
               .pipe(Effect.mapError(mapFailure));
           }),
         graph_discover: (input) =>

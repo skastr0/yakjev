@@ -52,7 +52,11 @@ function response(
     } else if (question.type === "choice") {
       const choice = String(
         choices[key] ??
-          (key.startsWith("match") ? "match" : "focus_to_candidate_1"),
+          (key.startsWith("match")
+            ? "match"
+            : key.startsWith("same")
+              ? "different"
+              : "focus_to_candidate_1"),
       );
       answers[key] = {
         type: "choice",
@@ -167,6 +171,7 @@ describe("native Effect TypeSafe workflow with controlled provider responses", (
               "relatedness_0",
               "match_0",
               "relation_0",
+              "same_0",
             ]);
             expect(JSON.stringify(input.state)).not.toContain('"position"');
             expect(JSON.stringify(input.state)).not.toContain('"updated"');
@@ -344,7 +349,7 @@ describe("native Effect TypeSafe workflow with controlled provider responses", (
     expect(first.suggestions[0]?.evaluationId).toBe(first.id);
     expect(first.suggestions[0]?.inputHash).toBe(first.inputHash);
     expect(first.suggestions[0]?.evidence).toContain(
-      "Context supplied: existing unverified assertion use-jev-jev-skill (requires). Its presence is not independent confirmation.",
+      "Context supplied: existing assertion use-jev-jev-skill (requires).",
     );
   });
 
@@ -449,7 +454,7 @@ describe("native Effect TypeSafe workflow with controlled provider responses", (
     }
   });
 
-  test("provider concurrency is bounded to two requests", async () => {
+  test("provider concurrency is bounded to four requests", async () => {
     let active = 0;
     let peak = 0;
     await Effect.runPromise(
@@ -476,7 +481,7 @@ describe("native Effect TypeSafe workflow with controlled provider responses", (
         );
       }),
     );
-    expect(peak).toBe(2);
+    expect(peak).toBe(4);
     expect(active).toBe(0);
   });
 });

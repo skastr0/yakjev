@@ -1,12 +1,19 @@
 import {
   type Actor,
+  CommandRequest,
   EvaluationRequest,
   EvaluationResult,
+  type Preview,
+  PreviewRequest,
 } from "@yakjev/protocol";
+import { createHash } from "node:crypto";
 import { Context, Effect, Layer, Schema, Semaphore } from "effect";
-import { Discovery } from "./discovery";
+import { Discovery, DiscoveryError, PROMPT_VERSION } from "./discovery";
 import { DomainError } from "./domain";
 import { Store } from "./store";
+
+// Jev acts as its own actor when it connects new nodes in the background.
+export const JEV_ACTOR: Actor = { id: "jev", channel: "system" };
 
 // Both HTTP and MCP use this operation, including its durable retry behavior.
 export class Evaluations extends Context.Service<Evaluations>()(
@@ -16,6 +23,7 @@ export class Evaluations extends Context.Service<Evaluations>()(
       const store = yield* Store;
       const discovery = yield* Discovery;
       const permit = yield* Semaphore.make(1);
+      const scope = yield* Effect.scope;
       const evaluate = Effect.fn("Evaluations.evaluate")(function* (
         actor: Actor,
         input: unknown,
@@ -97,7 +105,10 @@ export class Evaluations extends Context.Service<Evaluations>()(
                   taxonomyVersion: evaluated.taxonomyVersion,
                   result,
                 },
-                suggestions: evaluated.suggestions,
+                suggestions: request.connect
+                  ? evaluated.connections
+                  : evaluated.suggestions,
+                ...(request.connect ? { connect: true } : {}),
               },
             });
             return {
@@ -107,7 +118,147 @@ export class Evaluations extends Context.Service<Evaluations>()(
           }),
         );
       });
-      return { evaluate };
+
+      // Ephemeral: judged against the live graph, never journaled.
+      const preview = Effect.fn("Evaluations.preview")(function* (
+        input: unknown,
+      ) {
+        const request = yield* Schema.decodeUnknownEffect(PreviewRequest)(
+          input,
+          { onExcessProperty: "error" },
+        ).pipe(
+          Effect.mapError(
+            () =>
+              new DomainError({
+                code: "Invalid",
+                message: "Invalid preview request",
+              }),
+          ),
+        );
+        const graph = yield* store.read;
+        const empty: Preview = {
+          basedOnRevision: graph.revision,
+          taxonomyVersion: graph.taxonomy.version,
+          status: "succeeded",
+          model: null,
+          promptVersion: PROMPT_VERSION,
+          elapsedMs: 0,
+          judgments: [],
+        };
+        if (!request.focusNodeId && !request.draft?.title.trim()) return empty;
+        const evaluated = yield* discovery
+          .evaluate(graph, {
+            query: "",
+            ...(request.draft ? { draft: request.draft } : {}),
+            ...(request.focusNodeId
+              ? { focusNodeId: request.focusNodeId }
+              : {}),
+            ...(request.includeNodeIds
+              ? { includeNodeIds: request.includeNodeIds }
+              : {}),
+          })
+          .pipe(
+            Effect.mapError(
+              (error: DiscoveryError) =>
+                new DomainError({ code: "Invalid", message: error.message }),
+            ),
+          );
+        return {
+          ...empty,
+          status: evaluated.status,
+          model: evaluated.resolvedModel,
+          elapsedMs: evaluated.elapsedMs,
+          judgments: evaluated.judgments,
+        } satisfies Preview;
+      });
+
+      // Connect one node: judge it against the graph and commit Jev's chosen
+      // edges with the evaluation audit in one revision. Failures and empty
+      // results leave no trace; a concurrent edit retries against the new graph.
+      const connectNode = (nodeId: string, requestId: string) =>
+        permit
+          .withPermits(1)(
+            Effect.gen(function* () {
+              const graph = yield* store.read;
+              const node = graph.nodes.find((item) => item.id === nodeId);
+              if (!node || node.status === "archived") return 0;
+              const request = {
+                requestId,
+                expectedRevision: graph.revision,
+                query: node.title,
+                focusNodeId: nodeId,
+                connect: true,
+              };
+              const evaluated = yield* discovery.evaluate(graph, request);
+              if (
+                evaluated.status !== "succeeded" ||
+                evaluated.connections.length === 0
+              )
+                return 0;
+              const result = yield* Schema.decodeUnknownEffect(Schema.Json)({
+                ...evaluated,
+                request,
+              });
+              yield* store.execute(JEV_ACTOR, {
+                requestId,
+                expectedRevision: graph.revision,
+                command: {
+                  type: "evaluation.record",
+                  evaluation: {
+                    id: evaluated.id,
+                    inputHash: evaluated.inputHash,
+                    basedOnRevision: evaluated.basedOnRevision,
+                    taxonomyVersion: evaluated.taxonomyVersion,
+                    result,
+                  },
+                  suggestions: evaluated.connections,
+                  connect: true,
+                },
+              });
+              return evaluated.connections.length;
+            }),
+          )
+          .pipe(
+            Effect.retry({
+              times: 3,
+              while: (error) =>
+                error instanceof DomainError && error.code === "Conflict",
+            }),
+            Effect.catch((error) =>
+              Effect.logWarning("Jev auto-connect skipped", nodeId, error).pipe(
+                Effect.as(0),
+              ),
+            ),
+          );
+
+      // Every write path goes through here so captures from the browser, MCP,
+      // and the CLI all get connected. The HTTP response does not wait for Jev.
+      const command = Effect.fn("Evaluations.command")(function* (
+        actor: Actor,
+        input: unknown,
+      ) {
+        const result = yield* store.execute(actor, input);
+        const request = Schema.decodeUnknownOption(CommandRequest)(input);
+        if (
+          !result.replayed &&
+          request._tag === "Some" &&
+          request.value.command.type === "capture" &&
+          request.value.command.autoConnect !== false
+        ) {
+          const nodes = request.value.command.nodes.map((node) => node.id);
+          yield* Effect.forEach(
+            nodes,
+            (id) =>
+              connectNode(
+                id,
+                `connect-${createHash("sha256").update(`${result.receipt.revision}:${id}`).digest("hex").slice(0, 32)}`,
+              ),
+            { discard: true },
+          ).pipe(Effect.forkIn(scope));
+        }
+        return result;
+      });
+      return { evaluate, preview, command, connectNode };
     }),
   },
 ) {

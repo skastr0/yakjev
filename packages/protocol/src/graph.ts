@@ -78,6 +78,7 @@ export const EdgeInput = Schema.Struct({
   rationale: ShortText,
   origin: Schema.optionalKey(JevOrigin),
 });
+export type EdgeInput = typeof EdgeInput.Type;
 export const Assertion = Schema.Struct({
   relation: Id,
   rationale: ShortText,

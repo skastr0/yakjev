@@ -3,6 +3,7 @@ import {
   type Command,
   type Edge,
   type Graph,
+  type JevOrigin,
   type Neighborhood,
   type Node,
   type Provenance,
@@ -95,6 +96,7 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
     target: string;
     relation: string;
     rationale: string;
+    origin?: JevOrigin;
   }) {
     if (!nodeExists(input.source) || !nodeExists(input.target))
       return yield* fail("NotFound", "Both edge endpoints must exist");
@@ -111,8 +113,10 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
         "Conflict",
         "An assertion for this directed pair already exists; explicitly reframe it",
       );
+    const { origin, ...claim } = input;
     edges.push({
-      ...input,
+      ...claim,
+      ...(origin ? { origin } : {}),
       state: "asserted",
       assertion: {
         relation: input.relation,
@@ -142,6 +146,8 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
         (suggestion) => pair(suggestion) && suggestion.status === "rejected",
       );
     if (alreadySuppressed) return;
+    // An owner removing Jev's own connection is a correction Jev learns from.
+    const jevRemoved = via === "edge.remove" && removed.origin !== undefined;
     let id = `suppressed-r${provenance.revision}${key === "" ? "" : `-${key}`}`;
     // Persisted suggestions decode through the 128-char Id schema on every
     // read: hash long edge ids rather than wedge the store. A bare slice
@@ -158,8 +164,8 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
         `Suppressed when edge ${removed.id} (${removed.source}→${removed.target}) was removed`,
       confidence: null,
       evidence: [],
-      model: "actor-suppression",
-      promptVersion: via,
+      model: jevRemoved ? removed.origin!.model : "actor-suppression",
+      promptVersion: jevRemoved ? "jev-edge-removed" : via,
       taxonomyVersion: taxonomy.version,
       basedOnRevision: graph.revision,
       status: "rejected",
@@ -318,7 +324,9 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
       // carried it is gone; plain assertions stay removable without a trace.
       const suppress =
         command.suppress ??
-        (removed.correction !== null || removed.state === "disputed");
+        (removed.correction !== null ||
+          removed.state === "disputed" ||
+          removed.origin !== undefined);
       if (suppress) suppressPair(removed, "edge.remove", "", command.rationale);
       break;
     }
@@ -423,6 +431,41 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
             "Batch suggestion must identify its evaluation",
           );
         yield* recordSuggestion(suggestion);
+        if (command.connect !== true) continue;
+        // Jev connects directly: the record is accepted and the edge exists in
+        // this same revision. A pair that gained an edge meanwhile is skipped.
+        suggestions = suggestions.map((item) =>
+          item.id === suggestion.id
+            ? { ...item, status: "accepted" as const, decision: provenance }
+            : item,
+        );
+        if (
+          edges.some(
+            (edge) =>
+              (edge.source === suggestion.source &&
+                edge.target === suggestion.target) ||
+              (edge.source === suggestion.target &&
+                edge.target === suggestion.source),
+          )
+        )
+          continue;
+        yield* addEdge({
+          id: suggestion.id,
+          source: suggestion.source,
+          target: suggestion.target,
+          relation: suggestion.relation,
+          rationale: suggestion.rationale,
+          origin: {
+            model: suggestion.model,
+            promptVersion: suggestion.promptVersion,
+            confidence: suggestion.confidence,
+          },
+        });
+        edges = edges.map((edge) =>
+          edge.id === suggestion.id
+            ? { ...edge, suggestionId: suggestion.id }
+            : edge,
+        );
       }
       break;
     }
