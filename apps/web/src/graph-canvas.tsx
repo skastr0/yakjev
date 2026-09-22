@@ -20,6 +20,7 @@ import { rememberLayout } from "./layout";
 import { blendedColors } from "./blend";
 import {
   DRAG_REACH,
+  freshJevEdges,
   idsWithinReach,
   layoutBounds,
   settlePoint,
@@ -56,6 +57,14 @@ type Props = {
 };
 
 const DRAG_COMMIT_PX = 8;
+const ARRIVE_MS = 900;
+
+type Arrival = {
+  id: string;
+  source: string;
+  target: string;
+  born: number;
+};
 
 export const GraphCanvas = forwardRef<CanvasHandle, Props>(
   function GraphCanvas(props, ref) {
@@ -97,6 +106,11 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     };
     const [renderError, setRenderError] = useState("");
     const [overlayTick, setOverlayTick] = useState(0);
+    const [arrivals, setArrivals] = useState<Arrival[]>([]);
+    const seenEdges = useRef<Set<string> | null>(null);
+    const seenRevision = useRef(0);
+    const arrivingRef = useRef(false);
+    arrivingRef.current = arrivals.length > 0;
     const reduceMotion = useRef(
       matchMedia("(prefers-reduced-motion: reduce)").matches,
     );
@@ -260,7 +274,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           cancelAnimationFrame(frame);
           frame = requestAnimationFrame(() => {
             latest.current.onView();
-            if (latest.current.ghosts.length)
+            if (latest.current.ghosts.length || arrivingRef.current)
               setOverlayTick((value) => value + 1);
           });
         });
@@ -476,7 +490,11 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         const dimmed =
           props.matches !== null &&
           (!props.matches.has(source) || !props.matches.has(target));
-        const opacity = dimmed ? 0.2 : 1;
+        const opacity = arrivals.some((arrival) => arrival.id === id)
+          ? 0
+          : dimmed
+            ? 0.2
+            : 1;
         if (graph.current.getEdgeAttribute(id, "opacity") !== opacity)
           graph.current.setEdgeAttribute(id, "opacity", opacity);
         sigma.setEdgeState(id, {
@@ -491,7 +509,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             (!props.hidden.has(source) || !props.hidden.has(target)),
         });
       });
-    }, [props.selection, props.hidden, props.matches, props.data]);
+    }, [props.selection, props.hidden, props.matches, props.data, arrivals]);
 
     const seenIds = useRef("");
 
@@ -537,12 +555,59 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
       const grew = ids !== seenIds.current;
       seenIds.current = ids;
       renderer.current?.refresh();
+      const edgeIds = new Set(props.data.edges.map((edge) => edge.id));
+      if (seenEdges.current === null) {
+        seenEdges.current = edgeIds;
+        seenRevision.current = props.data.revision;
+      } else if (!reduceMotion.current) {
+        const fresh = freshJevEdges(
+          props.data.edges,
+          seenEdges.current,
+          seenRevision.current,
+        );
+        seenEdges.current = edgeIds;
+        seenRevision.current = props.data.revision;
+        if (fresh.length) {
+          const born = performance.now();
+          for (const edge of fresh) {
+            if (graph.current.hasEdge(edge.id))
+              graph.current.setEdgeAttribute(edge.id, "opacity", 0);
+          }
+          setArrivals((current) =>
+            [
+              ...current.filter((arrival) => edgeIds.has(arrival.id)),
+              ...fresh.map((edge) => ({
+                id: edge.id,
+                source: edge.source,
+                target: edge.target,
+                born,
+              })),
+            ].slice(-24),
+          );
+        }
+      } else {
+        seenEdges.current = edgeIds;
+        seenRevision.current = props.data.revision;
+      }
       if (
         renderer.current &&
         ((wasEmpty && graph.current.order > 0) || (grew && !clusterFillsView()))
       )
         fit();
     }, [props.data, props.paint]);
+
+    useEffect(() => {
+      if (!arrivals.length) return;
+      const oldest = Math.min(...arrivals.map((arrival) => arrival.born));
+      const wait = Math.max(0, ARRIVE_MS - (performance.now() - oldest));
+      const timer = window.setTimeout(() => {
+        const now = performance.now();
+        setArrivals((current) =>
+          current.filter((arrival) => now - arrival.born < ARRIVE_MS),
+        );
+      }, wait);
+      return () => window.clearTimeout(timer);
+    }, [arrivals]);
 
     const announcement = dragAnnouncement(props.ghosts);
 
@@ -648,6 +713,30 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
                     </text>
                   </g>
                 )}
+              </g>
+            );
+          })}
+          {arrivals.map((arrival) => {
+            const from = overlayPoint(arrival.source);
+            const to = overlayPoint(arrival.target);
+            if (!from || !to) return null;
+            const d = `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
+            return (
+              <g key={arrival.id} className="jev-arrive">
+                <path className="jev-arrive-glow" d={d} pathLength={1} />
+                <path className="jev-arrive-draw" d={d} pathLength={1} />
+                <circle
+                  className="jev-arrive-ring"
+                  cx={from.x}
+                  cy={from.y}
+                  r={14}
+                />
+                <circle
+                  className="jev-arrive-ring"
+                  cx={to.x}
+                  cy={to.y}
+                  r={14}
+                />
               </g>
             );
           })}
@@ -835,7 +924,44 @@ const GHOST_CSS = `
   0%, 100% { box-shadow: 0 0 0 0 #54794c00; }
   50% { box-shadow: 0 0 0 4px #54794c55; }
 }
+.jev-arrive-draw, .jev-arrive-glow {
+  fill: none;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+}
+.jev-arrive-draw {
+  stroke: #284e40;
+  stroke-width: 2.2;
+  animation: jev-draw 900ms ease-out forwards;
+}
+.jev-arrive-glow {
+  stroke: #e35b00;
+  stroke-width: 9;
+  opacity: 0;
+  animation: jev-glow 900ms ease-out forwards;
+}
+.jev-arrive-ring {
+  fill: none;
+  stroke: #e35b00;
+  stroke-width: 2;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: jev-pulse 900ms ease-out forwards;
+}
+@keyframes jev-draw { to { stroke-dashoffset: 0; } }
+@keyframes jev-glow {
+  0% { opacity: 0.2; stroke-dashoffset: 1; }
+  45% { opacity: 0.55; }
+  100% { opacity: 0; stroke-dashoffset: 0; }
+}
+@keyframes jev-pulse {
+  0% { opacity: 0.75; transform: scale(0.7); }
+  100% { opacity: 0; transform: scale(2.6); }
+}
 @media (prefers-reduced-motion: reduce) {
   .status-dot[data-jev="on"] { animation: none; box-shadow: 0 0 0 3px #54794c55; }
+  .jev-arrive-draw { stroke-dashoffset: 0; animation: none; }
+  .jev-arrive-glow, .jev-arrive-ring { animation: none; opacity: 0; }
 }
 `;

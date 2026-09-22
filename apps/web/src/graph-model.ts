@@ -193,6 +193,23 @@ export function settlePoint(
   };
 }
 
+// Jev edges that arrived after the snapshot the canvas already showed.
+// The caller records the first snapshot without animating it.
+export function freshJevEdges<
+  T extends {
+    id: string;
+    origin?: unknown;
+    updated: { revision: number };
+  },
+>(edges: readonly T[], seen: ReadonlySet<string>, previousRevision: number) {
+  return edges.filter(
+    (edge) =>
+      edge.origin != null &&
+      !seen.has(edge.id) &&
+      edge.updated.revision > previousRevision,
+  );
+}
+
 export function searchNodes(nodes: readonly Node[], query: string) {
   const terms = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   return nodes.filter((node) => {
