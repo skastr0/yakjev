@@ -1,6 +1,6 @@
 # Deploying yakjev (Tailscale-only on Railway)
 
-This is a scaffold. It does not deploy anything. Production traffic stays on the tailnet: the app binds `127.0.0.1:3210` and Tailscale Serve terminates HTTPS. There is no public Railway domain, no TCP proxy, and no Tailscale Funnel.
+This document does not deploy anything. Production traffic stays on the tailnet: the app binds `127.0.0.1:3210` and Tailscale Serve terminates HTTPS. There is no public Railway domain, no TCP proxy, and no Tailscale Funnel.
 
 Keep `TS_AUTHKEY` only in Railway service secrets. Keep personal tailnet names and origins out of GitHub and CI; authorized orbs receive the remote URL through Amp settings and join via OIDC, as described in [orb access](orbs.md).
 

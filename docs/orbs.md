@@ -29,7 +29,7 @@ The Railway node needs its own tagged auth key (or separately configured workloa
 
 OIDC registration permits joining the tailnet; it does not grant access to arbitrary services. Verify an approved grant from `tag:amp-orb` to the Yakjev host on `tcp:443`; add one only if missing and authorized. Prefer an exact host destination if the existing server tag covers unrelated machines. Audit existing broad grants; new grants do not narrow old ones. Tailnet policy edits require operator approval.
 
-With `YAKJEV_REMOTE_URL` configured, resume probes `/healthz` with normal TLS certificate validation. Future remote MCP uses that same HTTPS ingress and requires application authorization before writes are enabled. No MCP server exists in this scaffold.
+With `YAKJEV_REMOTE_URL` configured, resume probes `/healthz` with normal TLS certificate validation. Remote MCP uses that same HTTPS ingress and requires the owner token before writes. This repository's lifecycle scripts do not start an MCP client for other projects.
 
 ## Access from other projects is a product requirement
 

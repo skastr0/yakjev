@@ -8,5 +8,5 @@ services:
     health: /
     review: false
     portal:
-      title: yakjev scaffold
+      title: yakjev
       description: Development only. Synthetic local data, not the deployed app.
