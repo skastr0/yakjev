@@ -150,7 +150,6 @@ export function NodeForm({
       <label>
         Title
         <input
-          autoFocus
           name="title"
           value={title}
           onChange={(event) => {
@@ -231,12 +230,14 @@ export function RelationSelect({
         {taxonomy.relations.map((relation) => (
           <option key={relation.id} value={relation.id}>
             {relation.label}
-            {relation.blocking
-              ? " · claimed prerequisite"
-              : " · not a hard blocker"}
           </option>
         ))}
       </select>
+      <span className="hint">
+        {taxonomy.relations.find((relation) => relation.id === value)?.blocking
+          ? "Claimed necessary prerequisite"
+          : "Not a hard blocker"}
+      </span>
     </label>
   );
 }

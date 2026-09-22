@@ -254,6 +254,10 @@ export function GraphCanvas(props: Props) {
     }, 900);
   }
 
+  const selectedEdge =
+    props.selection?.kind === "edge"
+      ? props.data.edges.find((edge) => edge.id === props.selection?.id)
+      : null;
   return (
     <div className="graph-shell">
       <div className="graph-actions" aria-label="Graph view controls">
@@ -288,6 +292,39 @@ export function GraphCanvas(props: Props) {
         >
           Save layout
         </button>
+      </div>
+      <div className="selection-caption" aria-live="polite">
+        {selectedEdge ? (
+          <>
+            <strong>
+              {selectedEdge.correction
+                ? "Corrected"
+                : selectedEdge.state === "disputed"
+                  ? "Disputed"
+                  : "Asserted"}
+            </strong>{" "}
+            ·{" "}
+            {
+              props.data.nodes.find((node) => node.id === selectedEdge.source)
+                ?.title
+            }{" "}
+            →{" "}
+            <strong>
+              {
+                props.data.taxonomy.relations.find(
+                  (relation) => relation.id === selectedEdge.relation,
+                )?.label
+              }
+            </strong>{" "}
+            →{" "}
+            {
+              props.data.nodes.find((node) => node.id === selectedEdge.target)
+                ?.title
+            }
+          </>
+        ) : (
+          "Select a node or arrow to inspect its context and rationale."
+        )}
       </div>
       <div
         ref={container}

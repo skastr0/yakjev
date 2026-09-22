@@ -301,6 +301,24 @@ summary {
   padding: 4px 8px;
   min-height: 29px;
 }
+.selection-caption {
+  flex: 0 0 46px;
+  height: 46px;
+  overflow: auto;
+  padding: 4px 20px 10px;
+  font-size: 11px;
+  color: #536b59;
+}
+.related-hints {
+  margin-top: 24px;
+}
+.json-evidence {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 10px;
+  max-height: 360px;
+  overflow: auto;
+}
 .graph-canvas {
   flex: 1;
   min-height: 280px;

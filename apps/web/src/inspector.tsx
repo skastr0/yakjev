@@ -281,7 +281,7 @@ function EdgeInspector({
   pending,
   select,
 }: Props & { edge: Edge }) {
-  const [revision] = useState(graph.revision);
+  const [revision, setRevision] = useState(graph.revision);
   const [relation, setRelation] = useState(edge.relation);
   const [rationale, setRationale] = useState("");
   const [state, setState] = useState(edge.state);
@@ -335,10 +335,17 @@ function EdgeInspector({
         <form
           onSubmit={(event) => {
             event.preventDefault();
+            const panel = event.currentTarget.closest("aside");
             void execute(
               { type: "edge.reframe", id: edge.id, relation, rationale, state },
               revision,
-            );
+            ).then((saved) => {
+              if (saved) {
+                setRevision(revision + 1);
+                setRationale("");
+                panel?.scrollTo({ top: 0 });
+              }
+            });
           }}
         >
           <RelationSelect
