@@ -17,7 +17,14 @@ import {
 import type { Graph } from "@yakjev/protocol";
 import { rememberLayout } from "./layout";
 import { blendedColors } from "./blend";
-import { layoutBounds, syncGraph, type Selection } from "./graph-model";
+import {
+  DRAG_REACH,
+  idsWithinReach,
+  layoutBounds,
+  syncGraph,
+  type Selection,
+} from "./graph-model";
+import type { Ghost } from "./jev";
 
 export type Point = { x: number; y: number };
 export type CanvasHandle = {
@@ -33,15 +40,23 @@ type Props = {
   matches: ReadonlySet<string> | null;
   focusId: string | null;
   paint: Readonly<Record<string, string>>;
+  ghosts: readonly Ghost[];
   onSelect: (selection: Selection) => void;
   onCreate: (at: Point) => void;
   onLink: (source: string, target: string) => void;
+  onDragStart: (id: string, nearby: readonly string[]) => void;
+  onDragMove: (id: string, nearby: readonly string[]) => void;
+  onDragEnd: (id: string, nearby: readonly string[]) => void;
+  onDragCancel: () => void;
   onFocusNode: (id: string) => void;
   onView: () => void;
 };
 
+const DRAG_COMMIT_PX = 8;
+
 export const GraphCanvas = forwardRef<CanvasHandle, Props>(
   function GraphCanvas(props, ref) {
+    const shell = useRef<HTMLDivElement>(null);
     const container = useRef<HTMLDivElement>(null);
     const graph = useRef(new MultiDirectedGraph());
     const renderer = useRef<Sigma | null>(null);
@@ -56,7 +71,30 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     } | null>(null);
     const suppressClick = useRef(false);
     const positions = useRef(new Map<string, { x: number; y: number }>());
+    const dragGesture = useRef<{ x: number; y: number; peak: number } | null>(
+      null,
+    );
+    const reachOf = useRef<(id: string) => string[]>(() => []);
+    reachOf.current = (focusId: string) => {
+      const sigma = renderer.current;
+      if (!sigma || !graph.current.hasNode(focusId)) return [];
+      const hidden = latest.current.hidden;
+      const points: { id: string; x: number; y: number }[] = [];
+      graph.current.forEachNode((id) => {
+        if (hidden && !hidden.has(id)) return;
+        const point = sigma.graphToViewport({
+          x: graph.current.getNodeAttribute(id, "x") as number,
+          y: graph.current.getNodeAttribute(id, "y") as number,
+        });
+        points.push({ id, x: point.x, y: point.y });
+      });
+      return idsWithinReach(focusId, points, DRAG_REACH);
+    };
     const [renderError, setRenderError] = useState("");
+    const [overlayTick, setOverlayTick] = useState(0);
+    const reduceMotion = useRef(
+      matchMedia("(prefers-reduced-motion: reduce)").matches,
+    );
 
     function clientAnchor(id: string): Point | null {
       const sigma = renderer.current;
@@ -215,7 +253,11 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         let frame = 0;
         sigma.getCamera().on("updated", () => {
           cancelAnimationFrame(frame);
-          frame = requestAnimationFrame(() => latest.current.onView());
+          frame = requestAnimationFrame(() => {
+            latest.current.onView();
+            if (latest.current.ghosts.length)
+              setOverlayTick((value) => value + 1);
+          });
         });
         sigma.on("clickNode", ({ node }) => {
           if (suppressClick.current) {
@@ -246,22 +288,42 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           const shift =
             payload.event.original instanceof MouseEvent &&
             payload.event.original.shiftKey;
-          if (!shift) return;
-          payload.preventSigmaDefault();
-          link.current = {
-            source: payload.node,
+          if (shift) {
+            payload.preventSigmaDefault();
+            link.current = {
+              source: payload.node,
+              x: payload.event.x,
+              y: payload.event.y,
+              moved: false,
+            };
+            return;
+          }
+          dragGesture.current = {
             x: payload.event.x,
             y: payload.event.y,
-            moved: false,
+            peak: 0,
           };
+          latest.current.onDragStart(
+            payload.node,
+            reachOf.current(payload.node),
+          );
         });
-        sigma.on("nodeDrag", ({ node }) => {
+        sigma.on("nodeDrag", ({ node, event }) => {
           if (link.current) return;
           suppressClick.current = true;
+          const gesture = dragGesture.current;
+          if (gesture) {
+            gesture.peak = Math.max(
+              gesture.peak,
+              Math.hypot(event.x - gesture.x, event.y - gesture.y),
+            );
+          }
           positions.current.set(node, {
             x: graph.current.getNodeAttribute(node, "x") as number,
             y: graph.current.getNodeAttribute(node, "y") as number,
           });
+          setOverlayTick((value) => value + 1);
+          latest.current.onDragMove(node, reachOf.current(node));
         });
         sigma.on("nodeDragEnd", ({ node }) => {
           if (link.current) return;
@@ -269,6 +331,11 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             x: graph.current.getNodeAttribute(node, "x") as number,
             y: graph.current.getNodeAttribute(node, "y") as number,
           });
+          const nearby = reachOf.current(node);
+          const moved = (dragGesture.current?.peak ?? 0) > DRAG_COMMIT_PX;
+          dragGesture.current = null;
+          if (moved) latest.current.onDragEnd(node, nearby);
+          else latest.current.onDragCancel();
         });
         sigma.on("moveBody", ({ event }) => {
           const current = link.current;
@@ -406,17 +473,98 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
     }, [props.data, props.paint]);
 
     return (
-      <div className="graph-shell">
+      <div className="graph-shell" ref={shell}>
+        <style>{GHOST_CSS}</style>
         <div
           ref={container}
           className="graph-canvas"
           role="application"
-          aria-label="Intention graph. Double-click to capture. Drag a node to move it. Shift-drag between nodes to connect. Click an arrow to reframe it."
+          aria-label="Intention graph. Double-click to capture. Drag a node toward another to connect it. Shift-drag to choose the link."
           data-revision={props.data.revision}
         />
-        <svg className="link-band" aria-hidden="true">
+        <svg className="link-band" aria-hidden="true" data-frame={overlayTick}>
+          <defs>
+            <marker
+              id="ghost-arrow"
+              viewBox="0 0 10 10"
+              refX="8"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto"
+            >
+              <path
+                d="M 1 1.5 L 8 5 L 1 8.5"
+                fill="none"
+                stroke="context-stroke"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </marker>
+          </defs>
+          {props.ghosts.map((ghost, index) => {
+            const strength = clamp01(ghost.strength);
+            const from = overlayPoint(ghost.from);
+            const to = overlayPoint(ghost.to);
+            if (!from || !to) return null;
+            const drawn = thread(from, to, strength);
+            const width = 1.15 + strength * 1.7;
+            const plate = Math.max(36, ghost.label.length * 6.3 + 16);
+            return (
+              <g
+                key={`${ghost.kind}:${endpointKey(ghost.from)}:${ghost.to}:${ghost.label}`}
+                className={
+                  ghost.kind === "typing" ? "ghost-typing" : "ghost-drag"
+                }
+              >
+                <path
+                  className="ghost-glow"
+                  d={drawn.d}
+                  strokeWidth={width + 5}
+                  opacity={0.08 + strength * 0.14}
+                />
+                <path
+                  className="ghost-thread"
+                  d={drawn.d}
+                  strokeWidth={width}
+                  opacity={0.38 + strength * 0.55}
+                  markerEnd="url(#ghost-arrow)"
+                />
+                {!reduceMotion.current && (
+                  <path
+                    className="ghost-bead"
+                    d={drawn.d}
+                    pathLength={1}
+                    strokeWidth={Math.max(1.4, width - 0.2)}
+                    style={{ animationDelay: `${index * 0.14}s` }}
+                  />
+                )}
+                {ghost.label && (
+                  <g
+                    className="ghost-label"
+                    transform={`translate(${drawn.label.x} ${drawn.label.y})`}
+                  >
+                    <rect
+                      x={-plate / 2}
+                      y={-9}
+                      width={plate}
+                      height={18}
+                      rx={9}
+                    />
+                    <text textAnchor="middle" dominantBaseline="central">
+                      {ghost.label}
+                    </text>
+                  </g>
+                )}
+              </g>
+            );
+          })}
           <line ref={band} visibility="hidden" />
         </svg>
+        <p className="ghost-status" role="status">
+          {dragAnnouncement(props.ghosts)}
+        </p>
         <button className="graph-fit" type="button" onClick={fit}>
           Fit
         </button>
@@ -430,8 +578,8 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           <div className="canvas-message">
             <h2>Capture an intention.</h2>
             <p>
-              Double-click the canvas. Drag a node to move it. Shift-drag to
-              connect.
+              Double-click the canvas. Drag a node toward another and it
+              connects on drop. Shift-drag to choose the link.
             </p>
             <button
               className="primary"
@@ -448,10 +596,115 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           </div>
         )}
         <p className="graph-hint">
-          Drag moves · shift-drag connects · double-click captures · click an
-          arrow reframes · / finds · ⌘Z undoes
+          Drag toward a node to connect · shift-drag chooses the link ·
+          double-click captures · click an arrow reframes · / finds · ⌘Z undoes
         </p>
       </div>
     );
+
+    function overlayPoint(end: Ghost["from"]): Point | null {
+      const shellBox = shell.current?.getBoundingClientRect();
+      if (!shellBox) return null;
+      if (typeof end !== "string")
+        return { x: end.x - shellBox.left, y: end.y - shellBox.top };
+      const sigma = renderer.current;
+      if (!sigma || !graph.current.hasNode(end)) return null;
+      const viewport = sigma.graphToViewport({
+        x: graph.current.getNodeAttribute(end, "x") as number,
+        y: graph.current.getNodeAttribute(end, "y") as number,
+      });
+      const canvas = container.current?.getBoundingClientRect();
+      if (!canvas) return null;
+      return {
+        x: viewport.x + canvas.left - shellBox.left,
+        y: viewport.y + canvas.top - shellBox.top,
+      };
+    }
   },
 );
+
+function endpointKey(end: Ghost["from"]) {
+  return typeof end === "string"
+    ? end
+    : `${Math.round(end.x)},${Math.round(end.y)}`;
+}
+
+function clamp01(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
+function dragAnnouncement(ghosts: readonly Ghost[]) {
+  const count = ghosts.reduce(
+    (total, ghost) => total + (ghost.kind === "drag" ? 1 : 0),
+    0,
+  );
+  if (count === 0) return "";
+  return count === 1
+    ? "Drop connects 1 intention"
+    : `Drop connects ${count} intentions`;
+}
+
+// A slight sag so a weak link feels like a thread and a strong one pulls taut.
+function thread(from: Point, to: Point, strength: number) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const sag = 8 + (1 - strength) * 22;
+  const cx = (from.x + to.x) / 2 + (-dy / length) * sag;
+  const cy = (from.y + to.y) / 2 + (dx / length) * sag;
+  return {
+    d: `M ${from.x} ${from.y} Q ${cx} ${cy} ${to.x} ${to.y}`,
+    label: {
+      x: 0.25 * from.x + 0.5 * cx + 0.25 * to.x,
+      y: 0.25 * from.y + 0.5 * cy + 0.25 * to.y,
+    },
+  };
+}
+
+const GHOST_CSS = `
+.ghost-glow, .ghost-thread, .ghost-bead { fill: none; stroke-linecap: round; }
+.ghost-glow, .ghost-thread { stroke: #284e40; }
+.ghost-typing .ghost-glow, .ghost-typing .ghost-thread { stroke: #2c84ff; }
+.ghost-bead {
+  stroke: #e35b00;
+  stroke-dasharray: 0.13 0.87;
+  animation: ghost-run 1.4s linear infinite;
+}
+.ghost-typing .ghost-bead {
+  stroke: #2c84ff;
+  stroke-dasharray: 0.07 0.93;
+  animation-duration: 2.2s;
+}
+.ghost-label rect { fill: #f5f2e9; stroke: #284e4028; }
+.ghost-typing .ghost-label rect { stroke: #2c84ff33; }
+.ghost-label text {
+  font-family: Georgia, serif;
+  font-style: italic;
+  font-size: 11px;
+  fill: #203d35;
+}
+.ghost-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.status-dot[data-jev="on"] {
+  background: #284e40;
+  animation: jev-dot 1.8s ease-in-out infinite;
+}
+@keyframes ghost-run { to { stroke-dashoffset: -1; } }
+@keyframes jev-dot {
+  0%, 100% { box-shadow: 0 0 0 0 #54794c00; }
+  50% { box-shadow: 0 0 0 4px #54794c55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-dot[data-jev="on"] { animation: none; box-shadow: 0 0 0 3px #54794c55; }
+}
+`;

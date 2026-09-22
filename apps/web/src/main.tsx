@@ -1,11 +1,30 @@
-import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  StrictMode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
-import { errorMessage, request } from "./api";
+import type {
+  Command,
+  Graph,
+  Preview,
+  PreviewJudgment,
+} from "@yakjev/protocol";
+import { errorMessage, previewJev, request } from "./api";
 import { GraphCanvas, type CanvasHandle } from "./graph-canvas";
 import { GraphEditor, type Mode } from "./editor";
-import { searchNodes, visibleGraph } from "./graph-model";
+import {
+  dragJudgments,
+  searchNodes,
+  unjudgedIds,
+  visibleGraph,
+} from "./graph-model";
 import { readPaint, writePaint } from "./blend";
 import { useGraph } from "./use-graph";
+import { jevEdge, relationLabel, type Ghost } from "./jev";
 import "./style.css";
 
 function App() {
@@ -21,12 +40,21 @@ function App() {
   const [focusRoot, setFocusRoot] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [viewTick, setViewTick] = useState(0);
-  const [evaluating, setEvaluating] = useState(false);
   const [paint, setPaint] = useState(readPaint);
+  const [typingGhosts, setTypingGhosts] = useState<Ghost[]>([]);
+  const onTypingGhosts = useCallback((next: Ghost[]) => {
+    setTypingGhosts(next);
+  }, []);
+  const linkGeneration = useRef(0);
   // A new object every render makes the canvas re-apply layout on camera ticks.
   const view = useMemo(
     () => (graph ? visibleGraph(graph, showArchived) : null),
     [graph, showArchived],
+  );
+  const jev = useDragConnect(view, state.execute);
+  const ghosts = useMemo(
+    () => [...typingGhosts, ...jev.ghosts],
+    [typingGhosts, jev.ghosts],
   );
   const matches = useMemo(() => {
     if (!view || !query.trim()) return null;
@@ -67,6 +95,7 @@ function App() {
       }
       if (typing) {
         if (event.key === "Escape") {
+          linkGeneration.current += 1;
           setMode(null);
           (event.target as HTMLElement).blur();
         }
@@ -76,6 +105,7 @@ function App() {
         event.preventDefault();
         findRef.current?.focus();
       } else if (event.key === "Escape") {
+        linkGeneration.current += 1;
         setMode(null);
         setFocusRoot(null);
         setQuery("");
@@ -87,8 +117,6 @@ function App() {
         });
       } else if (event.key === "f" && mode?.kind === "node") {
         toggleFocus(mode.id);
-      } else if (event.key === "j" && mode?.kind === "node") {
-        void askJev(mode.id);
       } else if (
         (event.key === "Backspace" || event.key === "Delete") &&
         mode?.kind === "node" &&
@@ -141,32 +169,6 @@ function App() {
   function toggleFocus(id: string) {
     setFocusRoot((current) => (current === id ? null : id));
     setFocusId(id);
-  }
-
-  async function askJev(id: string) {
-    if (!graph || evaluating) return;
-    setEvaluating(true);
-    state.setError("");
-    try {
-      await request("/api/evaluations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          requestId: crypto.randomUUID(),
-          expectedRevision: graph.revision,
-          query: graph.nodes.find((node) => node.id === id)?.title ?? "",
-          focusNodeId: id,
-        }),
-      });
-      const next = await state.refresh();
-      const latest = next.evaluations.at(-1);
-      if (latest && latest.status !== "succeeded")
-        state.setError("Jev recorded no suggestion.");
-    } catch (cause) {
-      state.setError(errorMessage(cause));
-    } finally {
-      setEvaluating(false);
-    }
   }
 
   async function exportGraph() {
@@ -242,13 +244,11 @@ function App() {
           data-state={state.connection}
           role="status"
         >
-          <span className="status-dot" />
+          <span className="status-dot" data-jev={jev.busy ? "on" : undefined} />
           {state.connection === "live"
-            ? evaluating
-              ? "Jev is looking…"
-              : state.pending
-                ? "Saving…"
-                : `Live · r${graph?.revision ?? 0}${view ? ` · ${view.nodes.length}` : ""}`
+            ? state.pending
+              ? "Saving…"
+              : `Live · r${graph?.revision ?? 0}${view ? ` · ${view.nodes.length}` : ""}`
             : state.connection === "reconnecting"
               ? "Reconnecting…"
               : state.connection === "locked"
@@ -368,21 +368,42 @@ function App() {
             matches={matchIds}
             focusId={focusId}
             paint={paint}
+            ghosts={ghosts}
             onView={() => {
               if (mode) setViewTick((value) => value + 1);
             }}
-            onSelect={(next) => setMode(next)}
+            onSelect={(next) => {
+              linkGeneration.current += 1;
+              setMode(next);
+            }}
             onCreate={(at) => setMode({ kind: "create", ...at })}
             onLink={(source, target) => {
               const existing = view.edges.find(
                 (edge) => edge.source === source && edge.target === target,
               );
-              setMode(
-                existing
-                  ? { kind: "edge", id: existing.id }
-                  : { kind: "assert", source, target },
-              );
+              if (existing) {
+                setMode({ kind: "edge", id: existing.id });
+                return;
+              }
+              const generation = ++linkGeneration.current;
+              void jev.preselect(source, target).then((preview) => {
+                if (linkGeneration.current !== generation) return;
+                const useful = preview?.judgments.some(
+                  (item) => item.nodeId === target,
+                )
+                  ? preview
+                  : undefined;
+                setMode(
+                  useful
+                    ? { kind: "assert", source, target, preview: useful }
+                    : { kind: "assert", source, target },
+                );
+              });
             }}
+            onDragStart={jev.onStart}
+            onDragMove={jev.onMove}
+            onDragEnd={jev.onEnd}
+            onDragCancel={jev.onCancel}
             onFocusNode={toggleFocus}
           />
           {mode && (
@@ -396,14 +417,17 @@ function App() {
                 mode.kind === "node" &&
                 focusRoot === mode.id
               }
-              onClose={() => setMode(null)}
+              onClose={() => {
+                linkGeneration.current += 1;
+                setMode(null);
+              }}
               onCreated={(id) => {
                 setMode({ kind: "node", id });
                 setFocusId(id);
               }}
               onAsserted={(id) => setMode({ kind: "edge", id })}
               onFocus={toggleFocus}
-              onAskJev={(id) => void askJev(id)}
+              onGhosts={onTypingGhosts}
               paint={paint}
               onPaint={(id, color) =>
                 setPaint((current) => writePaint(current, id, color))
@@ -441,6 +465,270 @@ function isTyping(target: EventTarget | null) {
       target.tagName === "TEXTAREA" ||
       target.isContentEditable)
   );
+}
+
+const INCLUDE_DELAY_MS = 80;
+
+type Slot =
+  | { kind: "judgment"; judgment: PreviewJudgment; preview: Preview }
+  | { kind: "none" };
+
+type Session = {
+  focusId: string;
+  nearby: readonly string[];
+  held: Map<string, Slot>;
+  phase: "drag" | "commit" | "dead";
+  abort: AbortController;
+  chain: Promise<void>;
+  timer: number;
+};
+
+function useDragConnect(
+  graph: Graph | null,
+  execute: (command: Command, revision: number) => Promise<boolean>,
+) {
+  const graphRef = useRef(graph);
+  graphRef.current = graph;
+  const executeRef = useRef(execute);
+  executeRef.current = execute;
+  const session = useRef<Session | null>(null);
+  const depth = useRef(0);
+  const [ghosts, setGhosts] = useState<Ghost[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  function begin() {
+    depth.current += 1;
+    setBusy(true);
+  }
+  function finish() {
+    depth.current = Math.max(0, depth.current - 1);
+    setBusy(depth.current > 0);
+  }
+  function publish(current: Session) {
+    const data = graphRef.current;
+    if (!data || session.current !== current) return;
+    const next = dragJudgments(
+      current.focusId,
+      current.nearby,
+      judgmentsOf(current),
+      data.edges,
+    ).map((judgment) => ghostFrom(current.focusId, data, judgment));
+    setGhosts((previous) => (sameGhosts(previous, next) ? previous : next));
+  }
+  function schedule(current: Session) {
+    window.clearTimeout(current.timer);
+    current.timer = window.setTimeout(() => {
+      if (session.current !== current || current.phase !== "drag") return;
+      const missing = unjudgedIds(current.nearby, new Set(current.held.keys()));
+      if (missing.length) void ask(current, missing);
+    }, INCLUDE_DELAY_MS);
+  }
+  function ask(current: Session, include: readonly string[]) {
+    const task = current.chain.then(async () => {
+      if (!alive(current)) return;
+      begin();
+      try {
+        const preview = await previewJev(
+          include.length
+            ? { focusNodeId: current.focusId, includeNodeIds: [...include] }
+            : { focusNodeId: current.focusId },
+          current.abort.signal,
+        );
+        if (!alive(current)) return;
+        absorb(current, preview, include);
+        publish(current);
+        if (current.phase === "drag") schedule(current);
+      } catch {
+        if (!alive(current)) return;
+        for (const id of include) current.held.set(id, { kind: "none" });
+        if (current.phase === "drag") schedule(current);
+      } finally {
+        finish();
+      }
+    });
+    current.chain = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return current.chain;
+  }
+
+  useEffect(
+    () => () => {
+      const current = session.current;
+      if (!current) return;
+      current.phase = "dead";
+      current.abort.abort();
+      window.clearTimeout(current.timer);
+    },
+    [],
+  );
+
+  return {
+    ghosts,
+    busy,
+    onStart(id: string, nearby: readonly string[]) {
+      const previous = session.current;
+      if (previous && previous.phase !== "commit") {
+        previous.phase = "dead";
+        previous.abort.abort();
+        window.clearTimeout(previous.timer);
+      }
+      const current: Session = {
+        focusId: id,
+        nearby,
+        held: new Map(),
+        phase: "drag",
+        abort: new AbortController(),
+        chain: Promise.resolve(),
+        timer: 0,
+      };
+      session.current = current;
+      setGhosts([]);
+      void ask(current, []);
+    },
+    onMove(id: string, nearby: readonly string[]) {
+      const current = session.current;
+      if (!current || current.phase !== "drag" || current.focusId !== id)
+        return;
+      if (sameIds(current.nearby, nearby)) return;
+      current.nearby = nearby;
+      publish(current);
+      schedule(current);
+    },
+    onCancel() {
+      const current = session.current;
+      if (!current || current.phase === "commit") return;
+      current.phase = "dead";
+      current.abort.abort();
+      window.clearTimeout(current.timer);
+      session.current = null;
+      setGhosts([]);
+    },
+    async onEnd(id: string, nearby: readonly string[]) {
+      const current = session.current;
+      if (!current || current.phase !== "drag" || current.focusId !== id)
+        return;
+      current.phase = "commit";
+      current.nearby = nearby;
+      window.clearTimeout(current.timer);
+      const missing = unjudgedIds(nearby, new Set(current.held.keys()));
+      if (missing.length) await ask(current, missing);
+      else await current.chain;
+      const data = graphRef.current;
+      const edges =
+        data && current.phase === "commit"
+          ? dragJudgments(
+              current.focusId,
+              current.nearby,
+              judgmentsOf(current),
+              data.edges,
+            ).flatMap((judgment) => {
+              const slot = current.held.get(judgment.nodeId);
+              if (!slot || slot.kind !== "judgment") return [];
+              const edge = jevEdge(current.focusId, slot.preview, judgment);
+              return edge ? [edge] : [];
+            })
+          : [];
+      if (session.current === current) {
+        session.current = null;
+        setGhosts([]);
+      }
+      for (const edge of edges) {
+        const saved = await executeRef.current(
+          { type: "edge.put", edge },
+          data?.revision ?? 0,
+        );
+        if (!saved) break;
+      }
+    },
+    async preselect(source: string, target: string) {
+      begin();
+      try {
+        return await previewJev({
+          focusNodeId: source,
+          includeNodeIds: [target],
+        });
+      } catch {
+        return null;
+      } finally {
+        finish();
+      }
+    },
+  };
+}
+
+function alive(current: Session) {
+  return current.phase !== "dead" && !current.abort.signal.aborted;
+}
+
+function judgmentsOf(current: Session) {
+  return [...current.held.values()].flatMap((slot) =>
+    slot.kind === "judgment" ? [slot.judgment] : [],
+  );
+}
+
+function absorb(
+  current: Session,
+  preview: Preview,
+  include: readonly string[],
+) {
+  if (preview.status === "succeeded") {
+    for (const judgment of preview.judgments)
+      current.held.set(judgment.nodeId, {
+        kind: "judgment",
+        judgment,
+        preview,
+      });
+  }
+  for (const id of include)
+    if (!current.held.has(id)) current.held.set(id, { kind: "none" });
+}
+
+function ghostFrom(
+  focusId: string,
+  graph: Graph,
+  judgment: PreviewJudgment,
+): Ghost {
+  const forward = judgment.direction === "focus_to_candidate";
+  const relatedness = judgment.relatedness;
+  return {
+    from: forward ? focusId : judgment.nodeId,
+    to: forward ? judgment.nodeId : focusId,
+    strength: Number.isFinite(relatedness)
+      ? Math.min(1, Math.max(0, relatedness))
+      : 0,
+    label: relationLabel(graph, judgment),
+    kind: "drag",
+  };
+}
+
+function sameIds(left: readonly string[], right: readonly string[]) {
+  return (
+    left.length === right.length &&
+    left.every((id, index) => id === right[index])
+  );
+}
+
+function sameGhosts(left: readonly Ghost[], right: readonly Ghost[]) {
+  return (
+    left.length === right.length &&
+    left.every((ghost, index) => {
+      const other = right[index];
+      return (
+        other !== undefined &&
+        ghost.kind === other.kind &&
+        ghost.to === other.to &&
+        ghost.label === other.label &&
+        ghost.strength === other.strength &&
+        endpoint(ghost.from) === endpoint(other.from)
+      );
+    })
+  );
+}
+
+function endpoint(end: Ghost["from"]) {
+  return typeof end === "string" ? end : `${end.x},${end.y}`;
 }
 
 createRoot(document.getElementById("root")!).render(
