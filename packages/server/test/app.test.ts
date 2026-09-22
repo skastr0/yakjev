@@ -456,6 +456,7 @@ test("mounted MCP over TCP authenticates every request and shares HTTP graph and
     "graph_command",
     "graph_discover",
     "graph_evaluate",
+    "graph_preview",
     "graph_read",
   ]);
   const command = {
