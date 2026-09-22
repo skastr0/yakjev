@@ -4,6 +4,7 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  type CSSProperties,
 } from "react";
 import { MultiDirectedGraph } from "graphology";
 import Sigma, { DEFAULT_STYLES } from "sigma";
@@ -472,6 +473,8 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         fit();
     }, [props.data, props.paint]);
 
+    const announcement = dragAnnouncement(props.ghosts);
+
     return (
       <div className="graph-shell" ref={shell}>
         <style>{GHOST_CSS}</style>
@@ -579,9 +582,11 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           })}
           <line ref={band} visibility="hidden" />
         </svg>
-        <p className="ghost-status" role="status">
-          {dragAnnouncement(props.ghosts)}
-        </p>
+        {announcement && (
+          <p className="ghost-status" role="status" style={DROP_HINT_STYLE}>
+            {announcement}
+          </p>
+        )}
         <button className="graph-fit" type="button" onClick={fit}>
           Fit
         </button>
@@ -666,6 +671,24 @@ function labelInk(kind: Ghost["kind"], strength: number) {
   };
 }
 
+const DROP_HINT_STYLE: CSSProperties = {
+  position: "absolute",
+  top: 14,
+  left: "50%",
+  transform: "translateX(-50%)",
+  zIndex: 4,
+  margin: 0,
+  padding: "4px 10px",
+  border: "1px solid #c4ccbe",
+  borderRadius: 999,
+  background: "#f5f2e9",
+  color: "#203d35",
+  fontSize: 12,
+  lineHeight: 1.3,
+  whiteSpace: "nowrap",
+  pointerEvents: "none",
+};
+
 function dragAnnouncement(ghosts: readonly Ghost[]) {
   const count = ghosts.reduce(
     (total, ghost) => total + (ghost.kind === "drag" ? 1 : 0),
@@ -718,14 +741,19 @@ const GHOST_CSS = `
 }
 .ghost-status {
   position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  margin: 0;
+  padding: 4px 10px;
+  border: 1px solid #c4ccbe;
+  border-radius: 999px;
+  background: #f5f2e9;
+  color: #203d35;
+  font-size: 12px;
   white-space: nowrap;
-  border: 0;
+  pointer-events: none;
 }
 .status-dot[data-jev="on"] {
   background: #284e40;
