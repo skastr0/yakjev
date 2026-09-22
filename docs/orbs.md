@@ -16,7 +16,7 @@ Amp personal settings supply credentials; project settings select the app's depl
 | -------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `TAILSCALE_CLIENT_ID`, `TAILSCALE_AUDIENCE`                          | Existing OIDC registration identifiers (not secrets)              |
 | `QUASAR_SERVER_URL`                                                  | HTTPS session-memory endpoint                                     |
-| `TYPESAFE_API_KEY`                                                   | Server-side Jev calls, once implemented                           |
+| `TYPESAFE_API_KEY`                                                   | Server-side Jev calls; absent key records unavailable judgments   |
 | `RAILWAY_API_TOKEN`                                                  | Existing account/workspace credential used by Railway CLI         |
 | `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID`, `RAILWAY_SERVICE_ID` | Project settings selecting this app's deployment, not another app |
 | `YAKJEV_REMOTE_URL`                                                  | Deployed app's bare tailnet HTTPS origin, supplied at runtime     |

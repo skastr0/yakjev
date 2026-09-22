@@ -61,6 +61,16 @@ run_reject() {
 run_reject missing-origin "YAKJEV_ORIGIN is required" \
   env -i PATH="$PATH" HOME="$HOME" bash "$ENTRY"
 
+# The image defaults NODE_ENV=production. The app, not the entrypoint, rejects
+# the synthetic dev token in that mode. This does not start Tailscale.
+run_reject production-rejects-dev-auth "YAKJEV_DEV_AUTH requires a non-production loopback origin" \
+  env -i PATH="$PATH" HOME="$HOME" \
+    NODE_ENV=production \
+    YAKJEV_DEV_AUTH=true \
+    YAKJEV_ORIGIN=https://yakjev.example.ts.net \
+    YAKJEV_DATA_DIR="$tmpdir/dev-auth-data" \
+    bun packages/server/src/main.ts
+
 run_reject http-origin "must be https://" \
   env -i PATH="$PATH" HOME="$HOME" YAKJEV_ORIGIN="http://yakjev.example.ts.net" bash "$ENTRY"
 

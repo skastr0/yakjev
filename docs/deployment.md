@@ -36,14 +36,19 @@ Do this on a machine that already has Railway and Tailscale admin access. Do not
 3. Generate an auth key: **tagged**, **not ephemeral**, **reusable only if you must re-register**, expiry 1–90 days. Treat reusable keys as passwords. After the node is Running with persisted `/data/tailscale`, you can revoke the key. See [Auth keys](https://tailscale.com/docs/features/access-control/auth-keys).
 4. Set Railway **service** variables (not shared git, not orbs):
 
-   | Variable            | Value                                                     |
-   | ------------------- | --------------------------------------------------------- |
-   | `YAKJEV_ORIGIN`     | `https://<hostname>.<tailnet>.ts.net` (no trailing slash) |
-   | `TS_HOSTNAME`       | same `<hostname>` as in `YAKJEV_ORIGIN`                   |
-   | `TS_ADVERTISE_TAGS` | `tag:railway` (or your existing Railway host tag)         |
-   | `TS_AUTHKEY`        | the tagged key (Railway secret / sealed variable)         |
-   | `YAKJEV_DATA_DIR`   | `/data/yakjev`                                            |
-   | `TS_STATE_DIR`      | `/data/tailscale`                                         |
+   | Variable             | Value                                                             |
+   | -------------------- | ----------------------------------------------------------------- |
+   | `YAKJEV_ORIGIN`      | `https://<hostname>.<tailnet>.ts.net` (no trailing slash)         |
+   | `YAKJEV_OWNER_TOKEN` | Railway secret, at least 32 characters; required for graph writes |
+   | `YAKJEV_OWNER_ID`    | optional; defaults to `owner`                                     |
+   | `TYPESAFE_API_KEY`   | Railway secret for server-side Jev calls; never a `VITE_` name    |
+   | `TS_HOSTNAME`        | same `<hostname>` as in `YAKJEV_ORIGIN`                           |
+   | `TS_ADVERTISE_TAGS`  | `tag:railway` (or your existing Railway host tag)                 |
+   | `TS_AUTHKEY`         | the tagged key (Railway secret / sealed variable)                 |
+   | `YAKJEV_DATA_DIR`    | `/data/yakjev`                                                    |
+   | `TS_STATE_DIR`       | `/data/tailscale`                                                 |
+
+   Do not set `YAKJEV_DEV_AUTH` in Railway. The image runs with `NODE_ENV=production`, and the server exits if that flag is set. The synthetic token exists only for loopback development.
 
    After the first successful login, you may remove `TS_AUTHKEY`. Fresh empty state without a key **fails closed**.
 
