@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./config": "./src/config.ts",
     "./graph-commands": "./src/graph-commands.ts",
     "./jev": "./src/jev.ts",
     "./optimistic": "./src/optimistic.ts",
