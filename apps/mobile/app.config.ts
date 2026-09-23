@@ -5,6 +5,7 @@ const config: ExpoConfig = {
   slug: "yakjev",
   scheme: "yakjev",
   version: "0.1.0",
+  icon: "./assets/icon.png",
   orientation: "default",
   userInterfaceStyle: "light",
   platforms: ["ios"],

@@ -10,6 +10,7 @@ apps/desktop/artifacts
 apps/mobile/ios
 apps/mobile/android
 apps/mobile/.expo
+apps/mobile/expo-env.d.ts
 apps/mobile/dist
 apps/mobile/artifacts
 apps/mobile/modules/**/.build
