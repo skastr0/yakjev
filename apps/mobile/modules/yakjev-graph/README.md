@@ -49,6 +49,18 @@ The fixture includes 10,000 nodes and 30,000 edges. Its measurements cover CPU
 geometry only; simulator or host timings are not device frame-rate guarantees.
 The Metal shader test uses a real Metal device when available and skips otherwise.
 
+To benchmark the production shader with 10,000 nodes and 30,000 visible edges:
+
+```sh
+apps/mobile/modules/yakjev-graph/scripts/benchmark-metal.sh
+```
+
+This opt-in macOS test emits a JSON receipt with the GPU device, viewport, frame
+counts, GPU execution times, and CPU encoding times. It excludes shader
+compilation, graph construction, buffer allocation, CoreGraphics labels, React
+Native/JS, and display presentation. It measures offscreen Metal work, not iPhone
+frame rate.
+
 Native Instruments signposts use subsystem `com.yakjev.mobile`, category `Graph`:
 `CompileShaders`, `UpdateGraph`, `VisibleLabels`, `EncodeFrame`, and `GPUComplete`.
 Use Points of Interest, Time Profiler, and Metal System Trace on a physical device
