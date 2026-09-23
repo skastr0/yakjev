@@ -19,7 +19,7 @@ export function readLegacyPaint(storage: PaintStorage): Paint {
 }
 
 // Re-read before clearing: another tab may have changed an entry while the
-// command was in flight. Only retire the exact values this run acknowledged.
+// command was in flight. Only retire the exact values resolved by the graph.
 export function clearLegacyPaint(storage: PaintStorage, resolved: Paint) {
   if (Object.keys(resolved).length === 0) return;
   const latest = { ...readLegacyPaint(storage) };
@@ -35,8 +35,19 @@ export function clearLegacyPaint(storage: PaintStorage, resolved: Paint) {
   else storage.setItem(LEGACY_PAINT_KEY, JSON.stringify(latest));
 }
 
-// True means a legacy node is not in this snapshot yet; retry when live data
-// arrives rather than discarding an unacknowledged color from another tab.
+function resolvedPaint(graph: Graph, legacy: Paint): Paint {
+  const resolved = new Set(
+    graph.nodes
+      .filter((node) => node.color !== undefined)
+      .map((node) => node.id),
+  );
+  return Object.fromEntries(
+    Object.entries(legacy).filter(([id]) => resolved.has(id)),
+  );
+}
+
+// True means some legacy entries need a newer snapshot. A batch receipt alone
+// cannot resolve them: onlyIfUnset deliberately skips nodes removed in flight.
 export async function migrateLegacyPaint({
   storage,
   graph,
@@ -53,13 +64,7 @@ export async function migrateLegacyPaint({
     if (!current) return false;
     const legacy = readLegacyPaint(storage);
     const nodes = new Map(current.nodes.map((node) => [node.id, node]));
-    const resolved = Object.fromEntries(
-      Object.entries(legacy).filter(([id]) => {
-        const node = nodes.get(id);
-        return node !== undefined && node.color !== undefined;
-      }),
-    );
-    clearLegacyPaint(storage, resolved);
+    clearLegacyPaint(storage, resolvedPaint(current, legacy));
     const command = legacyPaintCommand(current, legacy);
     if (!command) return Object.keys(legacy).some((id) => !nodes.has(id));
     if (signal.aborted) return false;
@@ -70,12 +75,14 @@ export async function migrateLegacyPaint({
         "Existing browser colors have not been saved to the graph.",
       );
     }
-    // An acknowledged command must stay retired even if this run was cancelled
-    // just after saving; otherwise a later Undo could reimport the same colors.
-    clearLegacyPaint(
-      storage,
-      Object.fromEntries(command.colors.map(({ id }) => [id, legacy[id]!])),
-    );
+    const confirmed = graph();
+    if (!confirmed) return true;
+    const resolved = resolvedPaint(confirmed, legacy);
+    clearLegacyPaint(storage, resolved);
+    // Do not repost an acknowledged batch against the same unresolved snapshot.
+    // A later canonical revision (including an explicit null from Undo) resumes it.
+    if (command.colors.some(({ id }) => !Object.hasOwn(resolved, id)))
+      return true;
   }
   return false;
 }

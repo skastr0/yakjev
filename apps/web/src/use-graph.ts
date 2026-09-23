@@ -47,7 +47,7 @@ export function useGraph() {
   const generation = useRef(0);
   const sessionController = useRef(new AbortController());
   const migrationController = useRef<AbortController | null>(null);
-  const waitingForLegacyNodes = useRef(false);
+  const waitingForLegacyRevision = useRef<number | null>(null);
 
   const stopSession = useCallback(() => {
     sessionController.current.abort();
@@ -262,14 +262,18 @@ export function useGraph() {
     if (!readyToMigrate) return;
     const controller = new AbortController();
     migrationController.current = controller;
-    const startedAt = current.current?.revision;
+    let inspectedRevision = current.current?.revision;
     setPaintMigrationError("");
     void Promise.resolve()
       .then(() => {
         if (controller.signal.aborted) return;
         return migrateLegacyPaint({
           storage: window.localStorage,
-          graph: () => current.current,
+          graph: () => {
+            const canonical = current.current;
+            if (canonical) inspectedRevision = canonical.revision;
+            return canonical;
+          },
           execute: (command) =>
             execute(command, current.current?.revision ?? 0, controller.signal),
           signal: controller.signal,
@@ -277,8 +281,10 @@ export function useGraph() {
       })
       .then((waiting) => {
         if (controller.signal.aborted) return;
-        waitingForLegacyNodes.current = waiting === true;
-        if (waiting && current.current?.revision !== startedAt)
+        waitingForLegacyRevision.current = waiting
+          ? (inspectedRevision ?? null)
+          : null;
+        if (waiting && current.current?.revision !== inspectedRevision)
           setPaintMigrationRetry((value) => value + 1);
       })
       .catch((cause: unknown) => {
@@ -302,7 +308,8 @@ export function useGraph() {
     if (
       readyToMigrate &&
       !paintMigrationError &&
-      waitingForLegacyNodes.current &&
+      waitingForLegacyRevision.current !== null &&
+      waitingForLegacyRevision.current !== graph?.revision &&
       migrationController.current === null
     )
       setPaintMigrationRetry((value) => value + 1);

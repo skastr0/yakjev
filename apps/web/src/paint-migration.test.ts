@@ -61,7 +61,7 @@ function memoryStorage(paint: Record<string, string>) {
 }
 
 describe("legacy browser color migration", () => {
-  test("imports only unset nodes and retires acknowledged/resolved entries", async () => {
+  test("imports only unset nodes and retires canonically resolved entries", async () => {
     const storage = memoryStorage({
       unset: "#ED4968",
       default: "#8672fd",
@@ -162,9 +162,10 @@ describe("legacy browser color migration", () => {
 
   test("retains an unacknowledged batch for visible retry", async () => {
     const storage = memoryStorage({ a: "#ed4968", b: "#159b05" });
+    let canonical = graph([node("a"), node("b")]);
     const input = {
       storage,
-      graph: () => graph([node("a"), node("b")]),
+      graph: () => canonical,
       signal: new AbortController().signal,
       execute: async () => false,
     };
@@ -172,7 +173,13 @@ describe("legacy browser color migration", () => {
       "have not been saved",
     );
     expect(readLegacyPaint(storage)).toEqual({ a: "#ed4968", b: "#159b05" });
-    await migrateLegacyPaint({ ...input, execute: async () => true });
+    await migrateLegacyPaint({
+      ...input,
+      execute: async (command) => {
+        canonical = applyOptimistic(canonical, command);
+        return true;
+      },
+    });
     expect(readLegacyPaint(storage)).toEqual({});
   });
 
@@ -200,6 +207,7 @@ describe("legacy browser color migration", () => {
 
   test("cleanup errors retain the browser record and propagate for retry", async () => {
     const storage = memoryStorage({ a: "#ed4968" });
+    let canonical = graph([node("a")]);
     const failing = {
       ...storage,
       removeItem: () => {
@@ -209,9 +217,12 @@ describe("legacy browser color migration", () => {
     await expect(
       migrateLegacyPaint({
         storage: failing,
-        graph: () => graph([node("a")]),
+        graph: () => canonical,
         signal: new AbortController().signal,
-        execute: async () => true,
+        execute: async (command) => {
+          canonical = applyOptimistic(canonical, command);
+          return true;
+        },
       }),
     ).rejects.toThrow("Storage unavailable");
     expect(readLegacyPaint(storage)).toEqual({ a: "#ed4968" });
@@ -243,7 +254,7 @@ describe("legacy browser color migration", () => {
     expect(readLegacyPaint(storage)).toEqual({ a: "#ed4968" });
   });
 
-  test("logout stops the next batch while retiring an acknowledged first batch", async () => {
+  test("logout stops the next batch and retains colors without a canonical snapshot", async () => {
     const controller = new AbortController();
     const nodes = Array.from({ length: 101 }, (_, index) =>
       node(`node-${index}`),
@@ -252,18 +263,21 @@ describe("legacy browser color migration", () => {
       Object.fromEntries(nodes.map((item) => [item.id, "#ed4968"])),
     );
     let sent = 0;
-    await migrateLegacyPaint({
+    let canonical: Graph | null = graph(nodes);
+    const waiting = await migrateLegacyPaint({
       storage,
-      graph: () => graph(nodes),
+      graph: () => canonical,
       signal: controller.signal,
       execute: async () => {
         sent++;
+        canonical = null;
         controller.abort();
         return true;
       },
     });
+    expect(waiting).toBe(true);
     expect(sent).toBe(1);
-    expect(readLegacyPaint(storage)).toEqual({ "node-100": "#ed4968" });
+    expect(Object.keys(readLegacyPaint(storage))).toHaveLength(101);
   });
 
   test("cancelling an unacknowledged request retains its colors without an error", async () => {
@@ -313,5 +327,69 @@ describe("legacy browser color migration", () => {
     expect(sent).toBe(1);
     expect(readLegacyPaint(storage)).toEqual({});
     expect(canonical.nodes[0]?.color).toBeNull();
+  });
+
+  test("an acknowledged skip retains a removed node's paint until restoration", async () => {
+    const storage = memoryStorage({ a: "#ed4968", b: "#159b05" });
+    let canonical = graph([node("a"), node("b")]);
+    const sent: Command[] = [];
+    const waiting = await migrateLegacyPaint({
+      storage,
+      graph: () => canonical,
+      signal: new AbortController().signal,
+      execute: async (command) => {
+        sent.push(command);
+        // Another client removed A after this batch was built. The successful
+        // onlyIfUnset command skips A, while B is saved in the refreshed graph.
+        canonical = applyOptimistic(graph([node("b")]), command);
+        return true;
+      },
+    });
+    expect(waiting).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect(readLegacyPaint(storage)).toEqual({ a: "#ed4968" });
+    expect(canonical.nodes[0]?.color).toBe("#159b05");
+
+    canonical = graph([...canonical.nodes, node("a")]);
+    expect(
+      await migrateLegacyPaint({
+        storage,
+        graph: () => canonical,
+        signal: new AbortController().signal,
+        execute: async (command) => {
+          sent.push(command);
+          canonical = applyOptimistic(canonical, command);
+          return true;
+        },
+      }),
+    ).toBe(false);
+    expect(sent).toHaveLength(2);
+    expect(canonical.nodes.find((item) => item.id === "a")?.color).toBe(
+      "#ed4968",
+    );
+    expect(readLegacyPaint(storage)).toEqual({});
+  });
+
+  test("an acknowledged batch with a stale snapshot waits after one send", async () => {
+    const storage = memoryStorage({ a: "#ed4968" });
+    let canonical = graph([node("a")]);
+    let sent = 0;
+    const input = {
+      storage,
+      graph: () => canonical,
+      signal: new AbortController().signal,
+      execute: async () => {
+        sent++;
+        return true;
+      },
+    };
+    expect(await migrateLegacyPaint(input)).toBe(true);
+    expect(sent).toBe(1);
+    expect(readLegacyPaint(storage)).toEqual({ a: "#ed4968" });
+
+    canonical = graph([node("a", "#ed4968")]);
+    expect(await migrateLegacyPaint(input)).toBe(false);
+    expect(sent).toBe(1);
+    expect(readLegacyPaint(storage)).toEqual({});
   });
 });
