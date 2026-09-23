@@ -1,0 +1,30 @@
+{
+  "name": "@yakjev/desktop",
+  "productName": "Yakjev",
+  "version": "0.0.1",
+  "description": "The Yakjev desktop client for your living graph.",
+  "private": true,
+  "type": "commonjs",
+  "main": "./out/main/index.js",
+  "author": "Guilherme Castro",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev --watch",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "package": "bun run build && electron-builder --publish never",
+    "test": "bun test test",
+    "smoke": "bun run build && bun e2e/smoke.ts"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.117"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@vitejs/plugin-react": "5.0.4",
+    "electron": "44.4.4",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "vite": "7.3.1"
+  }
+}

@@ -13,7 +13,7 @@ COPY package.json bun.lock tsconfig.json ./
 COPY packages ./packages
 COPY apps ./apps
 
-RUN bun install --frozen-lockfile \
+RUN ELECTRON_SKIP_BINARY_DOWNLOAD=1 bun install --frozen-lockfile \
   && bun run build
 
 COPY deploy/entrypoint.sh /usr/local/bin/yakjev-entrypoint.sh

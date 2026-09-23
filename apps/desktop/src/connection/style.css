@@ -1,0 +1,237 @@
+:root {
+  color-scheme: light;
+  font-family: "Avenir Next", Avenir, system-ui, sans-serif;
+  color: #203d35;
+  background: #f5f2e9;
+  font-synthesis: none;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+  margin: 0;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  min-height: 72px;
+  padding: 12px 32px;
+  border-bottom: 1px solid #cbd1c4;
+}
+
+.brand {
+  font:
+    italic 30px Georgia,
+    serif;
+}
+
+.eyebrow {
+  color: #566853;
+  font:
+    10px ui-monospace,
+    monospace;
+  letter-spacing: 0.12em;
+}
+
+main {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  padding: 48px 24px;
+}
+
+.connection {
+  width: min(100%, 448px);
+}
+
+.graph-mark {
+  position: relative;
+  width: 64px;
+  height: 48px;
+  margin-bottom: 24px;
+}
+
+.graph-mark::before,
+.graph-mark::after {
+  position: absolute;
+  top: 30px;
+  left: 8px;
+  width: 42px;
+  height: 1px;
+  background: #95a98f;
+  content: "";
+  transform: rotate(-37deg);
+  transform-origin: left center;
+}
+
+.graph-mark::after {
+  width: 48px;
+  transform: rotate(10deg);
+}
+
+.graph-mark span {
+  position: absolute;
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+  border: 1px solid #64826a;
+  border-radius: 50%;
+  background: #f5f2e9;
+}
+
+.graph-mark span:first-child {
+  top: 24px;
+  left: 2px;
+  background: #284e40;
+}
+
+.graph-mark span:nth-child(2) {
+  top: 0;
+  left: 36px;
+}
+
+.graph-mark span:last-child {
+  top: 32px;
+  left: 50px;
+  border-color: #6f52ed;
+  background: #6f52ed;
+}
+
+h1 {
+  margin: 0;
+  font:
+    normal 36px/1.18 Georgia,
+    serif;
+  letter-spacing: -0.035em;
+}
+
+.introduction {
+  margin: 16px 0 32px;
+  color: #566853;
+}
+
+label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+input,
+button {
+  min-height: 48px;
+  border: 1px solid #c4ccbe;
+  border-radius: 5px;
+  font: inherit;
+}
+
+input {
+  width: 100%;
+  padding: 12px;
+  background: #fffcf6;
+  color: inherit;
+}
+
+input::placeholder {
+  color: #697568;
+}
+
+.hint {
+  margin: 8px 0 24px;
+  color: #566853;
+  font-size: 12px;
+}
+
+button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 12px 16px;
+  border-color: #284e40;
+  background: #284e40;
+  color: #fffdf5;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: #386253;
+  background: #386253;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+input:focus-visible,
+button:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #386253;
+  outline-offset: 3px;
+}
+
+.feedback {
+  min-height: 48px;
+  padding-top: 8px;
+  font-size: 12px;
+}
+
+.feedback p {
+  margin: 0;
+}
+
+#connection-error {
+  color: #933f2c;
+}
+
+details {
+  padding-top: 16px;
+  border-top: 1px solid #cbd1c4;
+  color: #566853;
+  font-size: 12px;
+}
+
+summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+details p {
+  margin: 12px 0 0;
+}
+
+code {
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+footer {
+  padding: 16px 24px 24px;
+  color: #566853;
+  text-align: center;
+  font-size: 11px;
+}
+
+@media (max-width: 480px) {
+  .topbar {
+    padding-inline: 24px;
+  }
+
+  main {
+    padding-block: 32px;
+  }
+
+  h1 {
+    font-size: 32px;
+  }
+}

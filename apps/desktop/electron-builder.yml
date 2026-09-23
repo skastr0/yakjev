@@ -1,0 +1,33 @@
+appId: dev.castro.yakjev
+productName: Yakjev
+directories:
+  output: release
+files:
+  - out/**
+  - "!**/*.map"
+  - "!node_modules/**"
+extraMetadata:
+  main: out/main/index.js
+asar: true
+npmRebuild: false
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.productivity
+  identity: "-"
+  hardenedRuntime: false
+  gatekeeperAssess: false
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+linux:
+  target:
+    - AppImage
+  category: Office
+dmg:
+  writeUpdateInfo: false
+publish: null

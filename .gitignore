@@ -15,3 +15,6 @@ coverage/
 .DS_Store
 *.log
 .atlas/
+apps/desktop/out/
+apps/desktop/release/
+apps/desktop/artifacts/

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'"
+    />
+    <meta name="color-scheme" content="light" />
+    <title>Connect to Yakjev</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script src="./connection.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="brand">yakjev</span>
+      <span class="eyebrow">DESKTOP</span>
+    </header>
+    <main>
+      <section class="connection" aria-labelledby="connection-title">
+        <div class="graph-mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <h1 id="connection-title">Connect your workspace.</h1>
+        <p class="introduction">
+          Open your Yakjev graph here, with everything in its place.
+        </p>
+        <form id="connection-form">
+          <label for="server-origin">Server address</label>
+          <input
+            id="server-origin"
+            name="origin"
+            type="url"
+            placeholder="https://your-yakjev.up.railway.app"
+            aria-describedby="origin-hint"
+            autocomplete="url"
+            autocapitalize="none"
+            spellcheck="false"
+            required
+            autofocus
+          />
+          <p id="origin-hint" class="hint">
+            Enter your server’s HTTPS address, without a path. You’ll sign in on
+            the next screen.
+          </p>
+          <button id="connect-button" type="submit" disabled>
+            Open Yakjev <span aria-hidden="true">→</span>
+          </button>
+          <div class="feedback">
+            <p id="connection-status" role="status"></p>
+            <p id="connection-error" role="alert" hidden></p>
+          </div>
+        </form>
+        <details>
+          <summary>Using a local server?</summary>
+          <p>
+            Local addresses can use HTTP, such as
+            <code>http://127.0.0.1:5173</code>.
+          </p>
+        </details>
+      </section>
+    </main>
+    <footer>Your graph stays on your Yakjev server.</footer>
+  </body>
+</html>
