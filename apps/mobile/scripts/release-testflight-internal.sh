@@ -169,7 +169,10 @@ with zipfile.ZipFile(path) as archive:
         raise SystemExit('IPA has no primary app icon declaration')
     if prefix + 'Assets.car' not in names and not any(name.startswith(prefix + 'AppIcon') and name.endswith('.png') for name in names):
         raise SystemExit('IPA is missing app icon assets')
-    shaders = [name for name in names if name.startswith(prefix) and (name.endswith('/YakjevGraphShaders.bundle/Graph.metal') or name == prefix + 'default.metallib')]
+    shaders = [name for name in names if name.startswith(prefix) and name.endswith((
+        '/YakjevGraphShaders.bundle/Graph.metal',
+        '/YakjevGraphShaders.bundle/default.metallib',
+    ))]
     if not shaders or not any(archive.getinfo(name).file_size > 0 for name in shaders):
         raise SystemExit('IPA is missing the native graph shader resource')
 with open(path, 'rb') as source:
@@ -222,8 +225,16 @@ jq -e --arg id "$GROUP_ID" '.data | any(.id == $id)' <<<"$groups" >/dev/null || 
 
 asc_cli builds add-groups --build-id "$BUILD_ID" --group "$GROUP_ID" --output table
 if [[ "$SEND_INVITE" -eq 1 ]]; then
-  # ASC invite creates a missing tester when a group is supplied. Let real
-  # errors fail; a successful upload alone is not a successful invitation.
+  # ASC 2.7 invite only applies --group when creating a missing tester. An
+  # existing app tester must be assigned explicitly before sending the invite.
+  app_testers="$(asc_cli testflight testers list --app "$APP_ID" \
+    --email "$INVITE_EMAIL" --paginate --output json)"
+  TESTER_ID="$(jq -r --arg email "$INVITE_EMAIL" '[.data[] | select((.attributes.email | ascii_downcase) == ($email | ascii_downcase))] | if length > 1 then error("Duplicate tester email") else .[0].id // empty end' <<<"$app_testers")"
+  if [[ -n "$TESTER_ID" ]]; then
+    asc_cli testflight testers add-groups --id "$TESTER_ID" \
+      --group "$GROUP_ID" --output table
+  fi
+  # Let real errors fail; uploading alone is not a successful invitation.
   asc_cli testflight testers invite --app "$APP_ID" --email "$INVITE_EMAIL" \
     --group "$GROUP_ID" --output table
   testers="$(asc_cli testflight testers list --app "$APP_ID" --group "$GROUP_ID" \
