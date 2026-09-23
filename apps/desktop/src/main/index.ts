@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { app, dialog, protocol } from "electron";
 import { Effect, Layer, ManagedRuntime } from "effect";
@@ -19,8 +19,11 @@ async function boot() {
   if (userData) {
     if (!isAbsolute(userData))
       throw new Error("YAKJEV_DESKTOP_USER_DATA must be an absolute path.");
-    await mkdir(userData, { recursive: true, mode: 0o700 });
+    // Electron may initialize Chromium during the first await. Set both paths
+    // before yielding; this small bootstrap operation never runs interactively.
+    mkdirSync(join(userData, "chromium"), { recursive: true, mode: 0o700 });
     app.setPath("userData", userData);
+    app.setPath("sessionData", join(userData, "chromium"));
   }
   if (!app.requestSingleInstanceLock()) {
     app.quit();

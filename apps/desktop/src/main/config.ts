@@ -54,6 +54,22 @@ export function assetName(pathname: string): string | undefined {
 export const isApiPath = (pathname: string) =>
   pathname.startsWith("/api/") || pathname === "/healthz";
 
+export function externalUrl(value: string): string | undefined {
+  if (value.length > 8192) return undefined;
+  try {
+    const url = new URL(value);
+    if (
+      !["https:", "http:"].includes(url.protocol) ||
+      url.username ||
+      url.password
+    )
+      return undefined;
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
 export function rendererPolicy(development: boolean): string {
   return [
     "default-src 'self'",

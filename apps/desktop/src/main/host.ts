@@ -1,12 +1,12 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  app,
   BrowserWindow,
   dialog,
   ipcMain,
   Menu,
   session,
+  shell,
   type Session,
   type MenuItemConstructorOptions,
 } from "electron";
@@ -14,6 +14,7 @@ import { Context, Effect, Layer, Semaphore } from "effect";
 import {
   decodeOrigin,
   DesktopError,
+  externalUrl,
   rendererPolicy,
   sessionPartition,
 } from "./config";
@@ -44,7 +45,7 @@ export class DesktopHost extends Context.Service<
         const settings = yield* Settings;
         const changes = yield* Semaphore.make(1);
         const shutdown = new AbortController();
-        const sessions = new Set<Session>();
+        const sessions = new Map<Session, readonly string[]>();
         let workbench: BrowserWindow | undefined;
         let connection: BrowserWindow | undefined;
         let activeOrigin: string | undefined;
@@ -61,8 +62,16 @@ export class DesktopHost extends Context.Service<
         const launch = (program: Effect.Effect<void, DesktopError>) => {
           void options.run(program).catch(report);
         };
-        const protect = (window: BrowserWindow, allowed: string) => {
-          window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+        const protect = (
+          window: BrowserWindow,
+          allowed: string,
+          sources = false,
+        ) => {
+          window.webContents.setWindowOpenHandler(({ url }) => {
+            const target = sources ? externalUrl(url) : undefined;
+            if (target) void shell.openExternal(target).catch(report);
+            return { action: "deny" };
+          });
           window.webContents.on("will-attach-webview", (event) =>
             event.preventDefault(),
           );
@@ -109,10 +118,8 @@ export class DesktopHost extends Context.Service<
             ipcMain.removeHandler(CONNECT_CHANNEL);
             if (connection && !connection.isDestroyed()) connection.destroy();
             if (workbench && !workbench.isDestroyed()) workbench.destroy();
-            for (const client of sessions) {
-              for (const scheme of ["http", "https", "yakjev"])
-                if (client.protocol.isProtocolHandled(scheme))
-                  client.protocol.unhandle(scheme);
+            for (const [client, schemes] of sessions) {
+              for (const scheme of schemes) client.protocol.unhandle(scheme);
               await client.cookies.flushStore();
               await client.closeAllConnections();
             }
@@ -121,7 +128,7 @@ export class DesktopHost extends Context.Service<
         );
 
         const setupSession = session.fromPartition("yakjev-connection");
-        sessions.add(setupSession);
+        sessions.set(setupSession, ["yakjev"]);
         secureSession(setupSession);
         setupSession.protocol.handle("yakjev", async (request) => {
           const url = new URL(request.url);
@@ -193,7 +200,7 @@ export class DesktopHost extends Context.Service<
             sessionPartition(origin, !!options.developmentUrl),
           );
           if (!sessions.has(client)) {
-            sessions.add(client);
+            sessions.set(client, ["http", "https"]);
             secureSession(client);
             for (const scheme of ["http", "https"]) {
               client.protocol.handle(scheme, (request) =>
@@ -237,7 +244,7 @@ export class DesktopHost extends Context.Service<
                   spellcheck: false,
                 },
               });
-              protect(window, origin + "/");
+              protect(window, origin + "/", true);
               const previous = workbench;
               workbench = window;
               window.on("closed", () => {
