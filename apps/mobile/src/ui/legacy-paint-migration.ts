@@ -97,6 +97,8 @@ export class LegacyPaintMigration {
   private running: Promise<void> | null = null;
   private graph: Graph | null = null;
   private blocked = false;
+  private waitingRevision: number | null = null;
+  private readonly waitingColors = new Map<string, string>();
   private disposed = false;
   // A failed disk cleanup must not re-import an acknowledged color after Undo.
   private readonly retired = new Map<string, string>();
@@ -156,13 +158,23 @@ export class LegacyPaintMigration {
   migrate = (
     graph: Graph,
     execute: PaintMigrationExecute,
+    getGraph: () => Graph | null,
     retry = false,
   ): Promise<void> => {
     if (this.disposed) return Promise.resolve();
-    this.graph = graph;
+    this.graph = getGraph();
+    if (!this.graph) return Promise.resolve();
     if (this.running) return this.running;
-    if (retry) this.blocked = false;
-    const result = this.run(execute);
+    if (
+      retry ||
+      (this.waitingRevision !== null &&
+        this.graph.revision > this.waitingRevision)
+    ) {
+      this.blocked = false;
+      this.waitingRevision = null;
+      this.waitingColors.clear();
+    }
+    const result = this.run(execute, getGraph);
     this.running = result;
     void result.finally(() => {
       if (this.running === result) this.running = null;
@@ -170,10 +182,15 @@ export class LegacyPaintMigration {
     return result;
   };
 
-  private async run(execute: PaintMigrationExecute) {
+  private async run(
+    execute: PaintMigrationExecute,
+    getGraph: () => Graph | null,
+  ) {
+    const attempted = new Set<string>();
     try {
-      while (!this.disposed && this.graph) {
-        const graph = this.graph;
+      while (!this.disposed) {
+        const graph = getGraph();
+        if (!graph) return;
         const legacy = (await this.storage.read()).paint;
         if (this.disposed) return;
         const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
@@ -190,27 +207,72 @@ export class LegacyPaintMigration {
           return;
         }
         const remaining = (await this.storage.read()).paint;
-        const command = legacyPaintCommand(graph, remaining);
+        for (const [id, color] of this.waitingColors)
+          if (remaining[id] !== color) this.waitingColors.delete(id);
+        const eligible = Object.fromEntries(
+          Object.entries(remaining).filter(
+            ([id, color]) =>
+              !attempted.has(id) && this.waitingColors.get(id) !== color,
+          ),
+        );
+        const command = legacyPaintCommand(graph, eligible);
         if (this.disposed) return;
         if (!command) {
-          this.blocked = false;
+          this.blocked = this.waitingColors.size > 0;
+          if (!this.blocked) this.waitingRevision = null;
+          this.publish({
+            pending: Object.keys(remaining).length > 0,
+            error: this.blocked
+              ? "Some existing colors are waiting for current graph data. Reconnect or retry colors."
+              : null,
+          });
           return;
         }
         if (this.blocked) return;
+        for (const { id } of command.colors) attempted.add(id);
         const acknowledgement: { cleanup: Promise<boolean> | null } = {
           cleanup: null,
         };
         const acknowledge = () => {
           if (acknowledgement.cleanup) return;
+          const canonical = getGraph();
+          const nodes = new Map(
+            canonical?.nodes.map((node) => [node.id, node]),
+          );
+          const resolved = command.colors.filter(
+            ({ id }) => nodes.get(id)?.color !== undefined,
+          );
+          const unresolved = resolved.length !== command.colors.length;
+          for (const { id } of command.colors) {
+            if (nodes.get(id)?.color === undefined)
+              this.waitingColors.set(id, remaining[id]!);
+            else this.waitingColors.delete(id);
+          }
           this.blocked = false;
+          if (unresolved)
+            this.waitingRevision = Math.max(
+              this.waitingRevision ?? 0,
+              graph.revision,
+              canonical?.revision ?? graph.revision,
+            );
+          if (unresolved)
+            this.publish({
+              pending: true,
+              error:
+                "Some existing colors are waiting for current graph data. Reconnect or retry colors.",
+            });
           // Even a late receipt can retire exact entries in this captured old
           // server file. It never updates a replacement session or sends work.
           acknowledgement.cleanup = this.retire(
-            Object.fromEntries(
-              command.colors.map(({ id }) => [id, remaining[id]!]),
-            ),
+            Object.fromEntries(resolved.map(({ id }) => [id, remaining[id]!])),
           ).then((cleaned) => {
             this.blocked = !cleaned;
+            if (cleaned && this.waitingColors.size > 0)
+              this.publish({
+                pending: true,
+                error:
+                  "Some existing colors are waiting for current graph data. Reconnect or retry colors.",
+              });
             return cleaned;
           });
         };

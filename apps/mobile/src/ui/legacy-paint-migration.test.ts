@@ -56,6 +56,47 @@ async function until(predicate: () => boolean) {
   }
   throw new Error("Expected asynchronous state did not arrive");
 }
+
+// Successful fixture commands include the authoritative refresh that normally
+// completes GraphSession.execute before it invokes the saved callback.
+function confirmedRun(
+  migration: LegacyPaintMigration,
+  initial: Graph,
+  execute: PaintMigrationExecute,
+  retry = false,
+) {
+  let current = initial;
+  return migration.migrate(
+    initial,
+    async (command, acknowledge) => {
+      let applied = false;
+      const confirm = () => {
+        if (!applied && command.type === "node.paint") {
+          applied = true;
+          const colors = new Map(
+            command.colors.map((entry) => [entry.id, entry.color]),
+          );
+          current = {
+            ...current,
+            revision: current.revision + 1,
+            nodes: current.nodes.map((node) =>
+              colors.has(node.id) &&
+              (!command.onlyIfUnset || node.color === undefined)
+                ? { ...node, color: colors.get(node.id)! }
+                : node,
+            ),
+          };
+        }
+        acknowledge();
+      };
+      const saved = await execute(command, confirm);
+      if (saved) confirm();
+      return saved;
+    },
+    () => current,
+    retry,
+  );
+}
 function harness(paint: Record<string, string>, connectWhileDragging = false) {
   let stored: DisplayPreferences = { paint, connectWhileDragging };
   let failedWrite = false;
@@ -73,6 +114,8 @@ function harness(paint: Record<string, string>, connectWhileDragging = false) {
   );
   return {
     migration,
+    run: (current: Graph, execute: PaintMigrationExecute, retry = false) =>
+      confirmedRun(migration, current, execute, retry),
     storage,
     notifications,
     read: () => stored,
@@ -86,13 +129,150 @@ function harness(paint: Record<string, string>, connectWhileDragging = false) {
 }
 
 describe("mobile legacy color migration", () => {
+  test("an acknowledged missing node retains its color until the node is restored", async () => {
+    const h = harness({ n: "#112233" });
+    let current = graph([node("n")]);
+    let sends = 0;
+    const missing: PaintMigrationExecute = async () => {
+      sends++;
+      current = graph([], 2);
+      return true;
+    };
+    await h.migration.migrate(current, missing, () => current);
+    expect(sends).toBe(1);
+    expect(h.read().paint).toEqual({ n: "#112233" });
+    await h.migration.migrate(current, missing, () => current);
+    expect(sends).toBe(1);
+    current = graph([node("n")], 3);
+    await h.migration.migrate(
+      current,
+      async () => {
+        sends++;
+        current = graph([node("n", "#112233")], 4);
+        return true;
+      },
+      () => current,
+    );
+    expect(sends).toBe(2);
+    expect(h.read().paint).toEqual({});
+  });
+
+  test("an ACK with an unchanged snapshot sends at most once until explicit retry", async () => {
+    const h = harness({ n: "#112233" });
+    let current = graph([node("n")]);
+    let sends = 0;
+    const stale: PaintMigrationExecute = async () => {
+      sends++;
+      return true;
+    };
+    await h.migration.migrate(current, stale, () => current);
+    await h.migration.migrate(current, stale, () => current);
+    expect(sends).toBe(1);
+    expect(h.read().paint).toEqual({ n: "#112233" });
+    expect(h.migration.getState().error).toContain(
+      "waiting for current graph data",
+    );
+    await h.migration.migrate(
+      current,
+      async () => {
+        sends++;
+        current = graph([node("n", "#112233")], 2);
+        return true;
+      },
+      () => current,
+      true,
+    );
+    expect(sends).toBe(2);
+    expect(h.read().paint).toEqual({});
+  });
+
+  test("a skipped color in the first batch does not block the 101st live color", async () => {
+    const nodes = Array.from({ length: 101 }, (_, index) => node(`n${index}`));
+    const h = harness(
+      Object.fromEntries(nodes.map((value) => [value.id, "#112233"])),
+    );
+    let current = graph(nodes);
+    const sizes: number[] = [];
+    await h.migration.migrate(
+      current,
+      async (command) => {
+        if (command.type !== "node.paint") return false;
+        sizes.push(command.colors.length);
+        const ids = new Set(command.colors.map((entry) => entry.id));
+        current = graph(
+          current.nodes
+            .filter((node) => node.id !== "n0")
+            .map((node) =>
+              ids.has(node.id) ? { ...node, color: "#112233" } : node,
+            ),
+          current.revision + 1,
+        );
+        return true;
+      },
+      () => current,
+    );
+    expect(sizes).toEqual([100, 1]);
+    expect(h.read().paint).toEqual({ n0: "#112233" });
+    expect(current.nodes.find((node) => node.id === "n100")?.color).toBe(
+      "#112233",
+    );
+  });
+
+  test("canonical null after an acknowledged import resolves the legacy value", async () => {
+    const h = harness({ n: "#112233" });
+    let current = graph([node("n")]);
+    await h.migration.migrate(
+      current,
+      async () => {
+        current = graph([node("n", null)], 3);
+        return true;
+      },
+      () => current,
+    );
+    expect(h.read().paint).toEqual({});
+    expect(h.migration.getState()).toEqual({ pending: false, error: null });
+  });
+
+  test("a late acknowledgement uses the captured old-session getter, never a replacement graph", async () => {
+    const h = harness({ n: "#112233" });
+    let oldGraph: Graph | null = graph([node("n")]);
+    const save = deferred<boolean>();
+    let sent = false;
+    const running = h.migration.migrate(
+      oldGraph,
+      async () => {
+        sent = true;
+        return save.promise;
+      },
+      () => oldGraph,
+    );
+    await until(() => sent);
+    oldGraph = null;
+    h.migration.dispose();
+    const notifications = h.notifications.length;
+    const replacement = graph([node("n", "#abcdef")], 2);
+    save.resolve(true);
+    await running;
+    expect(h.notifications).toHaveLength(notifications);
+    expect(h.read().paint).toEqual({ n: "#112233" });
+    const next = new LegacyPaintMigration(h.storage);
+    await next.migrate(
+      replacement,
+      async () => {
+        throw new Error("Resolved color must not send");
+      },
+      () => replacement,
+    );
+    expect(h.read().paint).toEqual({});
+  });
+
   test("imports live unset colors in bounded batches and retires only acknowledged keys", async () => {
     const nodes = Array.from({ length: 235 }, (_, index) => node(`n${index}`));
     const h = harness(
       Object.fromEntries(nodes.map((value) => [value.id, "#Ab12Cd"])),
     );
     const sent: Command[] = [];
-    await h.migration.migrate(graph(nodes), async (command, acknowledge) => {
+    await h.run(graph(nodes), async (command, acknowledge) => {
       expect(Object.keys(h.read().paint).length).toBe(235 - sent.length * 100);
       sent.push(command);
       acknowledge();
@@ -122,7 +302,7 @@ describe("mobile legacy color migration", () => {
       absent: "#778899",
     });
     let calls = 0;
-    await h.migration.migrate(
+    await h.run(
       graph([node("colored", "#abcdef"), node("cleared", null)]),
       async () => {
         calls++;
@@ -140,12 +320,12 @@ describe("mobile legacy color migration", () => {
       calls++;
       return true;
     };
-    await h.migration.migrate(graph([]), execute);
-    await h.migration.migrate(graph([], 2), execute);
+    await h.run(graph([]), execute);
+    await h.run(graph([], 2), execute);
     expect(calls).toBe(0);
     expect(h.read().paint).toEqual({ later: "#112233" });
     expect(h.migration.getState()).toEqual({ pending: true, error: null });
-    await h.migration.migrate(graph([node("later")], 3), execute);
+    await h.run(graph([node("later")], 3), execute);
     expect(calls).toBe(1);
     expect(h.read().paint).toEqual({});
   });
@@ -157,15 +337,15 @@ describe("mobile legacy color migration", () => {
       calls++;
       return false;
     };
-    await h.migration.migrate(graph([node("n")]), reject);
+    await h.run(graph([node("n")]), reject);
     const error = h.migration.getState().error;
     expect(error).not.toBeNull();
-    await h.migration.migrate(graph([node("n")], 2), reject);
-    await h.migration.migrate(graph([node("n"), node("unrelated")], 3), reject);
+    await h.run(graph([node("n")], 2), reject);
+    await h.run(graph([node("n"), node("unrelated")], 3), reject);
     expect(calls).toBe(1);
     expect(h.migration.getState()).toEqual({ pending: true, error });
     expect(h.read().paint).toEqual({ n: "#112233" });
-    await h.migration.migrate(
+    await h.run(
       graph([node("n")], 3),
       async () => {
         calls++;
@@ -181,7 +361,7 @@ describe("mobile legacy color migration", () => {
     const h = harness({ n: "#112233" });
     let acknowledge!: () => void;
     let calls = 0;
-    await h.migration.migrate(graph([node("n")]), async (_, saved) => {
+    await h.run(graph([node("n")]), async (_, saved) => {
       acknowledge = saved;
       calls++;
       return false;
@@ -191,7 +371,7 @@ describe("mobile legacy color migration", () => {
     await h.storage.read();
     expect(h.read().paint).toEqual({});
     // An Undo restoring absent color cannot resurrect the retired local value.
-    await h.migration.migrate(graph([node("n")], 3), async () => {
+    await h.run(graph([node("n")], 3), async () => {
       calls++;
       return true;
     });
@@ -202,20 +382,20 @@ describe("mobile legacy color migration", () => {
   test("failed retirement never reimports on Undo and can be retried without another command", async () => {
     const h = harness({ n: "#112233" });
     let calls = 0;
-    await h.migration.migrate(graph([node("n")]), async () => {
+    await h.run(graph([node("n")]), async () => {
       calls++;
       h.failWrites(true);
       return true;
     });
     expect(h.migration.getState().error).toContain("cleanup needs a retry");
-    await h.migration.migrate(graph([node("n")], 3), async () => {
+    await h.run(graph([node("n")], 3), async () => {
       calls++;
       return true;
     });
     expect(calls).toBe(1);
     expect(h.read().paint).toEqual({ n: "#112233" });
     h.failWrites(false);
-    await h.migration.migrate(
+    await h.run(
       graph([node("n")], 3),
       async () => {
         calls++;
@@ -235,7 +415,7 @@ describe("mobile legacy color migration", () => {
     const replacement = harness({ other: "#445566" }, true);
     const save = deferred<boolean>();
     let calls = 0;
-    const running = old.migration.migrate(graph(nodes), async () => {
+    const running = old.run(graph(nodes), async () => {
       calls++;
       return save.promise;
     });
@@ -251,7 +431,7 @@ describe("mobile legacy color migration", () => {
       paint: { other: "#445566" },
       connectWhileDragging: true,
     });
-    await old.migration.migrate(
+    await old.run(
       graph(nodes),
       async () => {
         calls++;
@@ -266,7 +446,7 @@ describe("mobile legacy color migration", () => {
     const h = harness({ n: "#112233" });
     const save = deferred<boolean>();
     let sent = false;
-    const running = h.migration.migrate(graph([node("n")]), async () => {
+    const running = h.run(graph([node("n")]), async () => {
       sent = true;
       return save.promise;
     });
@@ -292,8 +472,8 @@ describe("mobile legacy color migration", () => {
       calls++;
       return save.promise;
     };
-    const first = h.migration.migrate(graph([node("n")]), execute);
-    const second = h.migration.migrate(graph([node("n")]), execute);
+    const first = h.run(graph([node("n")]), execute);
+    const second = h.run(graph([node("n")]), execute);
     expect(first).toBe(second);
     await until(() => calls === 1);
     expect(calls).toBe(1);
@@ -309,8 +489,8 @@ describe("mobile legacy color migration", () => {
       calls++;
       return false;
     };
-    await h.migration.migrate(graph([node("n")]), execute);
-    await h.migration.migrate(graph([node("n", null)], 2), execute);
+    await h.run(graph([node("n")]), execute);
+    await h.run(graph([node("n", null)], 2), execute);
     expect(calls).toBe(1);
     expect(h.read().paint).toEqual({});
     expect(h.migration.getState()).toEqual({ pending: false, error: null });
@@ -336,7 +516,8 @@ describe("mobile legacy color migration", () => {
     };
     const storage = createPreferencesStorage(file);
     const migration = new LegacyPaintMigration(storage);
-    const running = migration.migrate(
+    const running = confirmedRun(
+      migration,
       graph([node("acknowledged")]),
       async () => true,
     );
@@ -352,7 +533,8 @@ describe("mobile legacy color migration", () => {
     fail = false;
     const restarted = new LegacyPaintMigration(createPreferencesStorage(file));
     const sent: Command[] = [];
-    await restarted.migrate(
+    await confirmedRun(
+      restarted,
       graph([node("acknowledged", null), node("pending")], 3),
       async (command) => {
         sent.push(command);
@@ -388,7 +570,11 @@ describe("mobile legacy color migration", () => {
     const oldStorage = createPreferencesStorage(file);
     const newStorage = createPreferencesStorage(file);
     const migration = new LegacyPaintMigration(oldStorage);
-    const running = migration.migrate(graph([node("n")]), async () => true);
+    const running = confirmedRun(
+      migration,
+      graph([node("n")]),
+      async () => true,
+    );
     await until(() => writes === 1);
     migration.dispose();
     const toggled = updateDraggingPreference(newStorage, true);
@@ -428,7 +614,7 @@ describe("mobile legacy color migration", () => {
     );
     await until(() => writes === 1);
     const migration = new LegacyPaintMigration(createPreferencesStorage(file));
-    const running = migration.migrate(graph([node("n")]), async () => {
+    const running = confirmedRun(migration, graph([node("n")]), async () => {
       sends++;
       return true;
     });
@@ -462,17 +648,21 @@ describe("mobile legacy color migration", () => {
     const migration = new LegacyPaintMigration(storage);
     let acknowledge!: () => void;
     let sends = 0;
-    await migration.migrate(graph([node("n")]), async (_, saved) => {
+    await confirmedRun(migration, graph([node("n")]), async (_, saved) => {
       sends++;
       acknowledge = saved;
       return false;
     });
     acknowledge();
     await until(() => writes === 1);
-    const undoSnapshot = migration.migrate(graph([node("n")], 3), async () => {
-      sends++;
-      return true;
-    });
+    const undoSnapshot = confirmedRun(
+      migration,
+      graph([node("n")], 3),
+      async () => {
+        sends++;
+        return true;
+      },
+    );
     await Bun.sleep(1);
     expect(sends).toBe(1);
     gate.resolve();
@@ -507,7 +697,7 @@ describe("mobile legacy color migration", () => {
       update: storage.update,
     });
     const sent: Command[] = [];
-    await migration.migrate(graph([node("n")]), async (command) => {
+    await confirmedRun(migration, graph([node("n")]), async (command) => {
       sent.push(command);
       if (sent.length > 1)
         throw new Error("A stale retirement resubmitted the new value");

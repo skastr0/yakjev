@@ -151,16 +151,24 @@ export function usePreferences(server: string, client: unknown) {
   );
 
   const migrateColors = useCallback(
-    (graph: Graph, execute: PaintMigrationExecute) =>
+    (
+      graph: Graph,
+      execute: PaintMigrationExecute,
+      getGraph: () => Graph | null,
+    ) =>
       scope.active && scope.migration
-        ? scope.migration.migrate(graph, execute)
+        ? scope.migration.migrate(graph, execute, getGraph)
         : Promise.resolve(),
     [scope],
   );
   const retryColors = useCallback(
-    (graph: Graph, execute: PaintMigrationExecute) =>
+    (
+      graph: Graph,
+      execute: PaintMigrationExecute,
+      getGraph: () => Graph | null,
+    ) =>
       scope.active && scope.migration
-        ? scope.migration.migrate(graph, execute, true)
+        ? scope.migration.migrate(graph, execute, getGraph, true)
         : Promise.resolve(),
     [scope],
   );
