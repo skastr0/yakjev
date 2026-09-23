@@ -120,6 +120,7 @@ function Workspace({
     [graph, archived],
   );
   const seeded = useRef(new Set<string>());
+  const fittedInitialLayout = useRef(false);
   const onRetrySaved = useRef<(() => void) | null>(null);
   const execute = useCallback<Execute>(
     async (command, onSaved) => {
@@ -167,6 +168,19 @@ function Workspace({
     () => new Map(placed.map((point) => [point.id, point])),
     [placed],
   );
+
+  // The snapshot can arrive before the saved layout. Fit once after both
+  // initial reads complete; subsequent reconnects preserve the owner's camera.
+  useEffect(() => {
+    if (
+      fittedInitialLayout.current ||
+      state.connection !== "live" ||
+      !view?.nodes.length
+    )
+      return;
+    fittedInitialLayout.current = true;
+    setFit((value) => value + 1);
+  }, [state.connection, view?.nodes.length]);
 
   // Wait for the layout read to complete before persisting missing positions.
   // Existing web coordinates keep their original scale and position.
