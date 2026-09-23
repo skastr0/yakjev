@@ -1,4 +1,11 @@
-import type { Command, Edge, Node, Taxonomy } from "@yakjev/protocol";
+import {
+  PAINT_BATCH_MAX,
+  type Command,
+  type Edge,
+  type Graph,
+  type Node,
+  type Taxonomy,
+} from "@yakjev/protocol";
 import { randomUUID, type RandomUUID } from "./id";
 
 export function captureIntention(
@@ -190,4 +197,38 @@ export function addRelation(taxonomy: Taxonomy, label: string): Command {
       },
     ],
   };
+}
+
+// Cosmetic edits use their own command: retrying one never resends stale titles
+// or other node fields, and the server retains its normal revision/undo rules.
+export function paintNode(
+  id: string,
+  color: string | null,
+): Extract<Command, { type: "node.paint" }> {
+  if (color !== null && !/^#[0-9a-fA-F]{6}$/.test(color)) {
+    throw new Error("Node color must be a six-digit hex color or null");
+  }
+  return {
+    type: "node.paint",
+    colors: [{ id, color: color?.toLowerCase() ?? null }],
+  };
+}
+
+// Import a bounded batch from the previous client-local storage. The server
+// repeats the unset check atomically, so another device's newer choice wins.
+export function legacyPaintCommand(
+  graph: Graph,
+  local: Readonly<Record<string, string>>,
+): Extract<Command, { type: "node.paint" }> | null {
+  const colors: Array<{ id: string; color: string }> = [];
+  for (const node of graph.nodes) {
+    if (node.color !== undefined || !Object.hasOwn(local, node.id)) continue;
+    const color = local[node.id];
+    if (typeof color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(color)) continue;
+    colors.push({ id: node.id, color: color.toLowerCase() });
+    if (colors.length === PAINT_BATCH_MAX) break;
+  }
+  return colors.length > 0
+    ? { type: "node.paint", colors, onlyIfUnset: true }
+    : null;
 }

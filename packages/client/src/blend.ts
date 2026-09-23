@@ -174,22 +174,27 @@ export function displayColor(
   ]);
 }
 
-export function blendedColors(
-  graph: Graph,
-  chosen: Readonly<Record<string, string>>,
-): { nodes: Map<string, string>; edges: Map<string, string> } {
+export function blendedColors(graph: Graph): {
+  nodes: Map<string, string>;
+  edges: Map<string, string>;
+} {
   const base = new Map(
-    graph.nodes.map((node) => [
-      node.id,
-      chosen[node.id] ?? nodeColor(node.status),
-    ]),
+    graph.nodes.map((node) => [node.id, node.color ?? nodeColor(node.status)]),
   );
   const neighbors = new Map<string, string[]>();
   const touch = (source: string, target: string) => {
     const other = base.get(target);
     const self = base.get(source);
-    if (other) neighbors.set(source, [...(neighbors.get(source) ?? []), other]);
-    if (self) neighbors.set(target, [...(neighbors.get(target) ?? []), self]);
+    if (other) {
+      const colors = neighbors.get(source);
+      if (colors) colors.push(other);
+      else neighbors.set(source, [other]);
+    }
+    if (self) {
+      const colors = neighbors.get(target);
+      if (colors) colors.push(self);
+      else neighbors.set(target, [self]);
+    }
   };
   for (const edge of graph.edges) touch(edge.source, edge.target);
   for (const suggestion of graph.suggestions)
@@ -200,10 +205,7 @@ export function blendedColors(
   for (const node of graph.nodes)
     nodes.set(
       node.id,
-      displayColor(
-        chosen[node.id] ?? base.get(node.id),
-        neighbors.get(node.id) ?? [],
-      ),
+      displayColor(base.get(node.id), neighbors.get(node.id) ?? []),
     );
 
   const edges = new Map<string, string>();

@@ -66,6 +66,22 @@ export function applyOptimistic(graph: Graph, command: Command): Graph {
           : [...graph.nodes, node],
       };
     }
+    case "node.paint": {
+      const colors = new Map(
+        command.colors.map((entry) => [entry.id, entry.color]),
+      );
+      return {
+        ...graph,
+        nodes: graph.nodes.map((node) => {
+          if (
+            !colors.has(node.id) ||
+            (command.onlyIfUnset && node.color !== undefined)
+          )
+            return node;
+          return { ...node, color: colors.get(node.id)?.toLowerCase() ?? null };
+        }),
+      };
+    }
     case "node.remove": {
       const removed = new Set(command.ids);
       return {
