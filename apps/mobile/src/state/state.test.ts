@@ -437,6 +437,101 @@ describe("graph session", () => {
       { id: "node", x: 2, y: 2 },
     ]);
   });
+
+  test("resume automatically saves the newest retained position after aborting a PUT", async () => {
+    const h = graphHarness();
+    await start(h);
+    const bodies: string[] = [];
+    h.handlers.set("/api/layout", (init) => {
+      bodies.push(String(init.body));
+      if (bodies.length === 1)
+        return new Promise<Response>((_, reject) => {
+          init.signal!.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      return json({ saved: 1 });
+    });
+    const interrupted = h.session.savePositions([{ id: "node", x: 1, y: 1 }]);
+    h.session.suspend();
+    expect(await interrupted).toBe(false);
+    expect(h.session.getSnapshot().layoutPending).toBe(true);
+    expect(await h.session.savePositions([{ id: "node", x: 42, y: 9 }])).toBe(
+      false,
+    );
+    await start(h);
+    await until(() => !h.session.getSnapshot().layoutPending);
+    expect(bodies).toHaveLength(2);
+    expect(JSON.parse(bodies[1]!).positions).toEqual([
+      { id: "node", x: 42, y: 9 },
+    ]);
+    expect(h.session.getSnapshot().positions).toEqual([
+      { id: "node", x: 42, y: 9 },
+    ]);
+    expect(h.session.getSnapshot().error).toBeNull();
+  });
+
+  test("a failed automatic layout retry stays pending with an actionable error", async () => {
+    const h = graphHarness();
+    await start(h);
+    let writes = 0;
+    h.handlers.set("/api/layout", (init) => {
+      if (++writes === 1)
+        return new Promise<Response>((_, reject) => {
+          init.signal!.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      throw new Error("Temporary layout failure");
+    });
+    const interrupted = h.session.savePositions([{ id: "node", x: 42, y: 9 }]);
+    h.session.suspend();
+    await interrupted;
+    await start(h);
+    await until(
+      () =>
+        h.session
+          .getSnapshot()
+          .error?.startsWith("Positions have not been saved.") === true,
+    );
+    expect(writes).toBe(2);
+    expect(h.session.getSnapshot().layoutPending).toBe(true);
+    h.handlers.set("/api/layout", () => json({ saved: 1 }));
+    expect(await h.session.retryLayout()).toBe(true);
+    expect(h.session.getSnapshot().layoutPending).toBe(false);
+    expect(h.session.getSnapshot().error).toBeNull();
+  });
+
+  test("an older initial layout read cannot overwrite an acknowledged position save", async () => {
+    const h = graphHarness();
+    const initial = deferred<Response>();
+    h.handlers.set("/api/layout", (init) =>
+      init.method === "PUT" ? json({ saved: 1 }) : initial.promise,
+    );
+    h.session.start();
+    await until(() => h.session.getSnapshot().graph !== null);
+    expect(await h.session.savePositions([{ id: "node", x: 42, y: 9 }])).toBe(
+      true,
+    );
+    expect(h.session.getSnapshot().layoutPending).toBe(false);
+    initial.resolve(
+      json({
+        positions: [
+          { id: "node", x: 1, y: 1 },
+          { id: "untouched", x: 8, y: 8 },
+        ],
+      }),
+    );
+    await until(() => h.session.getSnapshot().connection === "live");
+    expect(h.session.getSnapshot().positions).toEqual([
+      { id: "node", x: 42, y: 9 },
+      { id: "untouched", x: 8, y: 8 },
+    ]);
+  });
 });
 
 describe("Jev preview freshness", () => {

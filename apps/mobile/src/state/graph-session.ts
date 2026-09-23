@@ -120,12 +120,18 @@ export class GraphSession {
               const positions = new Map(
                 saved.positions.map((point) => [point.id, point]),
               );
-              for (const [id, point] of this.dirtyPositions)
-                positions.set(id, point);
+              // Until the first read completes, these positions can only be
+              // local edits. Preserve even already-acknowledged PUTs against
+              // an initial GET that began before the owner moved the node.
+              for (const point of this.state.positions)
+                positions.set(point.id, point);
               this.update({ positions: [...positions.values()] });
             }),
       ]);
       if (!this.current(generation)) return;
+      // PUT layout is idempotent. Resume interrupted placement saves after
+      // reads recover, including changes made while an older PUT was pending.
+      if (this.dirtyPositions.size > 0) void this.retryLayout();
       await this.readEvents(generation, signal);
     } catch (cause) {
       if (!this.current(generation)) return;
