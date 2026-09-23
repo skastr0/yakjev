@@ -51,6 +51,11 @@ fail() { printf '[testflight] %s\n' "$*" >&2; exit 1; }
 log() { printf '[testflight] %s\n' "$*" >&2; }
 asc_cli() { asc --profile "$ASC_PROFILE" "$@"; }
 require_value() { [[ $# -ge 2 && -n "$2" ]] || fail "$1 requires a value"; }
+normalize_list() {
+  # ASC 2.7 emits data:null for empty collections. Accept that exact case,
+  # while preserving failures for missing data or malformed response shapes.
+  jq -ce 'if type == "object" and has("data") and (.data == null or (.data | type) == "array") then .data = (.data // []) else error("Malformed ASC list response") end'
+}
 
 # Help must remain usable without credentials or reading private configuration.
 for argument in "$@"; do
@@ -245,13 +250,13 @@ build_app="$(asc_cli builds app view --build-id "$BUILD_ID" --output json)"
 asc_cli builds wait --build-id "$BUILD_ID" --fail-on-invalid --timeout 20m >/dev/null
 
 if [[ -z "$GROUP_ID" ]]; then
-  groups="$(asc_cli testflight groups list --app "$APP_ID" --internal --paginate --output json)"
+  groups="$(asc_cli testflight groups list --app "$APP_ID" --internal --paginate --output json | normalize_list)"
   GROUP_ID="$(jq -r --arg name "$GROUP_NAME" '[.data[] | select(.attributes.name == $name)] | if length > 1 then error("Duplicate internal group names") else .[0].id // empty end' <<<"$groups")"
   if [[ -z "$GROUP_ID" ]]; then
     GROUP_ID="$(asc_cli testflight groups create --app "$APP_ID" --name "$GROUP_NAME" --internal --output json | jq -er '.data.id')"
   fi
 fi
-groups="$(asc_cli testflight groups list --app "$APP_ID" --internal --paginate --output json)"
+groups="$(asc_cli testflight groups list --app "$APP_ID" --internal --paginate --output json | normalize_list)"
 jq -e --arg id "$GROUP_ID" '.data | any(.id == $id)' <<<"$groups" >/dev/null || fail 'Group must be an internal group belonging to this app'
 
 asc_cli builds add-groups --build-id "$BUILD_ID" --group "$GROUP_ID" --output table
@@ -259,7 +264,7 @@ if [[ "$SEND_INVITE" -eq 1 ]]; then
   # ASC 2.7 invite only applies --group when creating a missing tester. An
   # existing app tester must be assigned explicitly before sending the invite.
   app_testers="$(asc_cli testflight testers list --app "$APP_ID" \
-    --email "$INVITE_EMAIL" --paginate --output json)"
+    --email "$INVITE_EMAIL" --paginate --output json | normalize_list)"
   TESTER_ID="$(jq -r --arg email "$INVITE_EMAIL" '[.data[] | select((.attributes.email | ascii_downcase) == ($email | ascii_downcase))] | if length > 1 then error("Duplicate tester email") else .[0].id // empty end' <<<"$app_testers")"
   if [[ -n "$TESTER_ID" ]]; then
     asc_cli testflight testers add-groups --id "$TESTER_ID" \
@@ -269,7 +274,7 @@ if [[ "$SEND_INVITE" -eq 1 ]]; then
   asc_cli testflight testers invite --app "$APP_ID" --email "$INVITE_EMAIL" \
     --group "$GROUP_ID" --output table
   testers="$(asc_cli testflight testers list --app "$APP_ID" --group "$GROUP_ID" \
-    --email "$INVITE_EMAIL" --output json)"
+    --email "$INVITE_EMAIL" --output json | normalize_list)"
   jq -e --arg email "$INVITE_EMAIL" '.data | any((.attributes.email | ascii_downcase) == ($email | ascii_downcase))' <<<"$testers" >/dev/null || fail 'Invited tester is not present in the target group'
 fi
 asc_cli builds build-beta-detail view --build-id "$BUILD_ID" --output table
