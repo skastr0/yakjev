@@ -1,6 +1,7 @@
 appId: dev.castro.yakjev
 productName: Yakjev
 directories:
+  buildResources: build
   output: release
 files:
   - out/**
@@ -11,6 +12,7 @@ extraMetadata:
 asar: true
 npmRebuild: false
 mac:
+  icon: build/icon.icns
   target:
     - dmg
     - zip
@@ -19,12 +21,14 @@ mac:
   hardenedRuntime: false
   gatekeeperAssess: false
 win:
+  icon: build/icon.ico
   target:
     - nsis
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
 linux:
+  icon: build/icon.png
   target:
     - AppImage
   category: Office
