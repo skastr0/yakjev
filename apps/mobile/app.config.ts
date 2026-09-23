@@ -11,6 +11,8 @@ const config: ExpoConfig = {
   platforms: ["ios"],
   ios: {
     bundleIdentifier: "engineer.castro.yakjev",
+    appleTeamId: "<APPLE_TEAM_ID>",
+    buildNumber: process.env.YAKJEV_IOS_BUILD_NUMBER ?? "1",
     supportsTablet: true,
     config: { usesNonExemptEncryption: false },
     infoPlist: {
