@@ -345,7 +345,13 @@ test("paint and its undo preserve content provenance and pending Jev judgments",
   expect(painted.edges).toEqual(before.edges);
   expect(painted.suggestions).toEqual(before.suggestions);
   await send({ type: "undo", revision: 3 });
-  expect(await run(store.read)).toEqual({ ...before, revision: 4 });
+  expect(await run(store.read)).toEqual({
+    ...before,
+    revision: 4,
+    nodes: before.nodes.map((node) =>
+      node.id === "a" || node.id === "b" ? { ...node, color: null } : node,
+    ),
+  });
   await send({ type: "undo", revision: 4 });
   expect(await run(store.read)).toEqual({ ...painted, revision: 5 });
   await expect(send({ type: "undo", revision: 3 })).rejects.toMatchObject({
@@ -363,6 +369,58 @@ test("paint and its undo preserve content provenance and pending Jev judgments",
     true,
   );
   expect(restored.suggestions[0]?.status).toBe("superseded");
+});
+
+test("paint undo durably blocks another client's stale import, including after undo-of-undo", async () => {
+  for (const [onlyIfUnset, repeatedUndo] of [
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ] as const) {
+    const { store, run, send, runtime, open } = await fixture();
+    await send(capture);
+    const before = await run(store.read);
+    await send({
+      type: "node.paint",
+      colors: [{ id: "a", color: "#aa0000" }],
+      onlyIfUnset,
+    });
+    await send({ type: "undo", revision: 2 });
+    expect((await run(store.read)).nodes[0]?.color).toBeNull();
+    if (repeatedUndo) {
+      await send({ type: "undo", revision: 3 });
+      expect((await run(store.read)).nodes[0]?.color).toBe("#aa0000");
+      await send({ type: "undo", revision: 4 });
+      expect((await run(store.read)).nodes[0]?.color).toBeNull();
+    }
+    await runtime.dispose();
+    const reopened = await open();
+    await reopened.run(
+      reopened.store.execute(
+        { id: "unmigrated-client", channel: "browser" },
+        {
+          requestId: "stale-local-paint",
+          expectedRevision: repeatedUndo ? 5 : 3,
+          command: {
+            type: "node.paint",
+            onlyIfUnset: true,
+            colors: [
+              { id: "a", color: "#0000bb" },
+              { id: "b", color: "#00cc00" },
+            ],
+          },
+        },
+      ),
+    );
+    const migrated = await reopened.run(reopened.store.read);
+    expect(migrated.nodes[0]?.color).toBeNull();
+    expect(migrated.nodes[1]?.color).toBe("#00cc00");
+    expect(migrated.nodes[2]).not.toHaveProperty("color");
+    expect(migrated.nodes.map(({ updated }) => updated)).toEqual(
+      before.nodes.map(({ updated }) => updated),
+    );
+  }
 });
 
 test("paint journal failures roll back color and revision together", async () => {

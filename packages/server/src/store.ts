@@ -263,7 +263,22 @@ export class Store extends Context.Service<Store>()("@yakjev/Store", {
                 };
               // Semantic restores are new edits. Undoing paint (including an
               // undo of that undo) preserves the same content freshness.
-              if (!cosmeticUndo) {
+              if (cosmeticUndo) {
+                const currentColors = new Map(
+                  before.nodes.map((node) => [node.id, node.color]),
+                );
+                after = {
+                  ...after,
+                  // Undo is a deliberate return to status color. Retain that
+                  // choice so another client's stale import cannot repaint it.
+                  nodes: after.nodes.map((node) =>
+                    node.color === undefined &&
+                    currentColors.get(node.id) !== undefined
+                      ? { ...node, color: null }
+                      : node,
+                  ),
+                };
+              } else {
                 after = {
                   ...after,
                   nodes: after.nodes.map((node) => ({
