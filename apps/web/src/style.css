@@ -392,7 +392,10 @@ summary {
   color: #fffdf5;
 }
 .chip-row .swatch {
+  flex: 0 0 22px;
+  align-self: center;
   width: 22px;
+  height: 22px;
   min-height: 22px;
   padding: 0;
   border-radius: 50%;
