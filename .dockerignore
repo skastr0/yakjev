@@ -7,6 +7,10 @@ node_modules
 **/out
 **/release
 **/artifacts
+**/.expo
+**/.build
+apps/mobile/ios
+apps/mobile/android
 .data
 .env
 .env.*
