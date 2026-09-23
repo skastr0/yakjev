@@ -22,6 +22,7 @@ import type { Command, Edge, Graph, Node } from "@yakjev/protocol";
 import { useJevPreview } from "../state/use-jev-preview";
 import { Button, ChangedElsewhere, Field, JevNote } from "./primitives";
 import { color, styles } from "./theme";
+import { sameNodeContent } from "./node-content";
 
 export type Execute = (
   command: Command,
@@ -47,6 +48,7 @@ export function CreateEditor({
   onPreview: (value: DraftPreview | null) => void;
 }) {
   const [title, setTitle] = useState("");
+  const [paint, setPaint] = useState<string | null>(PALETTE[0].hex);
   const [failure, setFailure] = useState(false);
   const input = useMemo(
     () =>
@@ -69,8 +71,12 @@ export function CreateEditor({
   }, [draft, onPreview]);
   async function capture() {
     const built = captureWithJev(title, draft, graph, randomUUID);
-    if (!built) return;
-    const ok = await execute(built.command, () => onCreated(built.nodeId));
+    if (!built || built.command.type !== "capture") return;
+    const command = {
+      ...built.command,
+      nodes: built.command.nodes.map((node) => ({ ...node, color: paint })),
+    };
+    const ok = await execute(command, () => onCreated(built.nodeId));
     setFailure(!ok);
   }
   return (
@@ -109,6 +115,7 @@ export function CreateEditor({
           {graph.nodes.find((node) => node.id === judgment.nodeId)?.title}
         </Text>
       ))}
+      <ColorChoices value={paint} onChange={setPaint} disabled={busy} />
       {failure && (
         <Text style={styles.error}>
           Could not save. Check the connection and try again.
@@ -142,8 +149,8 @@ export function NodeEditor({
   onConnect: () => void;
   onFocus: () => void;
   onEdge: (id: string) => void;
-  paint: string | undefined;
-  onPaint: (hex: string) => void;
+  paint: string | null | undefined;
+  onPaint: (hex: string | null) => void;
   paintReady: boolean;
 }) {
   const [title, setTitle] = useState(node.title);
@@ -157,8 +164,8 @@ export function NodeEditor({
   const [sourceLabel, setSourceLabel] = useState("");
   const [failure, setFailure] = useState(false);
   const [connectionPage, setConnectionPage] = useState(0);
-  const [editedRevision, setEditedRevision] = useState(node.updated.revision);
-  const changedElsewhere = editedRevision !== node.updated.revision;
+  const [editedContent, setEditedContent] = useState(node);
+  const changedElsewhere = !sameNodeContent(editedContent, node);
   const edges = useMemo(
     () =>
       graph.edges.filter(
@@ -201,7 +208,7 @@ export function NodeEditor({
             setProject(node.project);
             setStatus(node.status);
             setSources(node.sources.map((source) => ({ ...source })));
-            setEditedRevision(node.updated.revision);
+            setEditedContent(node);
             setFailure(false);
           }}
         />
@@ -217,39 +224,11 @@ export function NodeEditor({
           </Button>
         ))}
       </View>
-      <View style={styles.wrap} accessibilityLabel="Intention color">
-        {PALETTE.map((swatch) => (
-          <Pressable
-            key={swatch.id}
-            accessibilityRole="button"
-            accessibilityLabel={`${swatch.id} color`}
-            accessibilityState={{
-              selected: paint === swatch.hex,
-              disabled: !paintReady,
-            }}
-            disabled={!paintReady}
-            onPress={() => onPaint(swatch.hex)}
-            style={{
-              width: 44,
-              height: 44,
-              alignItems: "center",
-              justifyContent: "center",
-              borderRadius: 22,
-              borderWidth: paint === swatch.hex ? 1 : 0,
-              borderColor: color.ink,
-            }}
-          >
-            <View
-              style={{
-                width: 24,
-                height: 24,
-                borderRadius: 12,
-                backgroundColor: swatch.hex,
-              }}
-            />
-          </Pressable>
-        ))}
-      </View>
+      <ColorChoices
+        value={paint}
+        onChange={onPaint}
+        disabled={!paintReady || busy}
+      />
       <Field
         label="Project"
         value={project}
@@ -592,6 +571,58 @@ export function ConnectEditor({
       <Button primary disabled={!relation || busy} onPress={() => void save()}>
         Connect
       </Button>
+    </View>
+  );
+}
+
+function ColorChoices({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string | null | undefined;
+  onChange: (hex: string | null) => void;
+  disabled: boolean;
+}) {
+  return (
+    <View style={styles.wrap} accessibilityLabel="Intention color">
+      <Button
+        selected={value == null}
+        disabled={disabled}
+        label="Use status color"
+        onPress={() => onChange(null)}
+      >
+        Status
+      </Button>
+      {PALETTE.map((swatch) => (
+        <Pressable
+          key={swatch.id}
+          accessibilityRole="button"
+          accessibilityLabel={`${swatch.id} color`}
+          accessibilityState={{ selected: value === swatch.hex, disabled }}
+          disabled={disabled}
+          onPress={() => onChange(swatch.hex)}
+          style={{
+            width: 44,
+            height: 44,
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: 22,
+            borderWidth: value === swatch.hex ? 1 : 0,
+            borderColor: color.ink,
+            opacity: disabled ? 0.4 : 1,
+          }}
+        >
+          <View
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: 12,
+              backgroundColor: swatch.hex,
+            }}
+          />
+        </Pressable>
+      ))}
     </View>
   );
 }
