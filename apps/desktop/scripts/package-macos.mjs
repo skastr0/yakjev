@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractFile } from "@electron/asar";
 import { auditPackage } from "./audit-package.mjs";
 import { notarizeApp, notarizeDmg } from "./notarize.mjs";
 import { buildEnvironment, signingConfig } from "./signing-config.mjs";
@@ -32,6 +33,11 @@ if (!["arm64", "x64"].includes(process.arch))
   throw new Error("Unsupported architecture");
 const signing = signed ? signingConfig() : undefined;
 const env = buildEnvironment();
+const notaryEnvironment = { ...env };
+for (const [key, value] of Object.entries(process.env)) {
+  if (key.startsWith("ASC_") && value !== undefined)
+    notaryEnvironment[key] = value;
+}
 if (signing) {
   env.YAKJEV_MAC_TEAM_ID = signing.team;
   env.YAKJEV_MAC_SIGNING_IDENTITY = signing.identity;
@@ -81,6 +87,17 @@ const dirty =
   (await command("git", ["status", "--porcelain"], { capture: true })) !== "";
 if (signed && dirty)
   throw new Error("Commit changes before a signed release build");
+async function assertSourceUnchanged() {
+  if (!signed) return;
+  const head = await command("git", ["rev-parse", "HEAD"], { capture: true });
+  const status = await command("git", ["status", "--porcelain"], {
+    capture: true,
+  });
+  if (head !== commit || status !== "")
+    throw new Error(
+      "Source changed during signed packaging; start a fresh build",
+    );
+}
 
 const release = join(desktop, "release");
 await mkdir(release, { recursive: true, mode: 0o700 });
@@ -97,11 +114,12 @@ console.log(
   `Building ${signed ? "Developer ID" : "source"} macOS ${process.arch} package`,
 );
 
-await command(bun, ["install", "--frozen-lockfile"], {
+await command(bun, ["--no-env-file", "install", "--frozen-lockfile"], {
   cwd: repository,
   log: log("install"),
 });
-await command(bun, ["run", "build"], { log: log("compile") });
+await command(bun, ["--no-env-file", "run", "build"], { log: log("compile") });
+await assertSourceUnchanged();
 const manifest = JSON.parse(
   await readFile(join(desktop, "package.json"), "utf8"),
 );
@@ -122,6 +140,7 @@ console.log("Packaging and checking the application");
 await command(
   bun,
   [
+    "--no-env-file",
     "x",
     "--no-install",
     "electron-builder",
@@ -140,6 +159,15 @@ await command(
 const platformDirectory = process.arch === "arm64" ? "mac-arm64" : "mac";
 const appPath = join(attempt, platformDirectory, "Yakjev.app");
 await auditPackage(appPath, { signed });
+const packagedProvenance = JSON.parse(
+  extractFile(
+    join(appPath, "Contents/Resources/app.asar"),
+    "out/build-provenance.json",
+  ).toString("utf8"),
+);
+if (JSON.stringify(packagedProvenance) !== JSON.stringify(provenance))
+  throw new Error("Packaged provenance differs from this build");
+await assertSourceUnchanged();
 
 const name = `Yakjev-${manifest.version}-${process.arch}`;
 const zipPath = join(attempt, `${name}.zip`);
@@ -154,6 +182,7 @@ if (!args.has("--dir")) {
       appPath,
       zipPath,
       workDir: attempt,
+      env: notaryEnvironment,
     });
   } else {
     await command("ditto", ["-c", "-k", "--keepParent", appPath, zipPath], {
@@ -192,6 +221,7 @@ if (!args.has("--dir")) {
     receipt.diskImageNotarization = await notarizeDmg({
       dmgPath,
       workDir: attempt,
+      env: notaryEnvironment,
     });
     receipt.notarized = true;
   }
@@ -204,6 +234,7 @@ if (!args.has("--dir")) {
   }
 }
 await auditPackage(appPath, { signed });
+await assertSourceUnchanged();
 await writeFile(
   join(attempt, "receipt.json"),
   JSON.stringify(receipt, null, 2) + "\n",

@@ -18,3 +18,11 @@ apps/mobile/android
 **/*.db*
 coverage
 *.log
+**/.local
+**/*.p12
+**/*.pfx
+**/*.p8
+**/*.key
+**/*.pem
+**/*.keychain
+**/*.keychain-db

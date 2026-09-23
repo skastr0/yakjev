@@ -1,19 +1,20 @@
 import { realpathSync } from "node:fs";
-import { dirname, relative, resolve, sep } from "node:path";
+import { basename, dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { signAsync } from "@electron/osx-sign";
 import { signingConfig } from "./signing-config.mjs";
+import { usesJitEntitlements } from "./package-policy.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 export function needsJit(relativePath) {
-  return (
-    relativePath === "" ||
-    relativePath === "Contents/MacOS/Yakjev" ||
-    /^Contents\/Frameworks\/Yakjev Helper(?: \((?:Renderer|GPU)\))?\.app(?:\/Contents\/MacOS\/Yakjev Helper(?: \((?:Renderer|GPU)\))?)?$/.test(
-      relativePath,
-    )
-  );
+  const executable =
+    relativePath === ""
+      ? "Contents/MacOS/Yakjev"
+      : relativePath.endsWith(".app")
+        ? `${relativePath}/Contents/MacOS/${basename(relativePath, ".app")}`
+        : relativePath;
+  return usesJitEntitlements(executable);
 }
 
 export default async function signMac(options) {

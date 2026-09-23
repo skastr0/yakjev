@@ -53,14 +53,57 @@ storage, and the single-instance lock. The smoke check uses a disposable path.
 ## Package
 
 ```sh
-bun run desktop:package --dir  # local application bundle
-bun run desktop:package       # host-platform installer/archive
+bun run desktop:package:mac --dir # audited local source application
+bun run desktop:package:mac       # audited local source app, ZIP, DMG
+bun run desktop:package           # Windows NSIS / Linux AppImage on those hosts
 ```
 
-Output goes to `apps/desktop/release/`. macOS produces DMG/ZIP, Windows NSIS,
-and Linux AppImage; build on the target platform. macOS packages use a local
-ad-hoc signature. Developer ID signing, notarization, publishing and automatic
-updates are not configured.
+Build on the target platform. macOS output goes into a unique directory under
+`apps/desktop/release/`. Source packages have no Developer ID identity or Apple
+notarization. The public CI builds and audits source packages without credentials
+or artifact uploads. No command publishes a release or configures updates.
+
+### Maintainer macOS distribution
+
+Supply `YAKJEV_MAC_TEAM_ID` and the full `YAKJEV_MAC_SIGNING_IDENTITY` from private
+local configuration. Signing certificates stay in the macOS Keychain; `asc`
+uses its existing local Apple Notary API authentication. The public repository
+contains no certificate identity defaults, private keys, account IDs, or auth
+profiles. Never commit credentials or raw build/notarization logs.
+
+```sh
+# Commit the release source first; signed builds require a clean checkout.
+bun run desktop:package:mac --sign      # Developer ID, no Apple submission
+bun run desktop:package:mac --notarize  # sign, submit, staple, verify app + DMG
+```
+
+The pipeline uses frozen dependencies and the pinned Bun/Electron versions. It
+compiles the shared web renderer without environment files or source maps,
+packages into a fresh private directory, configures all Electron fuses, signs
+with hardened runtime and minimal JIT entitlements, then independently audits
+ASAR hashes, archive contents, native signatures, entitlements and fuse values.
+Node execution, Node environment options, main-process inspect arguments and
+extra `file:` privileges are disabled. Cookie encryption and ASAR-only loading
+with integrity validation are enabled. No microphone or filesystem permission
+is added for future features.
+
+Notarization requires Apple's `Accepted` response, app ticket stapling and
+Gatekeeper assessment. The ZIP is recreated with the stapled app; the DMG is
+then created, signed, notarized and stapled independently. Only a completed
+attempt receives a final release directory. A local `receipt.json` records the
+source commit, tool versions, acceptance IDs and exact archive SHA256 hashes.
+Raw logs remain private in the ignored release directory. Distribute only the
+intended ZIP/DMG and reviewed checksum metadata, never the whole directory.
+
+To install a completed release, with the same private signing configuration:
+
+```sh
+bun run desktop:install:mac --app /absolute/path/to/release/mac-arm64/Yakjev.app --notarized
+```
+
+The installer refuses a running Yakjev, audits the candidate and staged copy,
+installs into `~/Applications/Yakjev.app`, verifies the installed signature, and
+keeps the previous app as a backup. User settings and sessions remain in place.
 
 ## Runtime and performance
 
@@ -124,6 +167,11 @@ To run the same smoke check against an already packaged macOS application:
 YAKJEV_DESKTOP_EXECUTABLE="$PWD/apps/desktop/release/mac-arm64/Yakjev.app/Contents/MacOS/Yakjev" \
   bun apps/desktop/e2e/smoke.ts
 ```
+
+For a hardened release use `apps/desktop/e2e/release-smoke.ts` with its actual
+executable path. It attaches to a disposable renderer through loopback CDP;
+shipping fuses keep the main-process inspector disabled. All fixture data and
+sessions are synthetic and local.
 
 App icons share the SVG source in `apps/desktop/build/icon.svg`. Regenerate the
 desktop variants and the opaque 1024px mobile PNG with
