@@ -4,6 +4,10 @@ import {
   createClient,
   createEventParser,
   decodeReceipt,
+  blendedColors,
+  legacyPaintCommand,
+  paintNode,
+  PALETTE,
   type ServerEvent,
 } from "@yakjev/client";
 import type { Command } from "@yakjev/protocol";
@@ -83,6 +87,69 @@ function waitForState<T>(
 }
 
 describe("mobile client against the authoritative server", () => {
+  test("colors cross mobile sessions through SSE and preserve remote resets during migration", async () => {
+    const first = session();
+    const second = session();
+    await Promise.all(
+      [first, second].map((value) =>
+        waitForState(
+          value,
+          (state) => state.connection === "live",
+          "live color session",
+        ),
+      ),
+    );
+    expect(await first.execute(intention("painted"))).toBe(true);
+    await waitForState(
+      second,
+      (state) => state.graph?.revision === 1,
+      "initial node",
+    );
+    expect(await second.execute(paintNode("painted", PALETTE[5].hex))).toBe(
+      true,
+    );
+    await waitForState(
+      first,
+      (state) => state.graph?.revision === 2,
+      "remote paint",
+    );
+    const painted = first.getSnapshot().graph!;
+    expect(painted.nodes[0]?.color).toBe(PALETTE[5].hex);
+    expect(blendedColors(painted).nodes.get("painted")).toBe(PALETTE[5].hex);
+    expect(legacyPaintCommand(painted, { painted: PALETTE[0].hex })).toBeNull();
+
+    expect(await first.execute(paintNode("painted", null))).toBe(true);
+    await waitForState(
+      second,
+      (state) => state.graph?.revision === 3,
+      "status reset",
+    );
+    const reset = second.getSnapshot().graph!;
+    expect(reset.nodes[0]?.color).toBeNull();
+    expect(blendedColors(reset).nodes.get("painted")).toBe("#2c84ff");
+    expect(legacyPaintCommand(reset, { painted: PALETTE[0].hex })).toBeNull();
+
+    expect(await second.execute({ type: "undo", revision: 3 })).toBe(true);
+    await waitForState(
+      first,
+      (state) => state.graph?.revision === 4,
+      "color undo",
+    );
+    expect(first.getSnapshot().graph?.nodes[0]?.color).toBe(PALETTE[5].hex);
+    expect(await second.execute(intention("painted", "Updated title"))).toBe(
+      true,
+    );
+    expect((await client().snapshot()).nodes[0]?.color).toBe(PALETTE[5].hex);
+    expect(
+      (await client().history()).some(
+        (entry) => entry.command.type === "node.paint",
+      ),
+    ).toBe(true);
+    expect((await client().exportGraph()).graph.nodes[0]?.color).toBe(
+      PALETTE[5].hex,
+    );
+  }, 20_000);
+
   test("bearer commands preserve replay, conflict, layout and SSE contracts", async () => {
     const api = client();
     const initial = await api.snapshot();

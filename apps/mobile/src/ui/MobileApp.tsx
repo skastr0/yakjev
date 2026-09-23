@@ -11,6 +11,7 @@ import {
   initialPosition,
   jevEdge,
   labelOf,
+  paintNode,
   visibleGraph,
   type DraftPreview,
   type YakjevClient,
@@ -102,7 +103,7 @@ function Workspace({
   onLock: () => void;
 }) {
   const state = useGraph(client);
-  const preferences = usePreferences(server);
+  const preferences = usePreferences(server, client);
   const graph = state.graph;
   const insets = useSafeAreaInsets();
   const [mode, setMode] = useState<Mode | null>(null);
@@ -121,30 +122,48 @@ function Workspace({
   );
   const seeded = useRef(new Set<string>());
   const fittedInitialLayout = useRef(false);
-  const onRetrySaved = useRef<(() => void) | null>(null);
+  const currentClient = useRef(client);
+  currentClient.current = client;
+  const onRetrySaved = useRef<{
+    client: YakjevClient;
+    saved: (() => void) | undefined;
+  } | null>(null);
   const execute = useCallback<Execute>(
     async (command, onSaved) => {
-      onRetrySaved.current = onSaved ?? null;
+      if (currentClient.current !== client) return false;
+      const attempt = { client, saved: onSaved };
+      onRetrySaved.current = attempt;
       const ok = await state.execute(command);
+      if (currentClient.current !== client) return false;
       if (ok) {
-        onRetrySaved.current = null;
+        if (onRetrySaved.current === attempt) onRetrySaved.current = null;
         onSaved?.();
       }
       return ok;
     },
-    [state.execute],
+    [client, state.execute],
   );
   const retry = useCallback(async () => {
+    const attempt = onRetrySaved.current;
     if (!(await state.retry())) return;
-    const onSaved = onRetrySaved.current;
-    onRetrySaved.current = null;
-    onSaved?.();
-  }, [state.retry]);
+    if (currentClient.current !== client || attempt?.client !== client) return;
+    if (onRetrySaved.current === attempt) onRetrySaved.current = null;
+    attempt.saved?.();
+  }, [client, state.retry]);
   const busy = state.pending > 0 || state.failedWrite;
-  const colors = useMemo(
-    () => (view ? blendedColors(view, preferences.paint) : null),
-    [view, preferences.paint],
-  );
+  const colors = useMemo(() => (view ? blendedColors(view) : null), [view]);
+  useEffect(() => {
+    if (!graph || !preferences.ready || busy || state.connection !== "live")
+      return;
+    void preferences.migrateColors(graph, execute);
+  }, [
+    graph,
+    preferences.ready,
+    preferences.migrateColors,
+    busy,
+    state.connection,
+    execute,
+  ]);
   const placed = useMemo(() => {
     const saved = new Map(
       state.positions.map((position) => [position.id, position]),
@@ -379,7 +398,11 @@ function Workspace({
     mode?.kind === "edge"
       ? view?.edges.find((edge) => edge.id === mode.id)
       : null;
-  const error = localError ?? state.error ?? preferences.error;
+  const error =
+    localError ??
+    state.error ??
+    preferences.migrationError ??
+    preferences.error;
   const connectionText =
     state.connection === "live"
       ? `Live · r${graph?.revision ?? 0}`
@@ -446,6 +469,15 @@ function Workspace({
             {state.layoutPending && (
               <Button quiet onPress={() => void state.retryLayout()}>
                 Retry position
+              </Button>
+            )}
+            {preferences.migrationError && !state.failedWrite && graph && (
+              <Button
+                quiet
+                disabled={busy || state.connection !== "live"}
+                onPress={() => void preferences.retryColors(graph, execute)}
+              >
+                Retry colors
               </Button>
             )}
             {state.connection !== "live" && (
@@ -679,9 +711,9 @@ function Workspace({
               node={currentNode}
               graph={graph}
               execute={execute}
-              paint={preferences.paint[currentNode.id]}
-              paintReady={preferences.ready}
-              onPaint={(hex) => preferences.paintNode(currentNode.id, hex)}
+              paint={currentNode.color}
+              paintReady={!busy && state.connection === "live"}
+              onPaint={(hex) => void execute(paintNode(currentNode.id, hex))}
               onClose={closeEditor}
               busy={busy}
               onConnect={() => {
