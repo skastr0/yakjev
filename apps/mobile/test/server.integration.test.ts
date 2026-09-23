@@ -18,6 +18,10 @@ import {
 } from "../../../tests/acceptance/harness";
 import { GraphSession } from "../src/state/graph-session";
 import { JevPreviewSession } from "../src/state/jev-preview-session";
+import {
+  createPreferencesStorage,
+  LegacyPaintMigration,
+} from "../src/ui/legacy-paint-migration";
 
 // Exercise the actual mobile state + client against the existing server. The
 // acceptance harness supplies disposable SQLite and strips provider credentials.
@@ -87,6 +91,62 @@ function waitForState<T>(
 }
 
 describe("mobile client against the authoritative server", () => {
+  test("a skipped paint acknowledgment retains the device color until a deleted node returns", async () => {
+    const mobile = session();
+    await waitForState(
+      mobile,
+      (state) => state.connection === "live",
+      "live migration session",
+    );
+    expect(await mobile.execute(intention("legacy"))).toBe(true);
+    const staleGraph = mobile.getSnapshot().graph!;
+    let file = JSON.stringify({
+      paint: { legacy: "#ED4968" },
+      connectWhileDragging: true,
+    });
+    const storage = createPreferencesStorage({
+      key: crypto.randomUUID(),
+      read: () => file,
+      write: async (next) => {
+        file = next;
+      },
+    });
+    const migration = new LegacyPaintMigration(storage);
+    disposers.push(migration.dispose);
+    const getGraph = () => mobile.getSnapshot().graph;
+    let sends = 0;
+    const execute = async (command: Command, onSaved: () => void) => {
+      sends++;
+      if (sends === 1) {
+        expect(
+          await mobile.execute({
+            type: "node.remove",
+            ids: ["legacy"],
+            removeEdges: true,
+            rationale: "Synthetic removal during migration.",
+          }),
+        ).toBe(true);
+      }
+      const saved = await mobile.execute(command);
+      if (saved) onSaved();
+      return saved;
+    };
+    await migration.migrate(staleGraph, execute, getGraph);
+    expect(sends).toBe(1);
+    expect((await storage.read()).paint).toEqual({ legacy: "#ED4968" });
+    expect((await client().snapshot()).nodes).toEqual([]);
+    await migration.migrate(getGraph()!, execute, getGraph);
+    expect(sends).toBe(1);
+
+    expect(
+      await mobile.execute(intention("legacy", "Restored intention")),
+    ).toBe(true);
+    await migration.migrate(getGraph()!, execute, getGraph);
+    expect(sends).toBe(2);
+    expect((await client().snapshot()).nodes[0]?.color).toBe("#ed4968");
+    expect((await storage.read()).paint).toEqual({});
+  }, 20_000);
+
   test("colors cross mobile sessions through SSE and preserve remote resets during migration", async () => {
     const first = session();
     const second = session();

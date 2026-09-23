@@ -151,11 +151,15 @@ function Workspace({
     attempt.saved?.();
   }, [client, state.retry]);
   const busy = state.pending > 0 || state.failedWrite;
+  const readGraph = useCallback(
+    () => state.getSnapshot().graph,
+    [state.getSnapshot],
+  );
   const colors = useMemo(() => (view ? blendedColors(view) : null), [view]);
   useEffect(() => {
     if (!graph || !preferences.ready || busy || state.connection !== "live")
       return;
-    void preferences.migrateColors(graph, execute);
+    void preferences.migrateColors(graph, execute, readGraph);
   }, [
     graph,
     preferences.ready,
@@ -163,6 +167,7 @@ function Workspace({
     busy,
     state.connection,
     execute,
+    readGraph,
   ]);
   const placed = useMemo(() => {
     const saved = new Map(
@@ -475,7 +480,9 @@ function Workspace({
               <Button
                 quiet
                 disabled={busy || state.connection !== "live"}
-                onPress={() => void preferences.retryColors(graph, execute)}
+                onPress={() =>
+                  void preferences.retryColors(graph, execute, readGraph)
+                }
               >
                 Retry colors
               </Button>

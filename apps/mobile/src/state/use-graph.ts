@@ -24,6 +24,7 @@ export function useGraph(client: YakjevClient | null) {
   }, [session]);
   return {
     ...state,
+    getSnapshot: session.getSnapshot,
     execute: session.execute,
     retry: session.retry,
     refresh: session.refresh,

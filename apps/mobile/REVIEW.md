@@ -15,7 +15,7 @@ The iOS client is functional and distributed through TestFlight, but graph inter
 
 Colors now come from the graph, with the same palette and blending across clients. Mobile paints use `node.paint`, Status resets use explicit `null`, and capture includes its selected color atomically (defaulting to the first palette color).
 
-Existing device colors are imported only where the server has no stored choice. Acknowledged or already-resolved entries are retired; missing-node entries remain available for later snapshots. Failed imports can be retried. Preference cleanup uses Expo's native atomic write, with reads and writes serialized per file across sessions. A paint change does not discard a text draft or create a false content conflict.
+Existing device colors are imported only where the server has no stored choice. Entries retire only when the canonical node has a color or explicit Status reset; a batch acknowledgment alone is insufficient because the server may skip missing nodes. Missing/unresolved entries remain available for later snapshots, and failed imports can be retried. Preference cleanup uses Expo's native atomic write, with reads and writes serialized per file across sessions. A paint change does not discard a text draft or create a false content conflict.
 
 Old released clients cannot decode history containing the new command. Updated web, desktop and mobile releases must be coordinated before enabling production migration.
 
