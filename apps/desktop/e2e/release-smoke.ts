@@ -213,6 +213,11 @@ async function main(): Promise<void> {
         await expect
           .poll(async () => (await readGraph(synthetic)).nodes[0]?.title)
           .toBe("Synthetic release intention");
+        assert.equal(
+          (await readGraph(synthetic)).nodes[0]?.color,
+          "#ed4968",
+          "capture must save the original red default atomically",
+        );
         await page
           .getByLabel("Title", { exact: true })
           .fill("Edited release intention");
@@ -220,6 +225,16 @@ async function main(): Promise<void> {
         await expect
           .poll(async () => (await readGraph(synthetic)).nodes[0]?.title)
           .toBe("Edited release intention");
+        const palette = page.getByRole("group", { name: "Color", exact: true });
+        await palette
+          .getByRole("button", { name: "orange", exact: true })
+          .click();
+        await expect
+          .poll(async () => (await readGraph(synthetic)).nodes[0]?.color)
+          .toBe("#e35b00");
+        await expect(
+          palette.getByRole("button", { name: "orange", exact: true }),
+        ).toHaveAttribute("aria-pressed", "true");
         await page.keyboard.press("Escape");
       },
     );
@@ -233,6 +248,7 @@ async function main(): Promise<void> {
           description: "Synthetic independent HTTP client.",
           project: "release-smoke",
           status: "idea",
+          color: "#8672fd",
           sources: [],
         },
       });
@@ -245,6 +261,18 @@ async function main(): Promise<void> {
       await expect(page.getByLabel("Title", { exact: true })).toHaveValue(
         "Remote release intention",
       );
+      const palette = page.getByRole("group", { name: "Color", exact: true });
+      await expect(
+        palette.getByRole("button", { name: "violet", exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
+      const painted = await readGraph(synthetic);
+      await sendCommand(synthetic, painted.revision, {
+        type: "node.paint",
+        colors: [{ id: "release-smoke-remote", color: null }],
+      });
+      await expect(
+        palette.getByRole("button", { name: "Status color", exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
     });
@@ -291,6 +319,17 @@ async function main(): Promise<void> {
           "data-revision",
           String((await readGraph(synthetic)).revision),
         );
+        await client!.page
+          .getByLabel("Find intentions")
+          .fill("Edited release intention");
+        await client!.page.getByLabel("Find intentions").press("Enter");
+        await expect(
+          client!.page
+            .getByRole("group", { name: "Color", exact: true })
+            .getByRole("button", { name: "orange", exact: true }),
+        ).toHaveAttribute("aria-pressed", "true");
+        await client!.page.keyboard.press("Escape");
+        await client!.page.keyboard.press("Escape");
         await client!.page.screenshot({
           path: join(artifacts, "release-smoke.png"),
         });
