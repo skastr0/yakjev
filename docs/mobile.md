@@ -25,6 +25,8 @@ The app defaults to `https://yakjev-production.up.railway.app`, shared with Elec
 
 The graph is a local Expo native module, so use a development build rather than Expo Go. Native projects are generated and ignored; Swift sources live in `apps/mobile/modules/yakjev-graph`. Rebuild after native changes. If adding Swift or shader files to an existing generated project, run CocoaPods installation again before building.
 
+If a development build exits during a full Metro reload with `ExpoFabricView` / `AppContextLost`, terminate and relaunch the app. This stack matches [Expo's SDK 57 reload issue](https://github.com/expo/expo/issues/48575); a cold launch restored the saved session in simulator QA. Keep simulator code signing enabled: disabling it prevents SecureStore from accessing the keychain.
+
 The initial native target is iOS, including iPad. Android is not declared as a supported build target; its graph renderer would need a native implementation of the same view contract.
 
 ## Shared behavior and appearance
