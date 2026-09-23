@@ -59,15 +59,23 @@ export async function migrateLegacyPaint({
   execute: (command: Command) => Promise<boolean>;
   signal: AbortSignal;
 }): Promise<boolean> {
+  const attempted = new Set<string>();
   while (!signal.aborted) {
     const current = graph();
     if (!current) return false;
     const legacy = readLegacyPaint(storage);
-    const nodes = new Map(current.nodes.map((node) => [node.id, node]));
-    clearLegacyPaint(storage, resolvedPaint(current, legacy));
-    const command = legacyPaintCommand(current, legacy);
-    if (!command) return Object.keys(legacy).some((id) => !nodes.has(id));
+    const resolved = resolvedPaint(current, legacy);
+    clearLegacyPaint(storage, resolved);
+    const pending = Object.entries(legacy).filter(
+      ([id]) => !Object.hasOwn(resolved, id),
+    );
+    const available = Object.fromEntries(
+      pending.filter(([id]) => !attempted.has(id)),
+    );
+    const command = legacyPaintCommand(current, available);
+    if (!command) return pending.length > 0;
     if (signal.aborted) return false;
+    for (const { id } of command.colors) attempted.add(id);
     const saved = await execute(command);
     if (!saved) {
       if (signal.aborted) return false;
@@ -77,12 +85,9 @@ export async function migrateLegacyPaint({
     }
     const confirmed = graph();
     if (!confirmed) return true;
-    const resolved = resolvedPaint(confirmed, legacy);
-    clearLegacyPaint(storage, resolved);
-    // Do not repost an acknowledged batch against the same unresolved snapshot.
-    // A later canonical revision (including an explicit null from Undo) resumes it.
-    if (command.colors.some(({ id }) => !Object.hasOwn(resolved, id)))
-      return true;
+    clearLegacyPaint(storage, resolvedPaint(confirmed, legacy));
+    // Continue other eligible entries, but never resubmit an unresolved ID in
+    // this run. Missing nodes and stale snapshots must not block later batches.
   }
   return false;
 }

@@ -392,4 +392,50 @@ describe("legacy browser color migration", () => {
     expect(sent).toBe(1);
     expect(readLegacyPaint(storage)).toEqual({});
   });
+
+  test.each(["removed", "stale"] as const)(
+    "an unresolved %s entry does not block the next eligible batch",
+    async (scenario) => {
+      const nodes = Array.from({ length: 101 }, (_, index) =>
+        node(`n${index}`),
+      );
+      let canonical = graph(nodes);
+      const storage = memoryStorage(
+        Object.fromEntries(nodes.map((item) => [item.id, "#ed4968"])),
+      );
+      const batches: string[][] = [];
+      expect(
+        await migrateLegacyPaint({
+          storage,
+          graph: () => canonical,
+          signal: new AbortController().signal,
+          execute: async (command) => {
+            if (command.type !== "node.paint") throw new Error("Wrong command");
+            batches.push(command.colors.map(({ id }) => id));
+            if (batches.length === 1) {
+              if (scenario === "removed") {
+                canonical = applyOptimistic(graph(nodes.slice(1)), command);
+              }
+              // In the stale case, ACK succeeds but the canonical snapshot
+              // has not refreshed; these first 100 IDs must not be sent again.
+            } else {
+              canonical = applyOptimistic(canonical, command);
+            }
+            return true;
+          },
+        }),
+      ).toBe(true);
+      expect(batches.map((batch) => batch.length)).toEqual([100, 1]);
+      expect(batches[1]).toEqual(["n100"]);
+      expect(new Set(batches.flat()).size).toBe(101);
+      expect(canonical.nodes.find((item) => item.id === "n100")?.color).toBe(
+        "#ed4968",
+      );
+      const retained = readLegacyPaint(storage);
+      expect(retained.n0).toBe("#ed4968");
+      expect(Object.keys(retained)).toHaveLength(
+        scenario === "removed" ? 1 : 100,
+      );
+    },
+  );
 });
