@@ -25,7 +25,7 @@ import {
   unjudgedIds,
   visibleGraph,
 } from "./graph-model";
-import { readPaint, writePaint } from "./blend";
+import { paintNode } from "./graph-commands";
 import { useGraph } from "./use-graph";
 import "./style.css";
 
@@ -42,7 +42,6 @@ function App() {
   const [focusRoot, setFocusRoot] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [viewTick, setViewTick] = useState(0);
-  const [paint, setPaint] = useState(readPaint);
   const [typingGhosts, setTypingGhosts] = useState<Ghost[]>([]);
   const onTypingGhosts = useCallback((next: Ghost[]) => {
     setTypingGhosts(next);
@@ -318,6 +317,14 @@ function App() {
           )}
         </div>
       )}
+      {state.paintMigrationError && (
+        <div className="notice error" role="alert">
+          <span>{state.paintMigrationError}</span>
+          <button type="button" onClick={state.retryPaintMigration}>
+            Retry saving colors
+          </button>
+        </div>
+      )}
       {state.connection === "reconnecting" && (
         <div className="notice" role="status">
           Live updates are reconnecting.
@@ -406,7 +413,6 @@ function App() {
             hidden={hidden}
             matches={matchIds}
             focusId={focusId}
-            paint={paint}
             ghosts={ghosts}
             asking={jev.asking}
             onView={() => {
@@ -457,9 +463,8 @@ function App() {
               onFocus={toggleFocus}
               onGhosts={onTypingGhosts}
               onPlace={(id, at) => canvas.current?.placeAt(id, at)}
-              paint={paint}
               onPaint={(id, color) =>
-                setPaint((current) => writePaint(current, id, color))
+                void state.execute(paintNode(id, color), graph.revision)
               }
             />
           )}

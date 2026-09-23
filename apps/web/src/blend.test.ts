@@ -207,22 +207,25 @@ describe("blendedColors", () => {
   } satisfies Graph;
 
   test("an edge keeps the color of the nodes it joins", () => {
-    const colors = blendedColors(graph, {});
+    const colors = blendedColors(graph);
     expect(colors.edges.get("ab")).toBe(colors.nodes.get("a"));
-    expect(blendedColors(graph, {}).edges.get("ab")).toBe(
-      colors.edges.get("ab"),
-    );
+    expect(blendedColors(graph).edges.get("ab")).toBe(colors.edges.get("ab"));
   });
 
   test("an edge touching a painted node picks up the mix", () => {
-    const painted = blendedColors(graph, { a: PALETTE[1].hex });
+    const painted = blendedColors({
+      ...graph,
+      nodes: graph.nodes.map((node) =>
+        node.id === "a" ? { ...node, color: PALETTE[1].hex } : node,
+      ),
+    });
     expect(painted.edges.get("ab")).toMatch(/^#[0-9a-f]{6}$/);
     expect(painted.nodes.get("b")).not.toBe(
-      blendedColors(graph, {}).nodes.get("b"),
+      blendedColors(graph).nodes.get("b"),
     );
   });
 
   test("an unpainted node wears its status color", () => {
-    expect(blendedColors(graph, {}).nodes.get("a")).toBe("#2c84ff");
+    expect(blendedColors(graph).nodes.get("a")).toBe("#2c84ff");
   });
 });

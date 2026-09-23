@@ -65,7 +65,6 @@ type Props = {
   hidden: ReadonlySet<string> | null;
   matches: ReadonlySet<string> | null;
   focusId: string | null;
-  paint: Readonly<Record<string, string>>;
   ghosts: readonly Ghost[];
   onSelect: (selection: Selection) => void;
   onCreate: (at: Point) => void;
@@ -305,7 +304,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         graph.current,
         latest.current.data,
         positions.current,
-        blendedColors(latest.current.data, latest.current.paint),
+        blendedColors(latest.current.data),
       );
       try {
         const sigma = new Sigma(graph.current, container.current, {
@@ -729,7 +728,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         graph.current,
         props.data,
         positions.current,
-        blendedColors(props.data, props.paint),
+        blendedColors(props.data),
       );
       if (moves.length && !reduceMotion.current) glideNodes(moves);
       schedulePersist();
@@ -775,7 +774,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
         ((wasEmpty && graph.current.order > 0) || (grew && !clusterFillsView()))
       )
         fit();
-    }, [props.data, props.paint]);
+    }, [props.data]);
 
     useEffect(() => {
       if (!arrivals.length) return;

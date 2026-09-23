@@ -65,10 +65,15 @@ export const neighborhood = async (
 export const decodeReceipt = (data: string) =>
   Schema.decodeUnknownSync(Receipt)(JSON.parse(data));
 
-export async function sendCommand(command: Command, expectedRevision: number) {
+export async function sendCommand(
+  command: Command,
+  expectedRevision: number,
+  signal?: AbortSignal,
+) {
   return Schema.decodeUnknownSync(CommandResult)(
     await request("/api/commands", {
       method: "POST",
+      ...(signal ? { signal } : {}),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         requestId: crypto.randomUUID(),

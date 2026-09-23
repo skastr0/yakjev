@@ -10,6 +10,13 @@ import {
   snapshot,
 } from "./api";
 import { applyOptimistic } from "./optimistic";
+import { migrateLegacyPaint } from "./paint-migration";
+
+type QueuedCommand = {
+  command: Command;
+  signal: AbortSignal;
+  resolve: (saved: boolean) => void;
+};
 
 export function useGraph() {
   const [graph, setGraph] = useState<Graph | null>(null);
@@ -21,6 +28,8 @@ export function useGraph() {
   const [pending, setPending] = useState(false);
   const [lastEdit, setLastEdit] = useState<Receipt | null>(null);
   const [session, setSession] = useState(0);
+  const [paintMigrationError, setPaintMigrationError] = useState("");
+  const [paintMigrationRetry, setPaintMigrationRetry] = useState(0);
   // Saved canvas positions, loaded once per session before the canvas mounts.
   const [layout, setLayout] = useState<ReadonlyMap<
     string,
@@ -33,11 +42,20 @@ export function useGraph() {
   >([]);
   const flightKey = useRef(0);
   const current = useRef<Graph | null>(null);
-  const queue = useRef<
-    Array<{ command: Command; resolve: (saved: boolean) => void }>
-  >([]);
+  const queue = useRef<QueuedCommand[]>([]);
   const draining = useRef(false);
   const generation = useRef(0);
+  const sessionController = useRef(new AbortController());
+  const migrationController = useRef<AbortController | null>(null);
+  const waitingForLegacyNodes = useRef(false);
+
+  const stopSession = useCallback(() => {
+    sessionController.current.abort();
+    migrationController.current?.abort();
+    generation.current++;
+    current.current = null;
+    setInFlight([]);
+  }, []);
 
   const refresh = useCallback(async () => {
     const startedIn = generation.current;
@@ -55,6 +73,8 @@ export function useGraph() {
   useEffect(() => {
     let stopped = false;
     let events: EventSource | undefined;
+    const controller = new AbortController();
+    sessionController.current = controller;
     generation.current++;
     current.current = null;
     setGraph(null);
@@ -63,24 +83,28 @@ export function useGraph() {
     setLayout(null);
     void Promise.all([refresh(), loadLayout()])
       .then(([initial, saved]) => {
-        if (stopped) return;
+        if (stopped || controller.signal.aborted) return;
         setLayout(
           new Map(saved.positions.map((point) => [point.id, point] as const)),
         );
         events = new EventSource(`/api/events?after=${initial.revision}`);
-        events.onopen = () => setConnection("live");
+        events.onopen = () => {
+          if (!stopped && !controller.signal.aborted) setConnection("live");
+        };
         events.onerror = () => {
+          if (stopped || controller.signal.aborted) return;
           setConnection("reconnecting");
           // EventSource does not expose HTTP status. A session check makes an
           // expired cookie actionable instead of leaving an infinite spinner.
           void request("/api/session").catch((cause: unknown) => {
             if (
               !stopped &&
+              !controller.signal.aborted &&
               cause instanceof ApiFailure &&
               cause.status === 401
             ) {
               events?.close();
-              current.current = null;
+              stopSession();
               setGraph(null);
               setConnection("locked");
               setError("Your session expired. Unlock the graph to reconnect.");
@@ -88,6 +112,7 @@ export function useGraph() {
           });
         };
         events.addEventListener("change", (event) => {
+          if (stopped || controller.signal.aborted) return;
           try {
             decodeReceipt((event as MessageEvent<string>).data);
           } catch {
@@ -97,9 +122,11 @@ export function useGraph() {
             return;
           }
           void refresh().catch((cause: unknown) => {
+            if (stopped || controller.signal.aborted) return;
             setError(errorMessage(cause));
             if (cause instanceof ApiFailure && cause.status === 401) {
               events?.close();
+              stopSession();
               setConnection("locked");
               setGraph(null);
             }
@@ -107,7 +134,7 @@ export function useGraph() {
         });
       })
       .catch((cause: unknown) => {
-        if (stopped) return;
+        if (stopped || controller.signal.aborted) return;
         setConnection(
           cause instanceof ApiFailure && cause.status === 401
             ? "locked"
@@ -117,10 +144,12 @@ export function useGraph() {
       });
     return () => {
       stopped = true;
+      controller.abort();
+      migrationController.current?.abort();
       generation.current++;
       events?.close();
     };
-  }, [session, refresh]);
+  }, [session, refresh, stopSession]);
 
   const saveError = (cause: unknown) =>
     cause instanceof ApiFailure && cause.status === 409
@@ -133,23 +162,27 @@ export function useGraph() {
   // time, and undo always targets that revision. Each sendCommand call mints
   // a fresh requestId, so the 409 retry below is never a replayed request.
   const attempt = useCallback(
-    async (command: Command): Promise<boolean> => {
+    async (command: Command, signal: AbortSignal): Promise<boolean> => {
       const wire = (revision: number): Command =>
         command.type === "undo" ? { type: "undo", revision } : command;
       const send = async (revision: number) => {
-        const result = await sendCommand(wire(revision), revision);
+        if (signal.aborted) return false;
+        const result = await sendCommand(wire(revision), revision, signal);
+        if (signal.aborted) return true;
         setLastEdit(result.receipt);
-        await refresh().catch((cause: unknown) =>
-          setError(
-            `Saved at revision ${result.receipt.revision}, but refreshing the view failed: ${errorMessage(cause)}`,
-          ),
-        );
+        await refresh().catch((cause: unknown) => {
+          if (!signal.aborted)
+            setError(
+              `Saved at revision ${result.receipt.revision}, but refreshing the view failed: ${errorMessage(cause)}`,
+            );
+        });
         return true;
       };
       const revision = current.current?.revision ?? 0;
       try {
         return await send(revision);
       } catch (cause) {
+        if (signal.aborted) return false;
         if (!(cause instanceof ApiFailure && cause.status === 409)) {
           setError(saveError(cause));
           return false;
@@ -158,11 +191,13 @@ export function useGraph() {
       // One conflict pass: reload the latest graph, then retry once against
       // the revision just observed. A second failure surfaces for the caller.
       const latest = await refresh().catch(() => null);
+      if (signal.aborted) return false;
       try {
         return await send(
           latest?.revision ?? current.current?.revision ?? revision,
         );
       } catch (cause) {
+        if (signal.aborted) return false;
         setError(saveError(cause));
         if (cause instanceof ApiFailure && cause.status === 409)
           await refresh().catch(() => {});
@@ -173,15 +208,23 @@ export function useGraph() {
   );
 
   const execute = useCallback(
-    (command: Command, _expectedRevision: number) =>
+    (command: Command, _expectedRevision: number, signal?: AbortSignal) =>
       new Promise<boolean>((resolve) => {
+        const sessionSignal = sessionController.current.signal;
+        const active = signal
+          ? AbortSignal.any([sessionSignal, signal])
+          : sessionSignal;
+        if (active.aborted || !current.current) {
+          resolve(false);
+          return;
+        }
         const key = ++flightKey.current;
         setInFlight((items) => [...items, { key, command }]);
         const land = (saved: boolean) => {
           setInFlight((items) => items.filter((item) => item.key !== key));
           resolve(saved);
         };
-        queue.current.push({ command, resolve: land });
+        queue.current.push({ command, signal: active, resolve: land });
         if (draining.current) return;
         draining.current = true;
         setPending(true);
@@ -190,13 +233,15 @@ export function useGraph() {
             // Re-check the queue after each drain pass and keep going until
             // it is empty; only then release the drain.
             for (;;) {
-              let next:
-                | { command: Command; resolve: (saved: boolean) => void }
-                | undefined;
+              let next: QueuedCommand | undefined;
               while ((next = queue.current.shift())) {
+                if (next.signal.aborted) {
+                  next.resolve(false);
+                  continue;
+                }
                 setError("");
                 setNotice("");
-                next.resolve(await attempt(next.command));
+                next.resolve(await attempt(next.command, next.signal));
               }
               if (queue.current.length === 0) break;
             }
@@ -209,7 +254,59 @@ export function useGraph() {
     [attempt],
   );
 
+  const readyToMigrate = connection === "live";
+  useEffect(() => {
+    if (!readyToMigrate) return;
+    const controller = new AbortController();
+    migrationController.current = controller;
+    const startedAt = current.current?.revision;
+    setPaintMigrationError("");
+    void Promise.resolve()
+      .then(() => {
+        if (controller.signal.aborted) return;
+        return migrateLegacyPaint({
+          storage: window.localStorage,
+          graph: () => current.current,
+          execute: (command) =>
+            execute(command, current.current?.revision ?? 0, controller.signal),
+          signal: controller.signal,
+        });
+      })
+      .then((waiting) => {
+        if (controller.signal.aborted) return;
+        waitingForLegacyNodes.current = waiting === true;
+        if (waiting && current.current?.revision !== startedAt)
+          setPaintMigrationRetry((value) => value + 1);
+      })
+      .catch((cause: unknown) => {
+        if (!controller.signal.aborted)
+          setPaintMigrationError(
+            `Could not save existing browser colors: ${errorMessage(cause)}`,
+          );
+      })
+      .finally(() => {
+        if (migrationController.current === controller)
+          migrationController.current = null;
+      });
+    return () => {
+      controller.abort();
+      if (migrationController.current === controller)
+        migrationController.current = null;
+    };
+  }, [readyToMigrate, session, paintMigrationRetry, execute]);
+
+  useEffect(() => {
+    if (
+      readyToMigrate &&
+      !paintMigrationError &&
+      waitingForLegacyNodes.current &&
+      migrationController.current === null
+    )
+      setPaintMigrationRetry((value) => value + 1);
+  }, [graph?.revision, readyToMigrate, paintMigrationError]);
+
   async function login(token: string) {
+    stopSession();
     setError("");
     try {
       await request("/api/session", {
@@ -223,12 +320,14 @@ export function useGraph() {
     }
   }
   async function logout() {
+    stopSession();
     try {
       await request("/api/session", { method: "DELETE" });
       setLastEdit(null);
       setSession((value) => value + 1);
     } catch (cause) {
       setError(errorMessage(cause));
+      setSession((value) => value + 1);
     }
   }
   const shown = useMemo(
@@ -247,6 +346,8 @@ export function useGraph() {
     error,
     notice,
     pending,
+    paintMigrationError,
+    retryPaintMigration: () => setPaintMigrationRetry((value) => value + 1),
     lastEdit,
     execute,
     login,

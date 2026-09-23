@@ -56,7 +56,6 @@ export function GraphEditor({
   onGhosts,
   onPlace,
   focused,
-  paint,
   onPaint,
 }: {
   graph: Graph;
@@ -72,8 +71,7 @@ export function GraphEditor({
   // Pin a node about to be created to the point the owner clicked.
   onPlace?: (id: string, at: Point) => void;
   focused: boolean;
-  paint: Readonly<Record<string, string>>;
-  onPaint: (id: string, color: string) => void;
+  onPaint: (id: string, color: string | null) => void;
 }) {
   const height = useRenderedHeight();
   if (!anchor) return null;
@@ -93,7 +91,6 @@ export function GraphEditor({
           execute={execute}
           onClose={onClose}
           onCreated={onCreated}
-          onPaint={onPaint}
           onGhosts={onGhosts}
           onPlace={onPlace}
         />
@@ -106,7 +103,6 @@ export function GraphEditor({
           focused={focused}
           onFocus={onFocus}
           onClose={onClose}
-          color={paint[mode.id] ?? null}
           onPaint={onPaint}
         />
       )}
@@ -211,7 +207,6 @@ function Create({
   execute,
   onClose,
   onCreated,
-  onPaint,
   onGhosts,
   onPlace,
 }: {
@@ -221,11 +216,10 @@ function Create({
   execute: Execute;
   onClose: () => void;
   onCreated: (id: string) => void;
-  onPaint: (id: string, color: string) => void;
   onGhosts: ((ghosts: Ghost[]) => void) | undefined;
 }) {
   const [title, setTitle] = useState("");
-  const [color, setColor] = useState<string>(PALETTE[0].hex);
+  const [color, setColor] = useState<string | null>(PALETTE[0].hex);
   const draft = useDraftPreview(title, graph.revision);
   const text = title.trim();
   const shown = text.length >= 3 ? draft.result : null;
@@ -244,13 +238,18 @@ function Create({
       onSubmit={(event) => {
         event.preventDefault();
         const built = captureWithJev(title, draft.result, graph);
-        if (!built) return;
+        if (!built || built.command.type !== "capture") return;
         // The node appears where the owner clicked, at once; the save runs
         // behind it and a failure removes it with an error notice.
         onPlace?.(built.nodeId, at);
         onGhosts?.([]);
-        onPaint(built.nodeId, color);
-        void execute(built.command, graph.revision);
+        void execute(
+          {
+            ...built.command,
+            nodes: built.command.nodes.map((node) => ({ ...node, color })),
+          },
+          graph.revision,
+        );
         onCreated(built.nodeId);
       }}
     >
@@ -335,7 +334,6 @@ function NodeCard({
   focused,
   onFocus,
   onClose,
-  color,
   onPaint,
 }: {
   graph: Graph;
@@ -344,8 +342,7 @@ function NodeCard({
   focused: boolean;
   onFocus: (id: string) => void;
   onClose: () => void;
-  color: string | null;
-  onPaint: (id: string, color: string) => void;
+  onPaint: (id: string, color: string | null) => void;
 }) {
   const node = graph.nodes.find((item) => item.id === id);
   const [title, setTitle] = useState(node?.title ?? "");
@@ -418,7 +415,10 @@ function NodeCard({
           </button>
         ))}
       </div>
-      <Swatches value={color} onChange={(hex) => onPaint(node.id, hex)} />
+      <Swatches
+        value={node.color ?? null}
+        onChange={(hex) => onPaint(node.id, hex)}
+      />
       {node.sources.length > 0 && (
         <ul className="source-links">
           {node.sources.map((item, index) => {
@@ -915,10 +915,17 @@ function Swatches({
   onChange,
 }: {
   value: string | null;
-  onChange: (hex: string) => void;
+  onChange: (hex: string | null) => void;
 }) {
   return (
     <div className="chip-row" role="group" aria-label="Color">
+      <button
+        type="button"
+        aria-pressed={value === null}
+        onClick={() => onChange(null)}
+      >
+        Status color
+      </button>
       {PALETTE.map((swatch) => (
         <button
           key={swatch.id}
