@@ -208,8 +208,8 @@ final class GraphMetalRenderer: NSObject, MTKViewDelegate {
         // A rejected background frame may finish after reactivation. Its
         // generation identifies the transition; the activation redraw replaces
         // it without showing a stale error or starting an automatic retry loop.
-        if error?.domain == MTLCommandBufferErrorDomain,
-          error?.code == MTLCommandBufferError.Code.notPermitted.rawValue,
+        if let error, error.domain == MTLCommandBufferErrorDomain,
+          error.code == MTLCommandBufferError.Code.notPermitted.rawValue,
           (!self.isRenderingEnabled || self.lifecycleGeneration != submittedGeneration) { return }
         guard message != self.lastReportedError else { return }
         self.lastReportedError = message
