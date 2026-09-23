@@ -7,6 +7,7 @@ import {
 } from "@yakjev/protocol";
 import {
   LegacyPaintMigration,
+  createPreferencesStorage,
   parsePreferences,
   updateDraggingPreference,
   type DisplayPreferences,
@@ -41,27 +42,38 @@ const graph = (nodes: readonly Node[], revision = 1): Graph => ({
 });
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((yes) => {
+  let reject!: (cause: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
     resolve = yes;
+    reject = no;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
+}
+async function until(predicate: () => boolean) {
+  for (let index = 0; index < 250; index++) {
+    if (predicate()) return;
+    await Bun.sleep(1);
+  }
+  throw new Error("Expected asynchronous state did not arrive");
 }
 function harness(paint: Record<string, string>, connectWhileDragging = false) {
   let stored: DisplayPreferences = { paint, connectWhileDragging };
   let failedWrite = false;
   const notifications: unknown[] = [];
-  const migration = new LegacyPaintMigration(
-    {
-      read: () => structuredClone(stored),
-      write: (value) => {
-        if (failedWrite) throw new Error("Synthetic disk failure");
-        stored = structuredClone(value);
-      },
+  const storage = createPreferencesStorage({
+    key: `synthetic-${crypto.randomUUID()}`,
+    read: () => JSON.stringify(stored),
+    write: async (value) => {
+      if (failedWrite) throw new Error("Synthetic disk failure");
+      stored = JSON.parse(value);
     },
-    (state, preferences) => notifications.push({ state, preferences }),
+  });
+  const migration = new LegacyPaintMigration(storage, (state, preferences) =>
+    notifications.push({ state, preferences }),
   );
   return {
     migration,
+    storage,
     notifications,
     read: () => stored,
     replace: (value: DisplayPreferences) => {
@@ -176,6 +188,7 @@ describe("mobile legacy color migration", () => {
     });
     expect(h.read().paint).toEqual({ n: "#112233" });
     acknowledge();
+    await h.storage.read();
     expect(h.read().paint).toEqual({});
     // An Undo restoring absent color cannot resurrect the retired local value.
     await h.migration.migrate(graph([node("n")], 3), async () => {
@@ -226,6 +239,7 @@ describe("mobile legacy color migration", () => {
       calls++;
       return save.promise;
     });
+    await until(() => calls === 1);
     old.migration.dispose();
     const notifications = old.notifications.length;
     save.resolve(true);
@@ -251,10 +265,12 @@ describe("mobile legacy color migration", () => {
   test("retirement preserves a replacement local value and the latest interaction preference", async () => {
     const h = harness({ n: "#112233" });
     const save = deferred<boolean>();
-    const running = h.migration.migrate(
-      graph([node("n")]),
-      async () => save.promise,
-    );
+    let sent = false;
+    const running = h.migration.migrate(graph([node("n")]), async () => {
+      sent = true;
+      return save.promise;
+    });
+    await until(() => sent);
     h.migration.dispose();
     h.replace({
       paint: { n: "#abcdef", another: "#445566" },
@@ -279,6 +295,7 @@ describe("mobile legacy color migration", () => {
     const first = h.migration.migrate(graph([node("n")]), execute);
     const second = h.migration.migrate(graph([node("n")]), execute);
     expect(first).toBe(second);
+    await until(() => calls === 1);
     expect(calls).toBe(1);
     save.resolve(true);
     await first;
@@ -299,33 +316,241 @@ describe("mobile legacy color migration", () => {
     expect(h.migration.getState()).toEqual({ pending: false, error: null });
   });
 
-  test("malformed preference JSON can be replaced but storage read errors cannot erase colors", () => {
+  test("failed atomic cleanup preserves the complete remaining palette and orphan on restart", async () => {
+    let stored = JSON.stringify({
+      paint: { acknowledged: "#112233", pending: "#445566", orphan: "#778899" },
+      connectWhileDragging: false,
+    });
+    const original = stored;
+    const write = deferred<void>();
+    let writes = 0;
+    let fail = true;
+    const file = {
+      key: "synthetic-atomic-failure",
+      read: () => stored,
+      write: async (value: string) => {
+        writes++;
+        if (fail) await write.promise;
+        stored = value;
+      },
+    };
+    const storage = createPreferencesStorage(file);
+    const migration = new LegacyPaintMigration(storage);
+    const running = migration.migrate(
+      graph([node("acknowledged")]),
+      async () => true,
+    );
+    await until(() => writes === 1);
+    expect(stored).toBe(original);
+    write.reject(
+      new Error("Synthetic atomic replacement failed before commit"),
+    );
+    await running;
+    expect(stored).toBe(original);
+    expect(migration.getState().error).toContain("cleanup needs a retry");
+    migration.dispose();
+    fail = false;
+    const restarted = new LegacyPaintMigration(createPreferencesStorage(file));
+    const sent: Command[] = [];
+    await restarted.migrate(
+      graph([node("acknowledged", null), node("pending")], 3),
+      async (command) => {
+        sent.push(command);
+        return true;
+      },
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      type: "node.paint",
+      colors: [{ id: "pending", color: "#445566" }],
+    });
+    expect(JSON.parse(stored)).toEqual({
+      paint: { orphan: "#778899" },
+      connectWhileDragging: false,
+    });
+  });
+
+  test("late old-session cleanup and a replacement-session toggle serialize by file URI", async () => {
+    let stored = JSON.stringify({
+      paint: { n: "#112233", orphan: "#445566" },
+      connectWhileDragging: false,
+    });
+    const gate = deferred<void>();
+    let writes = 0;
+    const file = {
+      key: "synthetic-replacement-file",
+      read: () => stored,
+      write: async (value: string) => {
+        if (++writes === 1) await gate.promise;
+        stored = value;
+      },
+    };
+    const oldStorage = createPreferencesStorage(file);
+    const newStorage = createPreferencesStorage(file);
+    const migration = new LegacyPaintMigration(oldStorage);
+    const running = migration.migrate(graph([node("n")]), async () => true);
+    await until(() => writes === 1);
+    migration.dispose();
+    const toggled = updateDraggingPreference(newStorage, true);
+    await Bun.sleep(1);
+    expect(writes).toBe(1);
+    expect(JSON.parse(stored).paint).toEqual({
+      n: "#112233",
+      orphan: "#445566",
+    });
+    gate.resolve();
+    await Promise.all([running, toggled]);
+    expect(JSON.parse(stored)).toEqual({
+      paint: { orphan: "#445566" },
+      connectWhileDragging: true,
+    });
+  });
+
+  test("cleanup queued after a toggle retains that toggle and acknowledged batching waits for disk", async () => {
+    let stored = JSON.stringify({
+      paint: { n: "#112233", orphan: "#445566" },
+      connectWhileDragging: false,
+    });
+    const gate = deferred<void>();
+    let writes = 0;
+    let sends = 0;
+    const file = {
+      key: "synthetic-toggle-first",
+      read: () => stored,
+      write: async (value: string) => {
+        if (++writes === 1) await gate.promise;
+        stored = value;
+      },
+    };
+    const toggled = updateDraggingPreference(
+      createPreferencesStorage(file),
+      true,
+    );
+    await until(() => writes === 1);
+    const migration = new LegacyPaintMigration(createPreferencesStorage(file));
+    const running = migration.migrate(graph([node("n")]), async () => {
+      sends++;
+      return true;
+    });
+    await Bun.sleep(1);
+    expect(sends).toBe(0);
+    gate.resolve();
+    await Promise.all([toggled, running]);
+    expect(sends).toBe(1);
+    expect(JSON.parse(stored)).toEqual({
+      paint: { orphan: "#445566" },
+      connectWhileDragging: true,
+    });
+  });
+
+  test("an unknown-response acknowledgement suppresses reimport while atomic cleanup is pending", async () => {
+    let stored = JSON.stringify({
+      paint: { n: "#112233" },
+      connectWhileDragging: true,
+    });
+    const gate = deferred<void>();
+    let writes = 0;
+    const storage = createPreferencesStorage({
+      key: "synthetic-unknown-atomic",
+      read: () => stored,
+      write: async (value) => {
+        writes++;
+        await gate.promise;
+        stored = value;
+      },
+    });
+    const migration = new LegacyPaintMigration(storage);
+    let acknowledge!: () => void;
+    let sends = 0;
+    await migration.migrate(graph([node("n")]), async (_, saved) => {
+      sends++;
+      acknowledge = saved;
+      return false;
+    });
+    acknowledge();
+    await until(() => writes === 1);
+    const undoSnapshot = migration.migrate(graph([node("n")], 3), async () => {
+      sends++;
+      return true;
+    });
+    await Bun.sleep(1);
+    expect(sends).toBe(1);
+    gate.resolve();
+    await undoSnapshot;
+    expect(sends).toBe(1);
+    expect(JSON.parse(stored).paint).toEqual({});
+  });
+
+  test("acknowledgement retires the exact palette used to build the submitted command", async () => {
+    let stored = JSON.stringify({
+      paint: { n: "#112233" },
+      connectWhileDragging: false,
+    });
+    const storage = createPreferencesStorage({
+      key: "synthetic-between-reads",
+      read: () => stored,
+      write: async (value) => {
+        stored = value;
+      },
+    });
+    let reads = 0;
+    const migration = new LegacyPaintMigration({
+      read: async () => {
+        const snapshot = await storage.read();
+        if (++reads === 1)
+          await storage.update((current) => ({
+            ...current,
+            paint: { n: "#ABCDEF" },
+          }));
+        return snapshot;
+      },
+      update: storage.update,
+    });
+    const sent: Command[] = [];
+    await migration.migrate(graph([node("n")]), async (command) => {
+      sent.push(command);
+      if (sent.length > 1)
+        throw new Error("A stale retirement resubmitted the new value");
+      return true;
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      type: "node.paint",
+      colors: [{ id: "n", color: "#abcdef" }],
+    });
+    expect(JSON.parse(stored).paint).toEqual({});
+    expect(migration.getState()).toEqual({ pending: false, error: null });
+  });
+
+  test("malformed preference JSON can be replaced but storage read errors cannot erase colors", async () => {
     let stored = "{broken";
-    const next = updateDraggingPreference(
-      {
+    const next = await updateDraggingPreference(
+      createPreferencesStorage({
+        key: "synthetic-malformed",
         read: () => stored,
-        write: (value) => {
+        write: async (value) => {
           stored = value;
         },
-      },
+      }),
       false,
     );
     expect(JSON.parse(stored)).toEqual(next);
     expect(next).toEqual({ paint: {}, connectWhileDragging: false });
     let writes = 0;
-    expect(() =>
+    await expect(
       updateDraggingPreference(
-        {
+        createPreferencesStorage({
+          key: "synthetic-read-failed",
           read: () => {
             throw new Error("Cannot read file");
           },
-          write: () => {
+          write: async () => {
             writes++;
           },
-        },
+        }),
         true,
       ),
-    ).toThrow("Cannot read file");
+    ).rejects.toThrow("Cannot read file");
     expect(writes).toBe(0);
     expect(
       parsePreferences({

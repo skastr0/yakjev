@@ -1,20 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CryptoDigestAlgorithm, digestStringAsync } from "expo-crypto";
 import { File, Paths } from "expo-file-system";
+import { writeAsStringAsync } from "expo-file-system/legacy";
 import { errorMessage } from "@yakjev/client";
 import type { Graph } from "@yakjev/protocol";
 import {
   LegacyPaintMigration,
-  parsePreferences,
+  createPreferencesStorage,
   updateDraggingPreference,
   type DisplayPreferences,
   type MigrationState,
   type PaintMigrationExecute,
+  type PreferencesStorage,
 } from "./legacy-paint-migration";
 
 type Scope = {
   active: boolean;
-  file: File | null;
+  storage: PreferencesStorage | null;
   migration: LegacyPaintMigration | null;
 };
 const empty = (): DisplayPreferences => ({
@@ -26,7 +28,7 @@ const empty = (): DisplayPreferences => ({
 // this file retains local interaction preferences and unacknowledged imports.
 export function usePreferences(server: string, client: unknown) {
   const scope = useMemo<Scope>(
-    () => ({ active: false, file: null, migration: null }),
+    () => ({ active: false, storage: null, migration: null }),
     [server, client],
   );
   const [snapshot, setSnapshot] = useState<{
@@ -66,17 +68,14 @@ export function usePreferences(server: string, client: unknown) {
         );
         // Keep the destination even if JSON is malformed, so the next local
         // preference change can replace the unreadable file with valid data.
-        scope.file = stored;
-        const storage = {
-          read: () =>
-            parsePreferences(
-              stored.exists ? JSON.parse(stored.textSync()) : null,
-            ),
-          write: (value: DisplayPreferences) => {
-            if (!stored.exists) stored.create();
-            stored.write(JSON.stringify(value));
-          },
-        };
+        const storage = createPreferencesStorage({
+          key: stored.uri,
+          read: () => (stored.exists ? stored.text() : null),
+          // Expo 57's legacy nonappend implementation uses Data.write(.atomic).
+          // File.write is non-atomic and can truncate unacknowledged colors.
+          write: (value) => writeAsStringAsync(stored.uri, value),
+        });
+        scope.storage = storage;
         scope.migration = new LegacyPaintMigration(
           storage,
           (migration, preferences) => {
@@ -92,7 +91,7 @@ export function usePreferences(server: string, client: unknown) {
               );
           },
         );
-        const next = storage.read();
+        const next = await storage.read();
         if (!active) return;
         setSnapshot({
           scope,
@@ -118,32 +117,25 @@ export function usePreferences(server: string, client: unknown) {
       scope.active = false;
       scope.migration?.dispose();
       scope.migration = null;
-      scope.file = null;
+      scope.storage = null;
     };
   }, [scope, server]);
 
   const setConnectWhileDragging = useCallback(
-    (enabled: boolean) => {
+    async (enabled: boolean) => {
       if (!scope.active) return;
       try {
-        const stored = scope.file;
-        if (!stored) throw new Error("Display storage is unavailable.");
-        const next = updateDraggingPreference(
-          {
-            read: () => (stored.exists ? stored.textSync() : null),
-            write: (value) => {
-              if (!stored.exists) stored.create();
-              stored.write(value);
-            },
-          },
-          enabled,
-        );
+        const storage = scope.storage;
+        if (!storage) throw new Error("Display storage is unavailable.");
+        const next = await updateDraggingPreference(storage, enabled);
+        if (!scope.active) return;
         setSnapshot((current) =>
           current.scope === scope
             ? { ...current, value: next, error: null }
             : current,
         );
       } catch (cause) {
+        if (!scope.active) return;
         setSnapshot((current) =>
           current.scope === scope
             ? {

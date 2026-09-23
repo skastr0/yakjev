@@ -10,10 +10,57 @@ export type PaintMigrationExecute = (
   onSaved: () => void,
 ) => Promise<boolean>;
 export type PreferencesStorage = {
-  read(): DisplayPreferences;
-  write(value: DisplayPreferences): void;
+  read(): Promise<DisplayPreferences>;
+  update(
+    change: (value: DisplayPreferences) => DisplayPreferences,
+    recoverMalformed?: boolean,
+  ): Promise<DisplayPreferences>;
 };
 export type MigrationState = { pending: boolean; error: string | null };
+
+const pendingFiles = new Map<string, Promise<void>>();
+
+// Key by file, not client: a late acknowledgement and a replacement session's
+// toggle must serialize their reads as well as their atomic writes.
+function withFile<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const result = (pendingFiles.get(key) ?? Promise.resolve()).then(operation);
+  const tail = result.then(
+    () => {},
+    () => {},
+  );
+  pendingFiles.set(key, tail);
+  void tail.then(() => {
+    if (pendingFiles.get(key) === tail) pendingFiles.delete(key);
+  });
+  return result;
+}
+
+export function createPreferencesStorage(file: {
+  key: string;
+  read(): string | null | Promise<string | null>;
+  write(value: string): Promise<void>;
+}): PreferencesStorage {
+  const read = async (recoverMalformed = false) => {
+    const raw = await file.read();
+    let decoded: unknown = null;
+    try {
+      decoded = JSON.parse(raw ?? "null");
+    } catch (cause) {
+      if (!recoverMalformed) throw cause;
+    }
+    return parsePreferences(decoded);
+  };
+  return {
+    read: () => withFile(file.key, () => read()),
+    update: (change, recoverMalformed = false) =>
+      withFile(file.key, async () => {
+        const current = await read(recoverMalformed);
+        const next = change(current);
+        if (next !== current) await file.write(JSON.stringify(next));
+        return next;
+      }),
+  };
+}
 
 export function parsePreferences(value: unknown): DisplayPreferences {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -33,21 +80,15 @@ export function parsePreferences(value: unknown): DisplayPreferences {
 }
 
 export function updateDraggingPreference(
-  file: { read(): string | null; write(value: string): void },
+  storage: PreferencesStorage,
   enabled: boolean,
-): DisplayPreferences {
+): Promise<DisplayPreferences> {
   // An unreadable file is not malformed JSON: do not discard saved colors
   // because a transient storage read failed.
-  const raw = file.read();
-  let decoded: unknown = null;
-  try {
-    decoded = JSON.parse(raw ?? "null");
-  } catch {
-    /* Replace malformed JSON. */
-  }
-  const next = { ...parsePreferences(decoded), connectWhileDragging: enabled };
-  file.write(JSON.stringify(next));
-  return next;
+  return storage.update(
+    (current) => ({ ...current, connectWhileDragging: enabled }),
+    true,
+  );
 }
 
 /** One server file and one client lifetime; durable cleanup only follows proof. */
@@ -77,25 +118,27 @@ export class LegacyPaintMigration {
     if (!this.disposed) this.changed(this.state, preferences);
   }
 
-  private retire(values: Readonly<Record<string, string>>): boolean {
+  private async retire(
+    values: Readonly<Record<string, string>>,
+  ): Promise<boolean> {
     for (const [id, color] of Object.entries(values))
       this.retired.set(id, color);
+    const retiring = new Map(this.retired);
     try {
-      // Read immediately before the synchronous write. A newer preference or
-      // differently-valued entry in the same server file must survive cleanup.
-      const latest = this.storage.read();
-      const paint = { ...latest.paint };
-      let changed = false;
-      for (const [id, color] of this.retired) {
-        if (Object.hasOwn(paint, id) && paint[id] === color) {
-          delete paint[id];
-          changed = true;
+      const next = await this.storage.update((latest) => {
+        const paint = { ...latest.paint };
+        let changed = false;
+        for (const [id, color] of retiring) {
+          if (Object.hasOwn(paint, id) && paint[id] === color) {
+            delete paint[id];
+            changed = true;
+          }
         }
-      }
-      const next = { ...latest, paint };
-      if (changed) this.storage.write(next);
-      this.retired.clear();
-      const pending = Object.keys(paint).length > 0;
+        return changed ? { ...latest, paint } : latest;
+      });
+      for (const [id, color] of retiring)
+        if (this.retired.get(id) === color) this.retired.delete(id);
+      const pending = Object.keys(next.paint).length > 0;
       this.publish(
         { pending, error: this.blocked && pending ? this.state.error : null },
         next,
@@ -131,7 +174,8 @@ export class LegacyPaintMigration {
     try {
       while (!this.disposed && this.graph) {
         const graph = this.graph;
-        const legacy = this.storage.read().paint;
+        const legacy = (await this.storage.read()).paint;
+        if (this.disposed) return;
         const nodes = new Map(graph.nodes.map((node) => [node.id, node]));
         const resolved = Object.fromEntries(
           Object.entries(legacy).filter(([id]) => {
@@ -141,35 +185,42 @@ export class LegacyPaintMigration {
         );
         // Canonical null is a deliberate clear. It resolves a legacy entry and
         // must never be treated as permission to resurrect its old color.
-        if (!this.retire(resolved)) {
+        if (!(await this.retire(resolved))) {
           this.blocked = true;
           return;
         }
-        const command = legacyPaintCommand(graph, this.storage.read().paint);
+        const remaining = (await this.storage.read()).paint;
+        const command = legacyPaintCommand(graph, remaining);
+        if (this.disposed) return;
         if (!command) {
           this.blocked = false;
           return;
         }
         if (this.blocked) return;
-        let acknowledged = false;
-        let cleaned = false;
+        const acknowledgement: { cleanup: Promise<boolean> | null } = {
+          cleanup: null,
+        };
         const acknowledge = () => {
-          if (acknowledged) return;
-          acknowledged = true;
+          if (acknowledgement.cleanup) return;
           this.blocked = false;
           // Even a late receipt can retire exact entries in this captured old
           // server file. It never updates a replacement session or sends work.
-          cleaned = this.retire(
+          acknowledgement.cleanup = this.retire(
             Object.fromEntries(
-              command.colors.map(({ id }) => [id, legacy[id]!]),
+              command.colors.map(({ id }) => [id, remaining[id]!]),
             ),
-          );
-          this.blocked = !cleaned;
+          ).then((cleaned) => {
+            this.blocked = !cleaned;
+            return cleaned;
+          });
         };
         const saved = await execute(command, acknowledge);
         if (saved) acknowledge();
+        const cleaned = acknowledgement.cleanup
+          ? await acknowledgement.cleanup
+          : false;
         if (this.disposed) return;
-        if (!saved && !acknowledged) {
+        if (!saved && !acknowledgement.cleanup) {
           this.blocked = true;
           this.publish({
             pending: true,
