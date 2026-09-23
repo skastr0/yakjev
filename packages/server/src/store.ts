@@ -251,7 +251,21 @@ export class Store extends Context.Service<Store>()("@yakjev/Store", {
                 (undone.command.type === "undo" &&
                   JSON.stringify(withoutPaint(before)) ===
                     JSON.stringify(withoutPaint(previous)));
-              after = { ...previous, revision: before.revision + 1 };
+              const currentColors = new Map(
+                before.nodes.map((node) => [node.id, node.color]),
+              );
+              after = {
+                ...previous,
+                revision: before.revision + 1,
+                // Restoring status color is deliberate even when a node.put
+                // changed color alongside content. Keep stale imports blocked.
+                nodes: previous.nodes.map((node) =>
+                  node.color === undefined &&
+                  currentColors.get(node.id) !== undefined
+                    ? { ...node, color: null }
+                    : node,
+                ),
+              };
               // Never reuse taxonomy versions after undo: old inferences must stay stale.
               if (previous.taxonomy.version !== before.taxonomy.version)
                 after = {
@@ -263,22 +277,7 @@ export class Store extends Context.Service<Store>()("@yakjev/Store", {
                 };
               // Semantic restores are new edits. Undoing paint (including an
               // undo of that undo) preserves the same content freshness.
-              if (cosmeticUndo) {
-                const currentColors = new Map(
-                  before.nodes.map((node) => [node.id, node.color]),
-                );
-                after = {
-                  ...after,
-                  // Undo is a deliberate return to status color. Retain that
-                  // choice so another client's stale import cannot repaint it.
-                  nodes: after.nodes.map((node) =>
-                    node.color === undefined &&
-                    currentColors.get(node.id) !== undefined
-                      ? { ...node, color: null }
-                      : node,
-                  ),
-                };
-              } else {
+              if (!cosmeticUndo) {
                 after = {
                   ...after,
                   nodes: after.nodes.map((node) => ({

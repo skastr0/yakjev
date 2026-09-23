@@ -423,6 +423,46 @@ test("paint undo durably blocks another client's stale import, including after u
   }
 });
 
+test("undoing a node.put color change blocks stale imports while retaining semantic freshness", async () => {
+  for (const color of ["#aa0000", null]) {
+    const { store, run, send } = await fixture();
+    await send(capture);
+    await send({
+      type: "suggestion.record",
+      suggestion: suggestion("put-color-judgment", "a", "c", 1),
+    });
+    await send({
+      type: "node.put",
+      node: { ...node("a", "Changed intention and color"), color },
+    });
+    await send({ type: "undo", revision: 3 });
+    const restored = await run(store.read);
+    expect(restored.nodes[0]?.title).toBe("a");
+    expect(restored.nodes.every(({ updated }) => updated.revision === 4)).toBe(
+      true,
+    );
+    expect(restored.edges.every(({ updated }) => updated.revision === 4)).toBe(
+      true,
+    );
+    expect(restored.suggestions[0]?.status).toBe("superseded");
+    await run(
+      store.execute(
+        { id: "unmigrated-client", channel: "browser" },
+        {
+          requestId: "stale-after-put-undo",
+          expectedRevision: 4,
+          command: {
+            type: "node.paint",
+            onlyIfUnset: true,
+            colors: [{ id: "a", color: "#0000bb" }],
+          },
+        },
+      ),
+    );
+    expect((await run(store.read)).nodes[0]?.color).toBeNull();
+  }
+});
+
 test("paint journal failures roll back color and revision together", async () => {
   const { store, run, send, path } = await fixture();
   await send(capture);
