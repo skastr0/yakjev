@@ -14,6 +14,7 @@ import {
   type Browser,
   type ElectronApplication,
   type Page,
+  type Request as BrowserRequest,
 } from "@playwright/test";
 import { readGraph, sendCommand } from "../../../tests/acceptance/contract";
 import {
@@ -56,6 +57,11 @@ const unmatchedLegacy = { "unmatched-synthetic-node": palette.red };
 const timings: { step: string; ms: number }[] = [];
 const diagnostics: string[] = [];
 const renderedColors: Record<string, string> = {};
+const lockObservations: {
+  client: string;
+  requestsWhileLocked: string[];
+  observedMs: number;
+}[] = [];
 const shutdowns: {
   phase: "restart" | "final";
   graceful: boolean;
@@ -173,6 +179,141 @@ async function clearCanvasOverlays(page: Page): Promise<void> {
   await page.mouse.move(10, 10);
 }
 
+async function failedLock(
+  page: Page,
+  server: ServerHandle,
+  client: string,
+  nativeFault?: (fault: LockFault | undefined) => void,
+): Promise<void> {
+  await currentRevision(page, server);
+  let releaseResponse = () => {};
+  const responseReady = new Promise<void>((resolveResponse) => {
+    releaseResponse = resolveResponse;
+  });
+  let requestStarted = () => {};
+  const requestReady = new Promise<void>((resolveRequest) => {
+    requestStarted = resolveRequest;
+  });
+  const requests: string[] = [];
+  const observeRequest = (request: BrowserRequest) => {
+    const path = new URL(request.url()).pathname;
+    if (path.startsWith("/api/")) requests.push(`${request.method()} ${path}`);
+  };
+  if (nativeFault) nativeFault({ requests, requestStarted, responseReady });
+  else {
+    await page.route("**/api/session", async (route) => {
+      if (route.request().method() !== "DELETE") return route.continue();
+      requestStarted();
+      await responseReady;
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Synthetic sign-out outage" }),
+      });
+    });
+    page.on("request", observeRequest);
+  }
+  try {
+    await page.getByRole("button", { name: "Lock", exact: true }).click();
+    await Promise.race([
+      requestReady,
+      page.waitForTimeout(5_000).then(() => {
+        throw new Error("Lock did not send DELETE /api/session");
+      }),
+    ]);
+    await expect(page.getByRole("application")).toHaveCount(0);
+    await expect(
+      page.getByText("Closing your graph…", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Owner access token")).toHaveCount(0);
+    // A remote journal event while DELETE is pending must not revive SSE reads.
+    await sendCommand(server, (await readGraph(server)).revision, {
+      type: "capture",
+      capture: {
+        id: `lock-probe-${client}`,
+        text: "Synthetic event while locked",
+        sources: [],
+        nodeIds: [],
+      },
+      nodes: [],
+      edges: [],
+      autoConnect: false,
+    });
+    releaseResponse();
+    await expect(page.getByRole("alert")).toContainText(
+      "server sign-out could not be confirmed",
+    );
+    await expect(page.getByLabel("Owner access token")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Retry connection" }),
+    ).toBeVisible();
+    await expect(page.getByRole("application")).toHaveCount(0);
+    await page.evaluate(
+      ({ key, paint }) => localStorage.setItem(key, JSON.stringify(paint)),
+      {
+        key: legacyKey,
+        paint: { [ids.status]: palette.green },
+      },
+    );
+    // Observe delayed effects too; this is an inactivity check, not a speed SLA.
+    const observed = performance.now();
+    await page.waitForTimeout(750);
+    await expect(page.getByRole("application")).toHaveCount(0);
+    await expect(page.getByRole("alert")).toContainText(
+      "server sign-out could not be confirmed",
+    );
+    assert.deepEqual(
+      requests,
+      ["DELETE /api/session"],
+      "failed Lock must not resume reads, writes, or migration",
+    );
+    assert.deepEqual(
+      await page.evaluate(
+        (key) => JSON.parse(localStorage.getItem(key) ?? "{}"),
+        legacyKey,
+      ),
+      { [ids.status]: palette.green },
+    );
+    lockObservations.push({
+      client,
+      requestsWhileLocked: [...requests],
+      observedMs: Math.round(performance.now() - observed),
+    });
+    await page.screenshot({
+      path: join(artifacts, `color-smoke-lock-${client}.png`),
+    });
+  } finally {
+    releaseResponse();
+    if (nativeFault) nativeFault(undefined);
+    else {
+      page.off("request", observeRequest);
+      await page.unroute("**/api/session");
+    }
+  }
+  // Only an explicit recovery reconnects the still-valid synthetic server cookie.
+  await page.getByRole("button", { name: "Retry connection" }).click();
+  await live(page);
+  await expect
+    .poll(() => page.evaluate((key) => localStorage.getItem(key), legacyKey))
+    .toBe(null);
+  await currentRevision(page, server);
+  await page.getByRole("button", { name: "Lock", exact: true }).click();
+  await expect(page.getByLabel("Owner access token")).toBeVisible();
+  await expect(page.getByRole("application")).toHaveCount(0);
+  assert.equal(
+    await page.evaluate(async () => (await fetch("/api/graph")).status),
+    401,
+  );
+  await unlock(page);
+  await currentRevision(page, server);
+}
+
+type LockFault = {
+  requests: string[];
+  requestStarted: () => void;
+  responseReady: Promise<void>;
+};
+
 async function step(name: string, action: () => Promise<void>): Promise<void> {
   const started = performance.now();
   await action();
@@ -262,6 +403,7 @@ async function main(): Promise<void> {
   const restart: { closeMs?: number; launchMs?: number; restoreMs?: number } =
     {};
   let shutdownMs: number | undefined;
+  let stopProxy: (() => void | Promise<void>) | undefined;
 
   try {
     assert(
@@ -270,6 +412,45 @@ async function main(): Promise<void> {
     );
     server = await startServer();
     const local = server;
+    let nativeFault: LockFault | undefined;
+    // Electron forwards API traffic in its native session, outside Playwright's
+    // renderer request routing. Inject the desktop fault at a real, disposable
+    // HTTP boundary; the existing acceptance server remains the only graph store.
+    const proxy = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      idleTimeout: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const fault = nativeFault;
+        if (fault && url.pathname.startsWith("/api/")) {
+          fault.requests.push(`${request.method} ${url.pathname}`);
+          if (request.method === "DELETE" && url.pathname === "/api/session") {
+            fault.requestStarted();
+            await fault.responseReady;
+            return Response.json(
+              { error: "Synthetic sign-out outage" },
+              { status: 503 },
+            );
+          }
+        }
+        const headers = new Headers(request.headers);
+        headers.delete("host");
+        if (headers.has("origin")) headers.set("origin", local.origin);
+        return fetch(new URL(`${url.pathname}${url.search}`, local.origin), {
+          method: request.method,
+          headers,
+          redirect: "manual",
+          signal: request.signal,
+          body:
+            request.method === "GET" || request.method === "HEAD"
+              ? null
+              : await request.arrayBuffer(),
+        });
+      },
+    });
+    stopProxy = () => proxy.stop(true);
+    const desktopOrigin = `http://127.0.0.1:${proxy.port}`;
     const launch = () =>
       _electron.launch({
         executablePath: createRequire(import.meta.url)("electron"),
@@ -277,7 +458,7 @@ async function main(): Promise<void> {
         cwd: desktopRoot,
         env: {
           ...launchEnvironment(userData),
-          YAKJEV_REMOTE_URL: local.origin,
+          YAKJEV_REMOTE_URL: desktopOrigin,
         },
         timeout: 30_000,
       });
@@ -285,7 +466,9 @@ async function main(): Promise<void> {
       await expect
         .poll(
           () =>
-            desktop.windows().some((page) => page.url() === `${local.origin}/`),
+            desktop
+              .windows()
+              .some((page) => page.url() === `${desktopOrigin}/`),
           {
             timeout: 20_000,
           },
@@ -293,7 +476,7 @@ async function main(): Promise<void> {
         .toBe(true);
       const page = desktop
         .windows()
-        .find((page) => page.url() === `${local.origin}/`);
+        .find((page) => page.url() === `${desktopOrigin}/`);
       assert(page);
       observe(page, "desktop");
       await page.emulateMedia({ reducedMotion: "reduce" });
@@ -613,12 +796,32 @@ async function main(): Promise<void> {
           "background-color",
           `rgb(${channels.join(", ")})`,
         );
+        const box = await swatch(desktop, name).boundingBox();
+        assert(box, `${name} swatch must have a rendered box`);
+        assert.equal(box.width, 22, `${name} swatch width`);
+        assert.equal(box.height, 22, `${name} swatch height`);
+        await expect(swatch(desktop, name)).toHaveCSS("border-radius", "50%");
       }
       await selected(desktop, "orange");
       await desktop.screenshot({
         path: join(artifacts, "color-smoke-palette.png"),
       });
     });
+
+    await step(
+      "browser failed Lock stays closed until explicit recovery",
+      async () => {
+        await failedLock(web, local, "browser");
+      },
+    );
+    await step(
+      "desktop failed Lock stays closed and normal Lock still revokes access",
+      async () => {
+        await failedLock(desktop, local, "desktop", (fault) => {
+          nativeFault = fault;
+        });
+      },
+    );
 
     await step(
       "restart retains shared colors and retires local imports",
@@ -719,6 +922,7 @@ async function main(): Promise<void> {
         diagnostics.push(`cleanup: ${String(result.reason)}`);
       }
     }
+    await stopProxy?.();
     await server?.stop();
     await rm(profileRoot, { recursive: true, force: true });
     await writeFile(
@@ -735,6 +939,7 @@ async function main(): Promise<void> {
           shutdowns,
           diagnostics,
           renderedColors,
+          lockObservations,
           ...(failure === undefined ? {} : { error: String(failure) }),
         },
         null,
