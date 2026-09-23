@@ -57,6 +57,6 @@ bun run --cwd apps/mobile export
 bun run --cwd apps/mobile prebuild
 ```
 
-`eas.json` follows the Expo template's development, preview, and production split. It contains no account identifiers or submission configuration. Builds for devices require your own signing setup. No EAS build, App Store submission, server deployment, or production write happens as part of local verification.
+`eas.json` follows the Expo template's development, preview, and production split. Internal TestFlight releases use local Xcode signing and the `asc` CLI, following [the release runbook](mobile-testflight.md). No upload, server deployment, or production write happens as part of local verification.
 
 The implementation follows [Expo's monorepo guidance](https://docs.expo.dev/guides/monorepos/), [native view modules](https://docs.expo.dev/modules/native-view-tutorial/), and [SecureStore](https://docs.expo.dev/versions/latest/sdk/securestore/). `../expo-template` supplied the workspace conventions; `../ripple` supplied the local Expo module, native rendering lifecycle, and Swift package testing patterns.

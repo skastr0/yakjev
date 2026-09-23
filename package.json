@@ -33,6 +33,7 @@
     "verify": "bun run check:format && bun run typecheck && bun run test && bun run desktop:test && bun run test:acceptance && bun run build && bun run desktop:build && bun run test:deploy && bun run mobile:verify",
     "mobile:start": "bun run --cwd apps/mobile start",
     "mobile:ios": "bun run --cwd apps/mobile ios",
+    "mobile:testflight": "bash apps/mobile/scripts/release-testflight-internal.sh",
     "mobile:verify": "bun run --cwd apps/mobile verify",
     "mobile:native:test": "bun run --cwd apps/mobile test:native"
   },
