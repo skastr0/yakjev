@@ -10,6 +10,7 @@ const external = ["electron", /^electron\/.+/, /^node:/];
 
 export default defineConfig({
   main: {
+    envDir: false,
     plugins: [
       {
         name: "desktop-connection-page",
@@ -33,7 +34,7 @@ export default defineConfig({
       externalizeDeps: false,
       outDir: resolve(desktopRoot, "out/main"),
       target: "node24",
-      sourcemap: true,
+      sourcemap: false,
       rollupOptions: {
         input: { index: resolve(desktopRoot, "src/main/index.ts") },
         external,
@@ -42,11 +43,12 @@ export default defineConfig({
     },
   },
   preload: {
+    envDir: false,
     build: {
       externalizeDeps: false,
       outDir: resolve(desktopRoot, "out/preload"),
       target: "node24",
-      sourcemap: true,
+      sourcemap: false,
       rollupOptions: {
         input: { index: resolve(desktopRoot, "src/preload/index.ts") },
         external,
@@ -55,6 +57,7 @@ export default defineConfig({
     },
   },
   renderer: {
+    envDir: false,
     // The desktop renderer is the same source and entry point as the web app.
     root: webRoot,
     publicDir: resolve(webRoot, "public"),
@@ -70,7 +73,7 @@ export default defineConfig({
       emptyOutDir: true,
       target: "chrome152",
       minify: "esbuild",
-      sourcemap: true,
+      sourcemap: false,
       rollupOptions: { input: resolve(webRoot, "index.html") },
     },
   },

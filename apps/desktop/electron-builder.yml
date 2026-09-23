@@ -11,14 +11,23 @@ extraMetadata:
   main: out/main/index.js
 asar: true
 npmRebuild: false
+afterPack: scripts/after-pack.mjs
 mac:
   icon: build/icon.icns
   target:
     - dmg
     - zip
   category: public.app-category.productivity
-  identity: "-"
-  hardenedRuntime: false
+  identity: null
+  forceCodeSigning: false
+  notarize: false
+  hardenedRuntime: true
+  strictVerify: true
+  minimumSystemVersion: "13.0"
+  sign: scripts/sign-macos.mjs
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  preAutoEntitlements: false
   gatekeeperAssess: false
 win:
   icon: build/icon.ico

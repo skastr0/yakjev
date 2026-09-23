@@ -18,3 +18,11 @@ coverage/
 apps/desktop/out/
 apps/desktop/release/
 apps/desktop/artifacts/
+.local/
+*.p12
+*.pfx
+*.p8
+*.key
+*.pem
+*.keychain
+*.keychain-db
