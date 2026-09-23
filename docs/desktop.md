@@ -20,8 +20,13 @@ Use **File → Connect to Server…** to switch servers. The app remembers the
 server address. Each server has its own Chromium session and browser storage.
 Source links open in your system browser.
 
-Custom node colors currently live in each client's local preferences. They do
-not sync between the web browser, desktop and mobile.
+Node colors are saved in the server graph and sync between the web browser,
+desktop and mobile through the existing live updates. Color edits participate
+in Undo and graph exports. **Status color** removes the explicit choice.
+On first connection, each updated client imports its previously local colors
+only for nodes without a saved server choice. Existing server choices win;
+failed imports retain the local values for retry. See [color sync](colors.md)
+for the migration and release contract.
 
 You can also select a server when launching from a terminal:
 
