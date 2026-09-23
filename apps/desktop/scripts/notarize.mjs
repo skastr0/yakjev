@@ -124,10 +124,11 @@ const runPrivate = async (
 ) => {
   const basename = `.${label}-${randomUUID()}`;
   const stdoutPath = path.join(workDir, `${basename}.json`);
+  const stderrPath = path.join(workDir, `${basename}.err`);
   const stdout = await open(stdoutPath, "wx", 0o600);
   let stderr;
   try {
-    stderr = await open(path.join(workDir, `${basename}.err`), "wx", 0o600);
+    stderr = await open(stderrPath, "wx", 0o600);
     const code = await new Promise((resolve, reject) => {
       const child = spawn(command, args, {
         env,
@@ -148,7 +149,64 @@ const runPrivate = async (
     await stdout.close();
     await stderr?.close();
   }
-  return stdoutPath;
+  return { stdoutPath, stderrPath };
+};
+
+const readDmgCdHash = async (dmgPath, workDir, env) => {
+  await runPrivate("/usr/bin/codesign", ["--verify", "--strict", dmgPath], {
+    workDir,
+    env,
+    label: "dmg-signature-verification",
+  });
+  const { stderrPath } = await runPrivate(
+    "/usr/bin/codesign",
+    ["-d", "--verbose=4", dmgPath],
+    { workDir, env, label: "dmg-signature-metadata" },
+  );
+  const metadata = await readFile(stderrPath, "utf8");
+  const hashes = metadata
+    .split("\n")
+    .filter((line) => line.startsWith("CDHash="));
+  if (hashes.length !== 1 || !/^CDHash=[0-9a-f]{40,64}$/iu.test(hashes[0])) {
+    throw new Error("Disk image has no unambiguous signature content hash");
+  }
+  return hashes[0].slice("CDHash=".length).toLowerCase();
+};
+
+// stapler can atomically replace a DMG while attaching its ticket. Permit that
+// inode change only across the staple call, with unchanged signed content, then
+// bind all later checks to the replacement inode. Callers retain the original
+// submitted archive hash separately because the ticket changes its file bytes.
+export const stapleDmgPreservingSignature = async ({
+  dmgPath,
+  workDir,
+  workIdentity,
+  dmgIdentity,
+  expectedCdHash,
+  staple,
+  readCdHash,
+}) => {
+  await assertWorkDirectory(workDir, workIdentity);
+  await assertArtifactIdentity(dmgPath, dmgIdentity);
+  if ((await readCdHash()) !== expectedCdHash) {
+    throw new Error("Disk image signed content changed before stapling");
+  }
+  await assertWorkDirectory(workDir, workIdentity);
+  await assertArtifactIdentity(dmgPath, dmgIdentity);
+  await staple();
+  await assertWorkDirectory(workDir, workIdentity);
+  const stapledIdentity = await admitDirectOutput(
+    dmgPath,
+    workDir,
+    ".dmg",
+    true,
+  );
+  if ((await readCdHash()) !== expectedCdHash) {
+    throw new Error("Stapling changed the disk image signed content");
+  }
+  await assertWorkDirectory(workDir, workIdentity);
+  await assertArtifactIdentity(dmgPath, stapledIdentity);
+  return stapledIdentity;
 };
 
 // asc can emit consecutive JSON objects. Parse a strict JSON object stream,
@@ -214,7 +272,7 @@ const submit = async (filePath, workDir, env, kind) => {
     env,
     label: `${kind}-notary-auth`,
   });
-  const logPath = await runPrivate(
+  const { stdoutPath } = await runPrivate(
     "asc",
     [
       "notarization",
@@ -236,7 +294,7 @@ const submit = async (filePath, workDir, env, kind) => {
       timeout: 80 * 60_000,
     },
   );
-  return parseNotarizationResponse(await readFile(logPath, "utf8"));
+  return parseNotarizationResponse(await readFile(stdoutPath, "utf8"));
 };
 
 export const notarizeApp = async ({
@@ -313,6 +371,9 @@ export const notarizeApp = async ({
 export const notarizeDmg = async ({ dmgPath, workDir, env = process.env }) => {
   const workIdentity = await admitWorkDirectory(workDir);
   const dmgIdentity = await admitDirectOutput(dmgPath, workDir, ".dmg", true);
+  const expectedCdHash = await readDmgCdHash(dmgPath, workDir, env);
+  await assertWorkDirectory(workDir, workIdentity);
+  await assertArtifactIdentity(dmgPath, dmgIdentity);
   const inputSha256 = await sha256(dmgPath);
   const accepted = await submit(dmgPath, workDir, env, "dmg");
   await assertWorkDirectory(workDir, workIdentity);
@@ -322,7 +383,15 @@ export const notarizeDmg = async ({ dmgPath, workDir, env = process.env }) => {
   }
   const run = (args, label) =>
     runPrivate("/usr/bin/xcrun", args, { workDir, env, label });
-  await run(["stapler", "staple", dmgPath], "dmg-staple");
+  const stapledIdentity = await stapleDmgPreservingSignature({
+    dmgPath,
+    workDir,
+    workIdentity,
+    dmgIdentity,
+    expectedCdHash,
+    staple: () => run(["stapler", "staple", dmgPath], "dmg-staple"),
+    readCdHash: () => readDmgCdHash(dmgPath, workDir, env),
+  });
   await run(["stapler", "validate", dmgPath], "dmg-staple-validation");
   await runPrivate(
     "/usr/sbin/spctl",
@@ -337,6 +406,8 @@ export const notarizeDmg = async ({ dmgPath, workDir, env = process.env }) => {
     { workDir, env, label: "dmg-gatekeeper" },
   );
   await assertWorkDirectory(workDir, workIdentity);
-  await assertArtifactIdentity(dmgPath, dmgIdentity);
-  return { ...accepted, inputSha256, outputSha256: await sha256(dmgPath) };
+  await assertArtifactIdentity(dmgPath, stapledIdentity);
+  const outputSha256 = await sha256(dmgPath);
+  await assertArtifactIdentity(dmgPath, stapledIdentity);
+  return { ...accepted, inputSha256, outputSha256 };
 };
