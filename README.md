@@ -23,19 +23,28 @@ bun run build
 YAKJEV_DEV_AUTH=true bun run start  # built app at http://127.0.0.1:3210
 ```
 
-Deployment tests also require Bash, Python 3, and curl. See `.env.example` for configuration; never commit secrets or personal graphs.
+Deployment tests also require Bash, Python 3, and curl. Native graph tests run separately with `bun run mobile:native:test` on macOS with Xcode and Swift. See `.env.example` for configuration; never commit secrets or personal graphs.
+
+## Native clients
+
+The [iPhone and iPad app](docs/mobile.md) lives in `apps/mobile`: Expo and React Native around a Swift/Metal graph view. Run `bun run mobile:ios` to build the native development client, then `bun run mobile:start` for Metro. Enter your existing Yakjev server URL and owner token in the app; credentials stay in the device keychain. A native build is required because Expo Go does not contain the graph module.
+
+The [Electron desktop app](docs/desktop.md) builds the same web workbench. Both apps are clients of the existing server; neither creates another graph database.
 
 ## Repository
 
-| Path                | Responsibility                                               |
-| ------------------- | ------------------------------------------------------------ |
-| `packages/protocol` | Shared validated wire contracts                              |
-| `packages/server`   | Authoritative application operations and SQLite lifecycle    |
-| `packages/mcp`      | Streamable HTTP tools over the shared server services        |
-| `apps/web`          | React/Sigma graph, persistent inspector, capture and editing |
-| `tests/acceptance`  | Black-box HTTP/SSE graph-loop acceptance                     |
-| `deploy`            | Railway image and synthetic deployment tests                 |
-| `.agents`           | Orb setup/resume and vendored Jev skill                      |
+| Path                | Responsibility                                                 |
+| ------------------- | -------------------------------------------------------------- |
+| `packages/protocol` | Shared validated wire contracts                                |
+| `packages/client`   | Shared HTTP transport, graph commands, Jev behavior and colors |
+| `packages/server`   | Authoritative application operations and SQLite lifecycle      |
+| `packages/mcp`      | Streamable HTTP tools over the shared server services          |
+| `apps/web`          | React/Sigma graph, persistent inspector, capture and editing   |
+| `apps/mobile`       | Expo iOS client with a native Swift/Metal graph                |
+| `apps/desktop`      | Electron client using the web workbench                        |
+| `tests/acceptance`  | Black-box HTTP/SSE graph-loop acceptance                       |
+| `deploy`            | Railway image and synthetic deployment tests                   |
+| `.agents`           | Orb setup/resume and vendored Jev skill                        |
 
 ## Amp orbs
 
@@ -45,7 +54,7 @@ The official TypeSafe skill is vendored in `.agents/skills/typesafe-ai`, with it
 
 ## Private deployment
 
-Public code, private graph. The deployment joins **your** tailnet and exposes HTTPS to permitted tailnet clients. It does not open a public Railway domain. Reads and writes require application authentication: owner-token exchange for a browser session, or owner bearer for HTTP/MCP. Read [the deployment guide](docs/deployment.md) for configuration, grants, credential lifecycle, and validation steps; see [MCP configuration](docs/mcp.md) for agent access.
+Public code, private graph. The deployment exposes public HTTPS on a Railway service domain; the owner token is the lock. Reads and writes require application authentication: owner-token exchange for a browser session, or owner bearer for native HTTP/MCP. Read [the deployment guide](docs/deployment.md) for configuration and credentials; see [MCP configuration](docs/mcp.md) for agent access.
 
 **Nothing is deployed by cloning, building, running CI, or starting an orb.** Configured orbs join the tailnet on resume; this does not deploy Yakjev. Deployment, enrollment, and network grants remain separately authorized operations. Production requires `YAKJEV_OWNER_TOKEN` of at least 32 characters and rejects `YAKJEV_DEV_AUTH`.
 
