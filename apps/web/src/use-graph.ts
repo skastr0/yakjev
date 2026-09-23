@@ -21,7 +21,7 @@ type QueuedCommand = {
 export function useGraph() {
   const [graph, setGraph] = useState<Graph | null>(null);
   const [connection, setConnection] = useState<
-    "loading" | "live" | "reconnecting" | "offline" | "locked"
+    "loading" | "live" | "reconnecting" | "offline" | "locked" | "locking"
   >("loading");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -74,6 +74,9 @@ export function useGraph() {
     let stopped = false;
     let events: EventSource | undefined;
     const controller = new AbortController();
+    controller.signal.addEventListener("abort", () => events?.close(), {
+      once: true,
+    });
     sessionController.current = controller;
     generation.current++;
     current.current = null;
@@ -321,13 +324,20 @@ export function useGraph() {
   }
   async function logout() {
     stopSession();
+    setGraph(null);
+    setLayout(null);
+    setLastEdit(null);
+    setError("");
+    setPaintMigrationError("");
+    setConnection("locking");
     try {
       await request("/api/session", { method: "DELETE" });
-      setLastEdit(null);
       setSession((value) => value + 1);
     } catch (cause) {
-      setError(errorMessage(cause));
-      setSession((value) => value + 1);
+      setConnection("locked");
+      setError(
+        `The graph is closed in this window, but server sign-out could not be confirmed: ${errorMessage(cause)}`,
+      );
     }
   }
   const shown = useMemo(

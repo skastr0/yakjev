@@ -269,9 +269,11 @@ function App() {
               ? "Reconnecting…"
               : state.connection === "locked"
                 ? "Private graph"
-                : state.connection === "loading"
-                  ? "Connecting…"
-                  : "Server unavailable"}
+                : state.connection === "locking"
+                  ? "Locking…"
+                  : state.connection === "loading"
+                    ? "Connecting…"
+                    : "Server unavailable"}
         </div>
         {graph && (
           <nav aria-label="Workspace">
@@ -371,9 +373,11 @@ function App() {
             </form>
           ) : (
             <p role="status">
-              {state.connection === "loading"
-                ? "Loading your graph…"
-                : "The graph could not be loaded. No local data has replaced it."}
+              {state.connection === "locking"
+                ? "Closing your graph…"
+                : state.connection === "loading"
+                  ? "Loading your graph…"
+                  : "The graph could not be loaded. No local data has replaced it."}
             </p>
           )}
         </section>
