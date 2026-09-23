@@ -188,6 +188,10 @@ final class YakjevGraphView: ExpoView, UIGestureRecognizerDelegate {
 
   private func fit() {
     guard bounds.width > 0, bounds.height > 0, !points.isEmpty else { return }
+    // Props can arrive after frame assignment but before layoutSubviews updates
+    // the camera; fit against the actual view rather than its initial 1×1 size.
+    camera.viewportWidth = Double(bounds.width)
+    camera.viewportHeight = Double(bounds.height)
     camera.fit(points: points, padding: min(72, Double(bounds.width) * 0.18))
     hasFitted = true
     lastFitRequest = fitRequest
