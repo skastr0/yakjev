@@ -27,16 +27,24 @@ for color.
 ## Local preference migration
 
 After an authenticated snapshot, clients import valid colors from their former
-local storage in bounded batches. They retire entries only after a confirmed
-write or a server snapshot proving the entry already resolved. A failed import
-keeps the local values available for retry. Session replacement cancels the old
-migration work.
+local storage in bounded batches. They retire an entry only when a canonical
+server snapshot contains an explicit hex color or `null` for that node. A batch
+acknowledgment alone is insufficient: a node deleted during the request may
+have been skipped. Absent or still-unset nodes retain their local values until
+a later snapshot or explicit retry. Clients do not repeatedly submit an
+unresolved batch against the same snapshot. Failed imports keep local values
+available for retry. Session replacement cancels the old migration work.
+
+Retirement removes only the exact local value that was inspected, preserving
+concurrent preference changes. Mobile preference changes and retirement share
+a serialized atomic file writer, so interruption cannot truncate the remaining
+legacy palette.
 
 Concurrent imports are resolved on the server: the first saved choice wins.
 There are no trustworthy timestamps in the old preferences. A subsequent
 deliberate picker edit replaces that choice through the normal command path.
 Clients retire imported preferences to avoid redundant import attempts.
-Undoing a paint that began on a legacy unset node records an explicit `null`
+Undoing a color change that began on a legacy unset node records an explicit `null`
 status choice. This server-side barrier prevents another device's later import,
 or a retry after a lost response, from reversing that Undo or a status reset.
 

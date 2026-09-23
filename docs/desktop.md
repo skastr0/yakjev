@@ -164,6 +164,7 @@ packaged builds. The web deployment skips downloading Electron's binary.
 ```sh
 bun run desktop:test   # origin, local asset and settings boundaries
 bun run desktop:smoke  # real Electron + disposable existing Yakjev server
+bun apps/desktop/e2e/color-smoke.ts # browser/Electron colors, after web + desktop builds
 bun apps/desktop/e2e/dev-smoke.ts # renderer HMR, after desktop:build
 bun run verify        # repository checks, including desktop build/unit tests
 ```
@@ -184,6 +185,11 @@ YAKJEV_DESKTOP_EXECUTABLE="/absolute/path/to/release/mac-arm64/Yakjev.app/Conten
 This attaches to a disposable renderer through loopback CDP;
 shipping fuses keep the main-process inspector disabled. All fixture data and
 sessions are synthetic and local.
+
+The color smoke uses an isolated Chrome profile and Electron session against
+the same disposable server. It covers legacy import retry, live color changes
+in both directions, status reset, Undo, rendered blending, restart persistence,
+and failed sign-out isolation. It also checks the palette's circular swatches.
 
 App icons share the SVG source in `apps/desktop/build/icon.svg`. Regenerate the
 desktop variants and the opaque 1024px mobile PNG with
