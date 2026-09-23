@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Opt-in, real Electron + the existing server on disposable synthetic data.
 // Run from the repository root: bun run --cwd apps/desktop smoke
+// Set YAKJEV_DESKTOP_EXECUTABLE to smoke a packaged app without rebuilding.
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -19,11 +20,18 @@ import {
   acceptanceToken,
   startServer,
 } from "../../../tests/acceptance/harness";
+import { launchEnvironment } from "./environment";
 
 const desktopRoot = resolve(import.meta.dir, "..");
 const artifacts = join(desktopRoot, "artifacts");
-const executablePath: string = createRequire(import.meta.url)("electron");
+const packagedExecutable = process.env.YAKJEV_DESKTOP_EXECUTABLE;
+const executablePath: string = packagedExecutable
+  ? resolve(packagedExecutable)
+  : createRequire(import.meta.url)("electron");
 const timings: { step: string; ms: number }[] = [];
+const restart: { closeMs?: number; launchMs?: number; liveRestoreMs?: number } =
+  {};
+let shutdownMs: number | undefined;
 
 async function step<T>(name: string, action: () => Promise<T>): Promise<T> {
   const start = performance.now();
@@ -32,38 +40,6 @@ async function step<T>(name: string, action: () => Promise<T>): Promise<T> {
   timings.push({ step: name, ms });
   console.log(`PASS ${name} (${ms} ms)`);
   return result;
-}
-
-function launchEnvironment(userData: string): Record<string, string> {
-  // Preserve only OS facilities needed by Electron. Provider, owner, and
-  // deployment credentials cannot enter either disposable child process.
-  const env: Record<string, string> = {
-    NODE_ENV: "test",
-    YAKJEV_DESKTOP_USER_DATA: userData,
-  };
-  for (const key of [
-    "PATH",
-    "HOME",
-    "TMPDIR",
-    "TMP",
-    "TEMP",
-    "LANG",
-    "LC_ALL",
-    "DISPLAY",
-    "WAYLAND_DISPLAY",
-    "XAUTHORITY",
-    "XDG_RUNTIME_DIR",
-    "DBUS_SESSION_BUS_ADDRESS",
-    "SystemRoot",
-    "WINDIR",
-    "USERPROFILE",
-    "LOCALAPPDATA",
-    "APPDATA",
-  ]) {
-    const value = process.env[key];
-    if (value !== undefined) env[key] = value;
-  }
-  return env;
 }
 
 async function productWindow(
@@ -108,24 +84,42 @@ async function main(): Promise<void> {
   let app: ElectronApplication | undefined;
   let page: Page | undefined;
   let failure: unknown;
-  const launch = () =>
+  const launch = (origin?: string) =>
     _electron.launch({
       executablePath,
-      args: [desktopRoot],
+      args: packagedExecutable ? [] : [desktopRoot],
       cwd: desktopRoot,
-      env: launchEnvironment(userData),
+      env: {
+        ...launchEnvironment(userData),
+        ...(origin === undefined ? {} : { YAKJEV_REMOTE_URL: origin }),
+      },
       timeout: 30_000,
     });
   try {
-    await step("first-run connection and owner login", async () => {
-      app = await launch();
-      const setup = await app.firstWindow();
+    await step("server selection and owner login", async () => {
+      // Never let a synthetic run choose the production default. Persist this
+      // disposable origin through the actual menu/form before testing restart.
+      app = await launch(server.origin);
+      page = await productWindow(app, server.origin);
+      const setupOpened = app.waitForEvent("window");
+      await app.evaluate(({ Menu }) => {
+        const item = Menu.getApplicationMenu()
+          ?.items.find((entry) => entry.label === "File")
+          ?.submenu?.items.find(
+            (entry) => entry.label === "Connect to Server…",
+          );
+        if (!item) throw new Error("Connect to Server menu item is missing");
+        item.click();
+      });
+      const setup = await setupOpened;
       page = setup;
       await setup.getByLabel("Server address").fill(server.origin);
       await setup.screenshot({
         path: join(artifacts, "desktop-connection.png"),
       });
+      const connected = setup.waitForEvent("close");
       await setup.getByRole("button", { name: "Open Yakjev" }).click();
+      await connected;
       page = await productWindow(app, server.origin);
       await unlock(page);
     });
@@ -221,6 +215,39 @@ async function main(): Promise<void> {
         return node.id;
       },
     );
+
+    await step("graph shortcut undo and native text undo", async () => {
+      const shortcut = process.platform === "darwin" ? "Meta+z" : "Control+z";
+      await product.keyboard.press("Escape");
+      await product.keyboard.press("Escape");
+      assert.equal(
+        await product.evaluate(() => {
+          const active = document.activeElement as HTMLElement | null;
+          return (
+            !!active &&
+            (active.isContentEditable ||
+              ["INPUT", "TEXTAREA"].includes(active.tagName))
+          );
+        }),
+        false,
+        "graph undo must run outside an editable control",
+      );
+      const before = await readGraph(server);
+      await product.keyboard.press(shortcut);
+      await expect
+        .poll(async () => (await readGraph(server)).nodes[0]?.title)
+        .toBe("Synthetic desktop intention");
+      assert.equal((await readGraph(server)).revision, before.revision + 1);
+
+      const find = product.getByLabel("Find intentions");
+      await find.focus();
+      await product.keyboard.insertText("Synthetic search draft");
+      await expect(find).toHaveValue("Synthetic search draft");
+      await product.keyboard.press(shortcut);
+      await expect(find).toHaveValue("");
+      assert.equal((await readGraph(server)).revision, before.revision + 1);
+      await product.keyboard.press("Escape");
+    });
 
     await step(
       "remote graph change reaches the renderer over SSE",
@@ -397,8 +424,15 @@ async function main(): Promise<void> {
     await step(
       "restart restores the connection, owner cookie, and saved layout",
       async () => {
+        let started = performance.now();
         await desktop.close();
+        restart.closeMs = Math.round(performance.now() - started);
+        console.log(`TIMING restart shutdown (${restart.closeMs} ms)`);
+        started = performance.now();
         app = await launch();
+        restart.launchMs = Math.round(performance.now() - started);
+        console.log(`TIMING restart launch (${restart.launchMs} ms)`);
+        started = performance.now();
         page = await productWindow(app, server.origin);
         await expect(
           page.locator('.connection-status[data-state="live"]'),
@@ -416,6 +450,10 @@ async function main(): Promise<void> {
           "data-revision",
           String((await readGraph(server)).revision),
         );
+        restart.liveRestoreMs = Math.round(performance.now() - started);
+        console.log(
+          `TIMING restart live restore (${restart.liveRestoreMs} ms)`,
+        );
         await page.screenshot({ path: join(artifacts, "desktop-smoke.png") });
       },
     );
@@ -430,7 +468,10 @@ async function main(): Promise<void> {
     console.error(server.logs());
     process.exitCode = 1;
   } finally {
+    const closeStarted = performance.now();
     await app?.close().catch(() => {});
+    shutdownMs = Math.round(performance.now() - closeStarted);
+    console.log(`TIMING final shutdown (${shutdownMs} ms)`);
     await forbiddenTarget.stop(true);
     await server.stop();
     await rm(userData, { recursive: true, force: true });
@@ -439,7 +480,11 @@ async function main(): Promise<void> {
       `${JSON.stringify(
         {
           passed: failure === undefined,
+          executablePath,
+          runtime: packagedExecutable ? "packaged" : "local-build",
           timings,
+          restart,
+          shutdownMs,
           ...(failure === undefined ? {} : { error: String(failure) }),
         },
         null,
