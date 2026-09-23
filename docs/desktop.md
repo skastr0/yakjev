@@ -20,6 +20,9 @@ Use **File → Connect to Server…** to switch servers. The app remembers the
 server address. Each server has its own Chromium session and browser storage.
 Source links open in your system browser.
 
+Custom node colors currently live in each client's local preferences. They do
+not sync between the web browser, desktop and mobile.
+
 You can also select a server when launching from a terminal:
 
 ```sh
@@ -161,15 +164,14 @@ layout persistence, lock/unlock, source links and restart persistence. Screensho
 and measured step durations are saved under `apps/desktop/artifacts/`; timings
 are observations on the machine running the check, not latency guarantees.
 
-To run the same smoke check against an already packaged macOS application:
+To check a packaged macOS application, use the executable path from its build:
 
 ```sh
-YAKJEV_DESKTOP_EXECUTABLE="$PWD/apps/desktop/release/mac-arm64/Yakjev.app/Contents/MacOS/Yakjev" \
-  bun apps/desktop/e2e/smoke.ts
+YAKJEV_DESKTOP_EXECUTABLE="/absolute/path/to/release/mac-arm64/Yakjev.app/Contents/MacOS/Yakjev" \
+  bun apps/desktop/e2e/release-smoke.ts
 ```
 
-For a hardened release use `apps/desktop/e2e/release-smoke.ts` with its actual
-executable path. It attaches to a disposable renderer through loopback CDP;
+This attaches to a disposable renderer through loopback CDP;
 shipping fuses keep the main-process inspector disabled. All fixture data and
 sessions are synthetic and local.
 
