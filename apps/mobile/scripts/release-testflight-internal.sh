@@ -3,21 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MOBILE_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-APP_ID="${APP_ID:-}"
-ASC_PROFILE="${ASC_PROFILE:-<ASC_PROFILE>}"
-TEAM_ID="${TEAM_ID:-<APPLE_TEAM_ID>}"
-BUNDLE_ID="engineer.castro.yakjev"
-PROFILE_NAME="${PROFILE_NAME:-<PROFILE_NAME>}"
-CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-iPhone Distribution}"
-ARTIFACTS_DIR="${ARTIFACTS_DIR:-$MOBILE_DIR/artifacts/testflight}"
-GROUP_NAME="${GROUP_NAME:-Internal Testers}"
-GROUP_ID="${GROUP_ID:-}"
-INVITE_EMAIL="${INVITE_EMAIL:-<INVITE_EMAIL>}"
-BUILD_NUMBER="${YAKJEV_IOS_BUILD_NUMBER:-}"
-BUILD_ONLY=0
-IPA_PATH=""
-BUILD_ID=""
-SEND_INVITE=1
+REPO_DIR="$(cd -- "$MOBILE_DIR/../.." && pwd)"
 
 usage() {
   cat <<'EOF'
@@ -34,16 +20,20 @@ Options:
   --ipa PATH               Verify/upload an existing IPA; skip archive/export
   --distribute-build ID    Distribute this exact processed build; never upload
   --group-id ID            Existing internal TestFlight group
-  --invite-email EMAIL     Tester to invite (default: <INVITE_EMAIL>)
+  --invite-email EMAIL     Tester to invite (or INVITE_EMAIL)
   --no-invite              Assign build to group without inviting a tester
   -h, --help               Show help without changing anything
 
-Environment: APP_ID, ASC_PROFILE (default: <ASC_PROFILE>), TEAM_ID, PROFILE_NAME,
-CODE_SIGN_IDENTITY, ARTIFACTS_DIR, GROUP_NAME, GROUP_ID, INVITE_EMAIL,
-YAKJEV_IOS_BUILD_NUMBER.
+Private shell configuration: repo .local/mobile-release.env, or the path in
+YAKJEV_RELEASE_ENV_FILE. Account/signing settings have no source defaults.
+
+Environment: APP_ID, ASC_PROFILE, YAKJEV_APPLE_TEAM_ID (or TEAM_ID),
+PROFILE_NAME, CODE_SIGN_IDENTITY, ARTIFACTS_DIR, GROUP_NAME, GROUP_ID,
+INVITE_EMAIL, YAKJEV_IOS_BUILD_NUMBER. ASC_PROFILE is required for all lanes;
+team/profile/identity only for archives; email only when sending invitations.
 
 Choose the next number before archiving:
-  asc --profile '<ASC_PROFILE>' builds next-build-number --app APP_ID --platform IOS
+  asc --profile "$ASC_PROFILE" builds next-build-number --app APP_ID --platform IOS
 
 Examples (run from apps/mobile):
   scripts/release-testflight-internal.sh --build-only --build-number 1
@@ -61,6 +51,37 @@ fail() { printf '[testflight] %s\n' "$*" >&2; exit 1; }
 log() { printf '[testflight] %s\n' "$*" >&2; }
 asc_cli() { asc --profile "$ASC_PROFILE" "$@"; }
 require_value() { [[ $# -ge 2 && -n "$2" ]] || fail "$1 requires a value"; }
+
+# Help must remain usable without credentials or reading private configuration.
+for argument in "$@"; do
+  case "$argument" in -h|--help) usage; exit 0 ;; esac
+done
+RELEASE_ENV_FILE="${YAKJEV_RELEASE_ENV_FILE:-$REPO_DIR/.local/mobile-release.env}"
+if [[ -f "$RELEASE_ENV_FILE" ]]; then
+  set -a
+  # The private file contains trusted shell variable assignments, never source defaults.
+  source "$RELEASE_ENV_FILE"
+  set +a
+elif [[ -n "${YAKJEV_RELEASE_ENV_FILE:-}" ]]; then
+  fail "Release environment file does not exist: $RELEASE_ENV_FILE"
+fi
+
+APP_ID="${APP_ID:-}"
+ASC_PROFILE="${ASC_PROFILE:-}"
+TEAM_ID="${YAKJEV_APPLE_TEAM_ID:-${TEAM_ID:-}}"
+BUNDLE_ID="engineer.castro.yakjev"
+PROFILE_NAME="${PROFILE_NAME:-}"
+CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-}"
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-$MOBILE_DIR/artifacts/testflight}"
+GROUP_NAME="${GROUP_NAME:-Internal Testers}"
+GROUP_ID="${GROUP_ID:-}"
+INVITE_EMAIL="${INVITE_EMAIL:-}"
+BUILD_NUMBER="${YAKJEV_IOS_BUILD_NUMBER:-}"
+BUILD_ONLY=0
+IPA_PATH=""
+BUILD_ID=""
+SEND_INVITE=1
+
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -86,6 +107,15 @@ fi
 if [[ -z "$IPA_PATH" && -z "$BUILD_ID" ]]; then
   [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail 'Provide a positive integer --build-number or YAKJEV_IOS_BUILD_NUMBER'
 fi
+[[ -n "$ASC_PROFILE" ]] || fail 'Set ASC_PROFILE in the private release environment'
+if [[ -z "$IPA_PATH" && -z "$BUILD_ID" ]]; then
+  [[ -n "$TEAM_ID" ]] || fail 'Set YAKJEV_APPLE_TEAM_ID in the private release environment'
+  [[ -n "$PROFILE_NAME" ]] || fail 'Set PROFILE_NAME in the private release environment'
+  [[ -n "$CODE_SIGN_IDENTITY" ]] || fail 'Set CODE_SIGN_IDENTITY in the private release environment'
+fi
+if [[ "$BUILD_ONLY" -eq 0 && "$SEND_INVITE" -eq 1 ]]; then
+  [[ -n "$INVITE_EMAIL" ]] || fail 'Set INVITE_EMAIL or pass --invite-email; use --no-invite to skip invitations'
+fi
 for command in asc jq python3; do
   command -v "$command" >/dev/null || fail "Missing command: $command"
 done
@@ -105,6 +135,7 @@ if [[ -z "$IPA_PATH" && -z "$BUILD_ID" ]]; then
   identities="$(security find-identity -v -p codesigning)"
   [[ "$identities" == *"$CODE_SIGN_IDENTITY"* ]] || fail "Installed signing identity not found: $CODE_SIGN_IDENTITY"
   export YAKJEV_IOS_BUILD_NUMBER="$BUILD_NUMBER"
+  export YAKJEV_APPLE_TEAM_ID="$TEAM_ID"
   RUN_DIR="$ARTIFACTS_DIR/build-$BUILD_NUMBER"
   ARCHIVE_PATH="$RUN_DIR/yakjev.xcarchive"
   IPA_PATH="$RUN_DIR/yakjev.ipa"

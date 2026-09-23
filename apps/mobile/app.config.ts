@@ -1,5 +1,7 @@
 import type { ExpoConfig } from "expo/config";
 
+const appleTeamId = process.env.YAKJEV_APPLE_TEAM_ID?.trim();
+
 const config: ExpoConfig = {
   name: "yakjev",
   slug: "yakjev",
@@ -11,7 +13,7 @@ const config: ExpoConfig = {
   platforms: ["ios"],
   ios: {
     bundleIdentifier: "engineer.castro.yakjev",
-    appleTeamId: "<APPLE_TEAM_ID>",
+    ...(appleTeamId ? { appleTeamId } : {}),
     buildNumber: process.env.YAKJEV_IOS_BUILD_NUMBER ?? "1",
     supportsTablet: true,
     config: { usesNonExemptEncryption: false },
