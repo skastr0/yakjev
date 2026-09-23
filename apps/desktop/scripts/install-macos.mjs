@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { randomUUID } from "node:crypto";
 import {
   lstat,
   mkdir,
   mkdtemp,
   realpath,
   rename,
+  rm,
   rmdir,
 } from "node:fs/promises";
 import { userInfo } from "node:os";
@@ -169,25 +169,56 @@ export const installMacApp = async ({
   const stageRoot = await mkdtemp(path.join(applications, ".yakjev-install-"));
   const stageIdentity = await canonicalDirectory(stageRoot, "Install stage");
   const stagedApp = path.join(stageRoot, "Yakjev.app");
-  const backup =
-    previousIdentity === undefined
-      ? undefined
-      : path.join(
-          applications,
-          `Yakjev.previous-${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID()}.app`,
-        );
-  let stagedIdentity;
+  run("/usr/bin/ditto", ["--rsrc", appPath, stagedApp], env);
+  await assertIdentity(appPath, sourceIdentity);
+  await assertIdentity(stageRoot, stageIdentity);
+  const stagedIdentity = await canonicalDirectory(stagedApp, "Staged app");
+  if ((await validateApp(stagedApp, options)) !== expectedHash) {
+    throw new Error("Staged app does not match the audited release");
+  }
+  requireStopped(env);
+  const result = await installStagedApp({
+    applications,
+    applicationsIdentity,
+    stageRoot,
+    stageIdentity,
+    stagedIdentity,
+    previousIdentity,
+    verifyInstalled: async () => {
+      if ((await validateApp(destination, options)) !== expectedHash) {
+        throw new Error("Installed app does not match the audited release");
+      }
+    },
+  });
+  return { ...result, signed, notarized };
+};
+
+// The caller audits the staged app before entering this replacement transaction.
+// Keep rollback hidden and without a bundle extension, including on failure.
+export const installStagedApp = async ({
+  applications,
+  applicationsIdentity,
+  stageRoot,
+  stageIdentity,
+  stagedIdentity,
+  previousIdentity,
+  verifyInstalled,
+  removeBackup = (backup) => rm(backup, { recursive: true }),
+}) => {
+  if (
+    path.dirname(stageRoot) !== applications ||
+    !path.basename(stageRoot).startsWith(".yakjev-install-")
+  ) {
+    throw new Error(
+      "Install stage must be a private Applications subdirectory",
+    );
+  }
+  const destination = path.join(applications, "Yakjev.app");
+  const stagedApp = path.join(stageRoot, "Yakjev.app");
+  const backup = path.join(stageRoot, "previous");
   let retired = false;
   let installed = false;
   try {
-    run("/usr/bin/ditto", ["--rsrc", appPath, stagedApp], env);
-    await assertIdentity(appPath, sourceIdentity);
-    await assertIdentity(stageRoot, stageIdentity);
-    stagedIdentity = await canonicalDirectory(stagedApp, "Staged app");
-    if ((await validateApp(stagedApp, options)) !== expectedHash) {
-      throw new Error("Staged app does not match the audited release");
-    }
-    requireStopped(env);
     await assertIdentity(applications, applicationsIdentity);
     await assertIdentity(stageRoot, stageIdentity);
     await assertIdentity(stagedApp, stagedIdentity);
@@ -207,20 +238,17 @@ export const installMacApp = async ({
     await rename(stagedApp, destination);
     installed = true;
     await assertIdentity(destination, stagedIdentity);
-    if ((await validateApp(destination, options)) !== expectedHash) {
-      throw new Error("Installed app does not match the audited release");
-    }
+    await verifyInstalled();
+    await assertIdentity(destination, stagedIdentity);
     await assertIdentity(applications, applicationsIdentity);
     await assertIdentity(stageRoot, stageIdentity);
-    await rmdir(stageRoot);
-    return { appPath: destination, backupPath: backup, signed, notarized };
   } catch (error) {
     try {
       await assertIdentity(applications, applicationsIdentity);
       await assertIdentity(stageRoot, stageIdentity);
       if (installed) {
         await assertIdentity(destination, stagedIdentity);
-        await rename(destination, path.join(stageRoot, "failed-Yakjev.app"));
+        await rename(destination, path.join(stageRoot, "failed"));
       }
       if (retired) {
         await assertIdentity(backup, previousIdentity);
@@ -233,6 +261,23 @@ export const installMacApp = async ({
       );
     }
     throw error;
+  }
+
+  // Installation is committed. Disposal may partially remove the old bundle;
+  // a cleanup failure must never attempt to restore it over the verified app.
+  try {
+    await assertIdentity(applications, applicationsIdentity);
+    await assertIdentity(destination, stagedIdentity);
+    await assertIdentity(stageRoot, stageIdentity);
+    if (retired) {
+      await assertIdentity(backup, previousIdentity);
+      await removeBackup(backup);
+    }
+    await assertIdentity(stageRoot, stageIdentity);
+    await rmdir(stageRoot);
+    return { appPath: destination };
+  } catch {
+    return { appPath: destination, cleanupPath: stageRoot };
   }
 };
 
@@ -257,10 +302,12 @@ if (
     if (!appPath) throw new Error("--app must name a built release app");
     const result = await installMacApp({ appPath, signed, notarized });
     console.log("Installed ~/Applications/Yakjev.app");
-    if (result.backupPath)
-      console.log(
-        `Previous app retained at ~/Applications/${path.basename(result.backupPath)}`,
+    if (result.cleanupPath) {
+      console.error(
+        `Installed app verified, but temporary files need cleanup at ~/Applications/${path.basename(result.cleanupPath)}`,
       );
+      process.exitCode = 1;
+    }
   } catch (error) {
     console.error(`yakjev: ${error.message}`);
     process.exitCode = 1;

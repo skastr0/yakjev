@@ -105,8 +105,13 @@ bun run desktop:install:mac --app /absolute/path/to/release/mac-arm64/Yakjev.app
 ```
 
 The installer refuses a running Yakjev, audits the candidate and staged copy,
-installs into `~/Applications/Yakjev.app`, verifies the installed signature, and
-keeps the previous app as a backup. User settings and sessions remain in place.
+installs into `~/Applications/Yakjev.app`, and verifies the installed signature.
+The previous app lives only in a private hidden staging directory during the
+upgrade, without an `.app` extension. Verification failure restores it;
+success removes it and the staging directory, leaving one installed app.
+If cleanup fails, the verified new app remains installed and the command reports
+the hidden directory for inspection with a nonzero exit. User settings and
+sessions remain in place.
 
 ## Runtime and performance
 
