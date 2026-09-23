@@ -352,21 +352,24 @@ final class YakjevGraphView: ExpoView, UIGestureRecognizerDelegate {
     var edgeLabelCount = 0
     // Relation labels are useful only when enough screen space separates nodes.
     // Bound candidate work on very large graphs; selected relations always win.
-    let relationCandidates = validEdges.first(where: { $0.id == selectedEdgeId }).map { [$0] } ?? []
-    for edge in relationCandidates + Array(validEdges.prefix(3000)) {
+    let selectedRelations = validEdges.first(where: { $0.id == selectedEdgeId }).map { [($0, false)] } ?? []
+    let relationCandidates = selectedRelations + ghosts.map { ($0, true) } + validEdges.prefix(3000).map { ($0, false) }
+    for (edge, isGhost) in relationCandidates {
       guard edgeLabelCount < 28 else { break }
       guard !edge.label.isEmpty, let ai = nodeIndex[edge.source], let bi = nodeIndex[edge.target] else { continue }
       let a = camera.worldToScreen(points[ai])
       let b = camera.worldToScreen(points[bi])
       let middle = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
       guard bounds.contains(middle) else { continue }
-      let size = edgeLabels[edge.id] ?? Self.textSize(edge.label, font: edgeFont, maximum: 140)
-      edgeLabels[edge.id] = size
+      let cacheKey = edge.id.isEmpty ? "\(edge.source)|\(edge.target)|\(edge.label)" : edge.id
+      let size = edgeLabels[cacheKey] ?? Self.textSize(edge.label, font: edgeFont, maximum: 140)
+      edgeLabels[cacheKey] = size
       guard hypot(b.x - a.x, b.y - a.y) > size.width + 52 else { continue }
       var angle = atan2(b.y - a.y, b.x - a.x)
       if angle > .pi / 2 { angle -= .pi }
       if angle < -.pi / 2 { angle += .pi }
-      let label = GraphCanvasLabel(text: edge.label, center: CGPoint(x: middle.x + sin(angle) * 9, y: middle.y - cos(angle) * 9), size: size, angle: angle, font: edgeFont, color: muted)
+      let tint = isGhost ? UIColor(red: 111.0 / 255, green: 82.0 / 255, blue: 237.0 / 255, alpha: 1) : muted
+      let label = GraphCanvasLabel(text: edge.label, center: CGPoint(x: middle.x + sin(angle) * 9, y: middle.y - cos(angle) * 9), size: size, angle: angle, font: edgeFont, color: tint)
       if !occupied.contains(where: { $0.intersects(label.bounds) }) {
         output.append(label)
         occupied.append(label.bounds)
