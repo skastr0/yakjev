@@ -376,6 +376,7 @@ final class YakjevGraphView: ExpoView, UIGestureRecognizerDelegate {
     }
     var output: [GraphCanvasLabel] = []
     var occupied: [CGRect] = []
+    let labelBounds = bounds.insetBy(dx: 6, dy: 6)
     // Discs remain entirely on the GPU. This budget caps CPU text layout at any
     // zoom, with selected nodes considered first and colliding labels omitted.
     for item in visible.prefix(180) {
@@ -384,10 +385,19 @@ final class YakjevGraphView: ExpoView, UIGestureRecognizerDelegate {
       let size = nodeLabels[node.id] ?? Self.textSize(node.label, font: nodeFont, maximum: 180)
       nodeLabels[node.id] = size
       let screen = camera.worldToScreen(points[index])
-      let label = GraphCanvasLabel(text: node.label, center: CGPoint(x: screen.x + 12 + size.width / 2, y: screen.y), size: size, font: nodeFont, color: ink)
-      if !occupied.contains(where: { $0.intersects(label.bounds) }) {
-        output.append(label)
-        occupied.append(label.bounds)
+      let candidates = [
+        CGPoint(x: screen.x + 12 + size.width / 2, y: screen.y),
+        CGPoint(x: screen.x - 12 - size.width / 2, y: screen.y),
+        CGPoint(x: screen.x, y: screen.y - 12 - size.height / 2),
+        CGPoint(x: screen.x, y: screen.y + 12 + size.height / 2),
+      ]
+      for center in candidates {
+        let label = GraphCanvasLabel(text: node.label, center: center, size: size, font: nodeFont, color: ink)
+        if labelBounds.contains(label.bounds), !occupied.contains(where: { $0.intersects(label.bounds) }) {
+          output.append(label)
+          occupied.append(label.bounds)
+          break
+        }
       }
     }
     var edgeLabelCount = 0
