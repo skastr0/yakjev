@@ -91,15 +91,12 @@ export class SessionController {
         loading: false,
         error: null,
       });
-    } catch (cause) {
+    } catch {
       if (generation === this.generation)
         this.update({
           session: null,
           loading: false,
-          error:
-            cause instanceof Error
-              ? cause.message
-              : "Saved connection could not be read.",
+          error: "Saved connection could not be loaded. Connect again.",
         });
     }
   };
@@ -109,7 +106,13 @@ export class SessionController {
     this.update({ session: null, loading: true, error: null });
     try {
       const session = validateSession(endpoint, token, this.development);
-      await this.mutate(() => this.storage.set(JSON.stringify(session)));
+      await this.mutate(() => this.storage.set(JSON.stringify(session))).catch(
+        () => {
+          throw new Error(
+            "Connection could not be saved securely. Try connecting again.",
+          );
+        },
+      );
       if (generation !== this.generation) return false;
       this.update({ session, loading: false, error: null });
       return true;

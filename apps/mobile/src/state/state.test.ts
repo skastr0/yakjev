@@ -153,6 +153,38 @@ describe("secure session", () => {
     expect(session.getSnapshot().session).toBeNull();
   });
 
+  test("secure-storage failures show concise guidance while input validation stays specific", async () => {
+    const nativeFailure = new Error(
+      "FunctionCallException: KeyChainException at /native/SecureStoreModule.swift:168",
+    );
+    const session = new SessionController({
+      get: async () => {
+        throw nativeFailure;
+      },
+      set: async () => {
+        throw nativeFailure;
+      },
+      remove: async () => {},
+    });
+    sessions.push(session);
+    await session.restore();
+    expect(session.getSnapshot()).toEqual({
+      session: null,
+      loading: false,
+      error: "Saved connection could not be loaded. Connect again.",
+    });
+    expect(await session.connect("https://yakjev.example", "synthetic")).toBe(
+      false,
+    );
+    expect(session.getSnapshot()).toEqual({
+      session: null,
+      loading: false,
+      error: "Connection could not be saved securely. Try connecting again.",
+    });
+    expect(await session.connect("https://yakjev.example", "")).toBe(false);
+    expect(session.getSnapshot().error).toBe("Enter a valid owner token.");
+  });
+
   test("disconnect serializes after an in-flight credential write", async () => {
     const saved = deferred<void>();
     let stored: string | null = null;
