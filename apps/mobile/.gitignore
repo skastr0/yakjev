@@ -1,0 +1,7 @@
+.expo/
+/ios/
+/android/
+dist/
+artifacts/
+**/.build/
+*.xcuserstate

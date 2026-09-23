@@ -1,0 +1,13 @@
+{
+  "cli": { "appVersionSource": "remote" },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "bun": "1.4.2",
+      "ios": { "simulator": true }
+    },
+    "preview": { "distribution": "internal", "bun": "1.4.2" },
+    "production": { "autoIncrement": true, "bun": "1.4.2" }
+  }
+}

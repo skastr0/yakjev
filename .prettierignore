@@ -6,3 +6,10 @@ dist
 apps/desktop/out
 apps/desktop/release
 apps/desktop/artifacts
+
+apps/mobile/ios
+apps/mobile/android
+apps/mobile/.expo
+apps/mobile/dist
+apps/mobile/artifacts
+apps/mobile/modules/**/.build

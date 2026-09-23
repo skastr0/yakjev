@@ -28,7 +28,10 @@
     "jev:retrieval": "bun packages/server/scripts/jev-retrieval-eval.ts",
     "format": "prettier --write .",
     "check:format": "prettier --check .",
-    "verify": "bun run check:format && bun run typecheck && bun run test && bun run desktop:test && bun run test:acceptance && bun run build && bun run desktop:build && bun run test:deploy"
+    "verify": "bun run check:format && bun run typecheck && bun run test && bun run desktop:test && bun run test:acceptance && bun run build && bun run desktop:build && bun run test:deploy && bun run mobile:verify",
+    "mobile:start": "bun run --cwd apps/mobile start",
+    "mobile:ios": "bun run --cwd apps/mobile ios",
+    "mobile:verify": "bun run --cwd apps/mobile verify"
   },
   "devDependencies": {
     "@types/bun": "1.4.2",
