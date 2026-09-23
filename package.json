@@ -16,6 +16,8 @@
     "desktop:build": "bun run --cwd apps/desktop build",
     "desktop:start": "bun run --cwd apps/desktop start",
     "desktop:package": "bun run --cwd apps/desktop package",
+    "desktop:package:mac": "bun run --cwd apps/desktop package:mac",
+    "desktop:install:mac": "bun run --cwd apps/desktop install:mac",
     "desktop:test": "bun run --cwd apps/desktop test",
     "desktop:smoke": "bun run --cwd apps/desktop smoke",
     "qa": "bun run build && AGENT_BROWSER_SESSION=jev-qa bun tests/acceptance/browser/run.ts --only=J",
