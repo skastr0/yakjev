@@ -21,6 +21,20 @@ const receipt = {
 };
 
 describe("client bearer boundary", () => {
+  test("accepts a portable fetch response without runtime-specific extensions", async () => {
+    const client = createClient({
+      baseUrl: "https://yakjev.example",
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        body: null,
+        json: async () => graph,
+      }),
+    });
+    expect(await client.snapshot()).toEqual(graph);
+  });
+
   test("all requests use the configured origin and never follow redirects", async () => {
     const calls: { url: string; init?: RequestInit }[] = [];
     const client = createClient({

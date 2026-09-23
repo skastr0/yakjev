@@ -31,10 +31,20 @@ export class ApiFailure extends Error {
   }
 }
 
+// Only the standard response surface consumed here. Requiring Response itself
+// would pull Bun-only extensions into Expo callers when workspace types merge.
+export type ClientResponse = {
+  readonly ok: boolean;
+  readonly status: number;
+  readonly headers: Pick<Headers, "get">;
+  readonly body: ReadableStream<Uint8Array> | null;
+  json(): Promise<unknown>;
+};
+
 export type ClientOptions = {
   baseUrl: string;
   token?: string;
-  fetch?: (url: string, init?: RequestInit) => Promise<Response>;
+  fetch?: (url: string, init?: RequestInit) => Promise<ClientResponse>;
   randomUUID?: RandomUUID;
 };
 
@@ -64,7 +74,9 @@ export function normalizeServerUrl(value: string): string {
   return url.origin;
 }
 
-async function checkResponse(response: Response): Promise<Response> {
+async function checkResponse(
+  response: ClientResponse,
+): Promise<ClientResponse> {
   if (response.ok) return response;
   let body: Record<string, unknown> = {};
   try {
