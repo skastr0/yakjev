@@ -1,4 +1,5 @@
 import MetalKit
+import UIKit
 import os
 
 struct GraphMetalEdge {
@@ -34,6 +35,15 @@ final class GraphMetalRenderer: NSObject, MTKViewDelegate {
   private var positions: [SIMD2<Float>] = []
   private var positionGeneration: UInt64 = 1
   private var bufferGenerations: [UInt64] = [0, 0, 0]
+  private var lastCommand: MTLCommandBuffer?
+  private var lifecycleGeneration: UInt64 = 0
+  private var lastReportedError: String?
+  var onError: ((String) -> Void)?
+  var isRenderingEnabled = false {
+    didSet {
+      if oldValue != isRenderingEnabled { lifecycleGeneration &+= 1 }
+    }
+  }
   var camera = GraphCamera()
   var selectedNode: Int32 = -1
   var selectedEdge: Int32 = -1
@@ -123,7 +133,18 @@ final class GraphMetalRenderer: NSObject, MTKViewDelegate {
 
   func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
+  func enterBackground() {
+    isRenderingEnabled = false
+    // iOS requires already-committed Metal work to be scheduled before the app
+    // finishes entering the background. This does not wait for GPU completion.
+    if let lastCommand, lastCommand.status == .committed || lastCommand.status == .enqueued {
+      lastCommand.waitUntilScheduled()
+    }
+  }
+
   func draw(in view: MTKView) {
+    guard isRenderingEnabled, view.window != nil, UIApplication.shared.applicationState == .active else { return }
+    if let scene = view.window?.windowScene, scene.activationState != .foregroundActive { return }
     guard view.bounds.width > 0, view.bounds.height > 0, let descriptor = view.currentRenderPassDescriptor,
       let drawable = view.currentDrawable, let command = queue.makeCommandBuffer() else { return }
     // Never block the main thread behind the GPU. Retry after an in-flight frame
@@ -175,11 +196,28 @@ final class GraphMetalRenderer: NSObject, MTKViewDelegate {
     encoder.endEncoding()
     command.present(drawable)
     let frames = frames
-    command.addCompletedHandler { buffer in
+    let submittedGeneration = lifecycleGeneration
+    command.addCompletedHandler { [weak self] buffer in
       Self.signposter.emitEvent("GPUComplete", "duration=\(buffer.gpuEndTime - buffer.gpuStartTime)")
       frames.signal()
+      guard buffer.status == .error else { return }
+      let error = buffer.error as NSError?
+      let message = "The graph could not render. \(error?.localizedDescription ?? "Metal could not complete the frame.")"
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        // A rejected background frame may finish after reactivation. Its
+        // generation identifies the transition; the activation redraw replaces
+        // it without showing a stale error or starting an automatic retry loop.
+        if error?.domain == MTLCommandBufferErrorDomain,
+          error?.code == MTLCommandBufferError.Code.notPermitted.rawValue,
+          (!self.isRenderingEnabled || self.lifecycleGeneration != submittedGeneration) { return }
+        guard message != self.lastReportedError else { return }
+        self.lastReportedError = message
+        self.onError?(message)
+      }
     }
     command.commit()
+    lastCommand = command
   }
 }
 

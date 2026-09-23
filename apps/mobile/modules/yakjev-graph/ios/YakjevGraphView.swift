@@ -47,6 +47,7 @@ final class YakjevGraphView: ExpoView, UIGestureRecognizerDelegate {
   private var lastPinch: CGFloat = 1
   private var pinchStart: CGPoint?
   private var refreshScheduled = false
+  private var appActive = UIApplication.shared.applicationState == .active
   private var nodeFont = UIFont(name: "AvenirNext-Regular", size: 13) ?? .systemFont(ofSize: 13)
   private var edgeFont = UIFont(name: "AvenirNext-Regular", size: 10) ?? .systemFont(ofSize: 10)
   private let ink = UIColor(red: 32.0 / 255, green: 61.0 / 255, blue: 53.0 / 255, alpha: 1)
@@ -58,7 +59,15 @@ final class YakjevGraphView: ExpoView, UIGestureRecognizerDelegate {
     backgroundColor = GraphLabelOverlay.paper
     addSubview(metalView)
     addSubview(labels)
-    do { renderer = try GraphMetalRenderer(view: metalView) }
+    do {
+      renderer = try GraphMetalRenderer(view: metalView)
+      renderer?.onError = { [weak self] message in
+        guard let self else { return }
+        self.rendererError = message
+        self.didReportError = true
+        self.onRendererError(["message": message])
+      }
+    }
     catch {
       rendererError = error.localizedDescription
       let errorLabel = UILabel()
@@ -86,6 +95,9 @@ final class YakjevGraphView: ExpoView, UIGestureRecognizerDelegate {
     isAccessibilityElement = false
     NotificationCenter.default.addObserver(self, selector: #selector(contentSizeChanged), name: UIContentSizeCategory.didChangeNotification, object: nil)
     NotificationCenter.default.addObserver(self, selector: #selector(voiceOverChanged), name: UIAccessibility.voiceOverStatusDidChangeNotification, object: nil)
+    NotificationCenter.default.addObserver(self, selector: #selector(willResignActive), name: UIApplication.willResignActiveNotification, object: nil)
+    NotificationCenter.default.addObserver(self, selector: #selector(didEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
+    NotificationCenter.default.addObserver(self, selector: #selector(didBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
     contentSizeChanged()
   }
 
@@ -148,7 +160,30 @@ final class YakjevGraphView: ExpoView, UIGestureRecognizerDelegate {
 
   override func didMoveToWindow() {
     super.didMoveToWindow()
-    if window != nil { scheduleRefresh() }
+    renderer?.isRenderingEnabled = canRender
+    if canRender { scheduleRefresh() }
+  }
+
+  private var canRender: Bool {
+    guard appActive, window != nil, UIApplication.shared.applicationState == .active else { return false }
+    if let scene = window?.windowScene { return scene.activationState == .foregroundActive }
+    return true
+  }
+
+  @objc private func willResignActive() {
+    appActive = false
+    renderer?.isRenderingEnabled = false
+  }
+
+  @objc private func didEnterBackground() {
+    appActive = false
+    renderer?.enterBackground()
+  }
+
+  @objc private func didBecomeActive() {
+    appActive = true
+    renderer?.isRenderingEnabled = canRender
+    scheduleRefresh()
   }
 
   private func fit() {
@@ -179,6 +214,8 @@ final class YakjevGraphView: ExpoView, UIGestureRecognizerDelegate {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       self.refreshScheduled = false
+      self.renderer?.isRenderingEnabled = self.canRender
+      guard self.canRender else { return }
       self.renderer?.camera = self.camera
       self.updateLabels()
       self.metalView.setNeedsDisplay()
