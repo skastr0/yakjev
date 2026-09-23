@@ -4,7 +4,7 @@ import { Context, Effect, Layer } from "effect";
 import { decodeOrigin, DesktopError } from "./config";
 
 // Only a server origin is persisted here. Chromium owns the HttpOnly session;
-// the desktop main process never receives or stores the owner's token.
+// main forwards login bytes without parsing or retaining the owner's token.
 export class Settings extends Context.Service<
   Settings,
   {

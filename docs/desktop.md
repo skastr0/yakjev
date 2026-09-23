@@ -13,8 +13,9 @@ bun run desktop:build
 bun run desktop:start
 ```
 
-On first launch, enter your server's HTTPS origin (for example,
-`https://your-yakjev.up.railway.app`). Unlock with the existing owner-token form.
+On first launch, the app connects to **https://yakjev-production.up.railway.app**.
+Unlock with the existing owner-token form. Desktop and mobile share this default
+through `@yakjev/client/config`.
 Use **File → Connect to Server…** to switch servers. The app remembers the
 server address. Each server has its own Chromium session and browser storage.
 Source links open in your system browser.
@@ -25,8 +26,9 @@ You can also select a server when launching from a terminal:
 YAKJEV_REMOTE_URL=https://your-yakjev.up.railway.app bun run desktop:start
 ```
 
-`YAKJEV_URL` is an alias. The environment overrides the remembered address for
-that launch. Never put an owner token or provider credential in build settings.
+`YAKJEV_URL` is an alias. Server selection is environment override, then remembered
+address, then the shared production default. Never put an owner token or provider
+credential in build settings.
 
 ## Local development
 
@@ -90,7 +92,7 @@ server implementation code, or create a graph database. All graph writes,
 revision checks, replay, layouts and Jev evaluation remain server-owned.
 
 The workbench has sandboxing, context isolation and web security enabled, with
-no Node integration or preload API. Only the first-run connection window has
+no Node integration or preload API. Only the server connection window has
 a bridge: one checked `connect(origin)` operation. Main checks the calling
 window, frame and URL before accepting it. Unknown permissions, popups inside
 Electron, off-origin navigation and arbitrary local paths are denied. Valid
@@ -106,6 +108,7 @@ packaged builds. The web deployment skips downloading Electron's binary.
 ```sh
 bun run desktop:test   # origin, local asset and settings boundaries
 bun run desktop:smoke  # real Electron + disposable existing Yakjev server
+bun apps/desktop/e2e/dev-smoke.ts # renderer HMR, after desktop:build
 bun run verify        # repository checks, including desktop build/unit tests
 ```
 
@@ -114,6 +117,17 @@ renderer isolation, graph edits against server truth, live SSE changes, drag
 layout persistence, lock/unlock, source links and restart persistence. Screenshots
 and measured step durations are saved under `apps/desktop/artifacts/`; timings
 are observations on the machine running the check, not latency guarantees.
+
+To run the same smoke check against an already packaged macOS application:
+
+```sh
+YAKJEV_DESKTOP_EXECUTABLE="$PWD/apps/desktop/release/mac-arm64/Yakjev.app/Contents/MacOS/Yakjev" \
+  bun apps/desktop/e2e/smoke.ts
+```
+
+App icons share the SVG source in `apps/desktop/build/icon.svg`. Regenerate the
+desktop variants and the opaque 1024px mobile PNG with
+`swift apps/desktop/build/generate-icons.swift` on macOS.
 
 The Electron session/protocol design follows the upstream
 [protocol API](https://www.electronjs.org/docs/latest/api/protocol),

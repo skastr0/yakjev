@@ -11,6 +11,7 @@ import {
   type MenuItemConstructorOptions,
 } from "electron";
 import { Context, Effect, Layer, Semaphore } from "effect";
+import { DEFAULT_SERVER_URL } from "@yakjev/client/config";
 import {
   decodeOrigin,
   DesktopError,
@@ -350,8 +351,7 @@ export class DesktopHost extends Context.Service<
                     ),
                   )
                 : yield* decodeOrigin(options.configuredOrigin);
-            if (saved) yield* openWorkbench(saved);
-            else yield* showConnection;
+            yield* openWorkbench(saved ?? DEFAULT_SERVER_URL);
           }),
           focus: Effect.suspend(() => {
             const current = connection ?? workbench;

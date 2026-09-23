@@ -17,6 +17,7 @@
     "smoke": "bun run build && bun e2e/smoke.ts"
   },
   "dependencies": {
+    "@yakjev/client": "workspace:*",
     "effect": "4.0.0-rc.117"
   },
   "devDependencies": {
