@@ -28,6 +28,10 @@ export const Position = Schema.Struct({
   y: Schema.Finite,
   pinned: Schema.Boolean,
 });
+export const NodeColor = Schema.NullOr(
+  Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/)),
+);
+export type NodeColor = typeof NodeColor.Type;
 export const NodeInput = Schema.Struct({
   id: Id,
   title: Title,
@@ -35,6 +39,8 @@ export const NodeInput = Schema.Struct({
   project: Schema.String.check(Schema.isMaxLength(240)),
   status: Schema.Literals(["idea", "active", "done", "archived"]),
   sources: Schema.Array(Source).check(Schema.isMaxLength(40)),
+  // Missing on legacy nodes; null explicitly selects the status color.
+  color: Schema.optionalKey(NodeColor),
 });
 export const Node = Schema.Struct({
   ...NodeInput.fields,
@@ -186,6 +192,7 @@ export const LayoutSave = Schema.Struct({
 export const Layout = Schema.Struct({ positions: Schema.Array(LayoutPoint) });
 export type Layout = typeof Layout.Type;
 
+export const PAINT_BATCH_MAX = 100;
 export const Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("capture"),
@@ -204,6 +211,15 @@ export const Command = Schema.Union([
     rationale: Schema.optionalKey(ShortText),
   }),
   Schema.Struct({ type: Schema.Literal("node.put"), node: NodeInput }),
+  Schema.Struct({
+    type: Schema.Literal("node.paint"),
+    colors: Schema.Array(Schema.Struct({ id: Id, color: NodeColor })).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(PAINT_BATCH_MAX),
+    ),
+    // Import local legacy colors without overwriting another client's choice.
+    onlyIfUnset: Schema.optionalKey(Schema.Boolean),
+  }),
   // Nodes leave the active graph; the journal still records them and their
   // sources. Incident edges refuse removal unless removeEdges cascades.
   Schema.Struct({

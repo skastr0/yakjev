@@ -20,6 +20,11 @@ export class StorageError extends Data.TaggedError("StorageError")<{
 const GraphJson = Schema.fromJsonString(Graph);
 const ReceiptJson = Schema.fromJsonString(Receipt);
 const HistoryJson = Schema.fromJsonString(HistoryEntry);
+const withoutPaint = (graph: Graph) => ({
+  ...graph,
+  revision: 0,
+  nodes: graph.nodes.map(({ color: _color, ...node }) => node),
+});
 const empty: Graph = {
   revision: 0,
   nodes: [],
@@ -229,7 +234,7 @@ export class Store extends Context.Service<Store>()("@yakjev/Store", {
                   currentRevision: before.revision,
                 });
               const rows =
-                yield* sql`SELECT before_graph FROM graph_history WHERE revision = ${request.command.revision}`;
+                yield* sql`SELECT before_graph, entry FROM graph_history WHERE revision = ${request.command.revision}`;
               if (!rows[0])
                 return yield* new DomainError({
                   code: "NotFound",
@@ -238,6 +243,14 @@ export class Store extends Context.Service<Store>()("@yakjev/Store", {
               const previous = yield* Schema.decodeUnknownEffect(GraphJson)(
                 rows[0].before_graph,
               );
+              const undone = yield* Schema.decodeUnknownEffect(HistoryJson)(
+                rows[0].entry,
+              );
+              const cosmeticUndo =
+                undone.command.type === "node.paint" ||
+                (undone.command.type === "undo" &&
+                  JSON.stringify(withoutPaint(before)) ===
+                    JSON.stringify(withoutPaint(previous)));
               after = { ...previous, revision: before.revision + 1 };
               // Never reuse taxonomy versions after undo: old inferences must stay stale.
               if (previous.taxonomy.version !== before.taxonomy.version)
@@ -248,19 +261,22 @@ export class Store extends Context.Service<Store>()("@yakjev/Store", {
                     version: before.taxonomy.version + 1,
                   },
                 };
-              // Restored entities are new edits, not a time machine for freshness checks.
-              after = {
-                ...after,
-                nodes: after.nodes.map((node) => ({
-                  ...node,
-                  updated: { actor, at, revision: after.revision },
-                })),
-                edges: after.edges.map((edge) => ({
-                  ...edge,
-                  updated: { actor, at, revision: after.revision },
-                })),
-              };
-              after = supersedeSuggestions(after);
+              // Semantic restores are new edits. Undoing paint (including an
+              // undo of that undo) preserves the same content freshness.
+              if (!cosmeticUndo) {
+                after = {
+                  ...after,
+                  nodes: after.nodes.map((node) => ({
+                    ...node,
+                    updated: { actor, at, revision: after.revision },
+                  })),
+                  edges: after.edges.map((edge) => ({
+                    ...edge,
+                    updated: { actor, at, revision: after.revision },
+                  })),
+                };
+                after = supersedeSuggestions(after);
+              }
             } else {
               after = yield* evolve(before, request.command, actor, at);
             }

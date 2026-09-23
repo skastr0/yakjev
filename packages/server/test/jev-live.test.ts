@@ -401,7 +401,7 @@ test("a restated intention is linked as related and marked the same", async () =
   });
 });
 
-test("editing an intention's words reconnects it; status changes do not", async () => {
+test("editing an intention's words reconnects it; status and paint changes do not", async () => {
   let calls = 0;
   const judged = judge({
     "Hire a designer": {
@@ -427,6 +427,11 @@ test("editing an intention's words reconnects it; status changes do not", async 
     sources: [],
   };
   await command({ type: "node.put", node });
+  await command({
+    type: "node.paint",
+    colors: [{ id: "site", color: "#ABCDEF" }],
+  });
+  await command({ type: "undo", revision: 4 });
   await Bun.sleep(30);
   expect(calls).toBe(0);
   await command({

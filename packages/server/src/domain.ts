@@ -228,6 +228,9 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
           );
         nodes.push({
           ...input,
+          ...(input.color === undefined
+            ? {}
+            : { color: input.color?.toLowerCase() ?? null }),
           position: null,
           created: provenance,
           updated: provenance,
@@ -247,8 +250,11 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
     }
     case "node.put": {
       const old = nodes.find((node) => node.id === command.node.id);
+      const color =
+        command.node.color === undefined ? old?.color : command.node.color;
       const node: Node = {
         ...command.node,
+        ...(color === undefined ? {} : { color: color?.toLowerCase() ?? null }),
         position: old?.position ?? null,
         created: old?.created ?? provenance,
         updated: provenance,
@@ -257,6 +263,33 @@ export const evolve = Effect.fn("Graph.evolve")(function* (
         ? nodes.map((item) => (item.id === node.id ? node : item))
         : [...nodes, node];
       break;
+    }
+    case "node.paint": {
+      const colors = new Map(
+        command.colors.map(({ id, color }) => [id, color]),
+      );
+      if (colors.size !== command.colors.length)
+        return yield* fail("Invalid", "A paint batch cannot repeat node IDs");
+      if (command.onlyIfUnset !== true) {
+        const missing = command.colors.filter(({ id }) => !nodeExists(id));
+        if (missing.length > 0)
+          return yield* fail(
+            "NotFound",
+            `Unknown nodes: ${missing.map(({ id }) => id).join(", ")}`,
+          );
+      }
+      // Paint is cosmetic: preserve content provenance and pending judgments.
+      return {
+        ...graph,
+        revision: provenance.revision,
+        nodes: nodes.map((node) => {
+          const color = colors.get(node.id);
+          return color === undefined ||
+            (command.onlyIfUnset === true && node.color !== undefined)
+            ? node
+            : { ...node, color: color?.toLowerCase() ?? null };
+        }),
+      };
     }
     case "node.remove": {
       const missing = command.ids.filter((id) => !nodeExists(id));

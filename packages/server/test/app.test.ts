@@ -192,6 +192,61 @@ const nodeCommand = (id = "a") => ({
   },
 });
 
+test("paint uses authenticated commands, export and durable SSE receipts", async () => {
+  const { request, options } = await fixture();
+  const auth = { authorization: `Bearer ${options.ownerToken}` };
+  const post = (expectedRevision: number, command: unknown) =>
+    request("/api/commands", {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({
+        requestId: `paint-http-${expectedRevision}`,
+        expectedRevision,
+        command,
+      }),
+    });
+  expect((await post(0, nodeCommand())).status).toBe(200);
+  const before = await (await request("/api/graph", { headers: auth })).json();
+  const paint = { type: "node.paint", colors: [{ id: "a", color: "#AABBCC" }] };
+  expect(
+    (
+      await request("/api/commands", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          requestId: "unauthorized-paint",
+          expectedRevision: 1,
+          command: paint,
+        }),
+      })
+    ).status,
+  ).toBe(401);
+  const painted = await post(1, paint);
+  expect(painted.status).toBe(200);
+  const result = await painted.json();
+  expect(result.receipt).toMatchObject({ type: "node.paint", revision: 2 });
+  const exported = await (
+    await request("/api/export", { headers: auth })
+  ).json();
+  expect(exported.graph.nodes[0]).toEqual({
+    ...before.nodes[0],
+    color: "#aabbcc",
+  });
+  expect(exported.history[1].command).toEqual(paint);
+  const events = await request("/api/events?after=1", { headers: auth });
+  const reader = events.body!.getReader();
+  let stream = "";
+  try {
+    while (!stream.includes("id: 2\n"))
+      stream += new TextDecoder().decode((await reader.read()).value);
+    expect(stream).toContain('"type":"node.paint"');
+    expect(stream).toContain(`data: ${JSON.stringify(result.receipt)}`);
+    expect(stream).not.toContain("id: 1\n");
+  } finally {
+    await reader.cancel();
+  }
+});
+
 test("all data reads and writes reject missing, wrong and spoofed credentials", async () => {
   const { request, options } = await fixture();
   for (const path of [

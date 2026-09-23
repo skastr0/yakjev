@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
+  PAINT_BATCH_MAX,
   type Actor,
   type Command,
   type CommandRequest,
@@ -96,6 +97,291 @@ async function fixture() {
   };
   return { ...(await open()), open, path };
 }
+
+test("legacy stored nodes omit color; capture and node.put canonicalize explicit colors", async () => {
+  const { store, run, send, path, runtime, open } = await fixture();
+  await send({
+    ...capture,
+    nodes: [
+      node("a"),
+      { ...node("b"), color: "#A1B2C3" },
+      { ...node("c"), color: null },
+    ],
+  });
+  let graph = await run(store.read);
+  expect(graph.nodes[0]).not.toHaveProperty("color");
+  expect(graph.nodes[1]?.color).toBe("#a1b2c3");
+  expect(graph.nodes[2]?.color).toBeNull();
+  const database = new Database(path);
+  try {
+    const stored = database.query("SELECT graph FROM graph_state").get() as {
+      graph: string;
+    };
+    expect(JSON.parse(stored.graph).nodes[0]).not.toHaveProperty("color");
+  } finally {
+    database.close();
+  }
+  await runtime.dispose();
+  const reopened = await open();
+  expect((await reopened.run(reopened.store.read)).nodes).toEqual(graph.nodes);
+  await reopened.send({
+    type: "node.put",
+    node: node("b", "Edit from an older client"),
+  });
+  await reopened.send({
+    type: "node.put",
+    node: node("c", "Keep status color"),
+  });
+  graph = await reopened.run(reopened.store.read);
+  expect(graph.nodes[1]?.color).toBe("#a1b2c3");
+  expect(graph.nodes[2]?.color).toBeNull();
+  await reopened.send({
+    type: "node.put",
+    node: { ...node("b"), color: "#ABCDEF" },
+  });
+  await reopened.send({
+    type: "node.put",
+    node: { ...node("c"), color: "#123AbC" },
+  });
+  graph = await reopened.run(reopened.store.read);
+  expect(graph.nodes[1]?.color).toBe("#abcdef");
+  expect(graph.nodes[2]?.color).toBe("#123abc");
+  await reopened.send({
+    type: "node.put",
+    node: { ...node("b"), color: null },
+  });
+  expect((await reopened.run(reopened.store.read)).nodes[1]?.color).toBeNull();
+});
+
+test("paint persists through export and restart with actor-scoped replay and revision conflicts", async () => {
+  const { store, run, send, runtime, open } = await fixture();
+  await send(capture);
+  const before = await run(store.read);
+  const request: CommandRequest = {
+    requestId: "paint-lost-response",
+    expectedRevision: 1,
+    command: { type: "node.paint", colors: [{ id: "a", color: "#AB12EF" }] },
+  };
+  const first = await run(store.execute(actor, request));
+  expect(first.receipt).toMatchObject({
+    type: "node.paint",
+    revision: 2,
+    actor,
+  });
+  const painted = await run(store.read);
+  expect(painted.nodes[0]).toEqual({ ...before.nodes[0]!, color: "#ab12ef" });
+  expect(await run(store.execute(actor, request))).toEqual({
+    receipt: first.receipt,
+    replayed: true,
+  });
+  await expect(
+    send(
+      { type: "node.paint", colors: [{ id: "a", color: null }] },
+      "stale-paint",
+      1,
+    ),
+  ).rejects.toMatchObject({ code: "Conflict", currentRevision: 2 });
+  await expect(
+    run(
+      store.execute(actor, {
+        ...request,
+        command: {
+          type: "node.paint",
+          colors: [{ id: "a", color: "#ffffff" }],
+        },
+      }),
+    ),
+  ).rejects.toMatchObject({ code: "Conflict" });
+  const exported = await run(store.exportGraph);
+  expect(exported.graph).toEqual(painted);
+  expect(exported.history[1]?.command).toEqual(request.command);
+  expect(await run(store.events(1))).toEqual([first.receipt]);
+  await runtime.dispose();
+  const reopened = await open();
+  expect(await reopened.run(reopened.store.exportGraph)).toEqual(exported);
+  expect(await reopened.run(reopened.store.execute(actor, request))).toEqual({
+    receipt: first.receipt,
+    replayed: true,
+  });
+  await reopened.run(
+    reopened.store.execute(
+      { id: "second-client", channel: "browser" },
+      {
+        requestId: request.requestId,
+        expectedRevision: 2,
+        command: { type: "node.paint", colors: [{ id: "a", color: null }] },
+      },
+    ),
+  );
+  expect((await reopened.run(reopened.store.read)).nodes[0]?.color).toBeNull();
+});
+
+test("legacy paint imports skip explicit color, explicit null and deleted or unknown nodes", async () => {
+  const { store, run, send } = await fixture();
+  await send({
+    ...capture,
+    nodes: [
+      node("a"),
+      { ...node("b"), color: "#123456" },
+      { ...node("c"), color: null },
+      node("deleted"),
+    ],
+  });
+  await send({ type: "node.remove", ids: ["deleted"] });
+  const before = await run(store.read);
+  const legacy: Command = {
+    type: "node.paint",
+    onlyIfUnset: true,
+    colors: [
+      { id: "a", color: "#AA5500" },
+      { id: "b", color: "#aa5500" },
+      { id: "c", color: "#aa5500" },
+      { id: "deleted", color: "#aa5500" },
+      { id: "unknown", color: "#aa5500" },
+    ],
+  };
+  await send(legacy);
+  let graph = await run(store.read);
+  expect(graph.nodes.map(({ id, color }) => ({ id, color }))).toEqual([
+    { id: "a", color: "#aa5500" },
+    { id: "b", color: "#123456" },
+    { id: "c", color: null },
+  ]);
+  expect(graph.nodes.map(({ updated }) => updated)).toEqual(
+    before.nodes.map(({ updated }) => updated),
+  );
+  await send({ type: "node.paint", colors: [{ id: "a", color: null }] });
+  await send(legacy);
+  graph = await run(store.read);
+  expect(graph.nodes[0]?.color).toBeNull();
+  expect(graph.nodes[1]?.color).toBe("#123456");
+  expect(graph.nodes[2]?.color).toBeNull();
+});
+
+test("paint validation rejects invalid colors, batch sizes, duplicate IDs and missing IDs atomically", async () => {
+  const { store, run, send } = await fixture();
+  await send(capture);
+  const before = await run(store.exportGraph);
+  for (const command of [
+    { type: "node.paint", colors: [] },
+    {
+      type: "node.paint",
+      colors: Array.from({ length: PAINT_BATCH_MAX + 1 }, (_, index) => ({
+        id: `n${index}`,
+        color: null,
+      })),
+    },
+    ...["red", "#fff", "#12345678", "#GG0000", 42, undefined].map((color) => ({
+      type: "node.paint",
+      colors: [{ id: "a", color }],
+    })),
+    {
+      type: "node.paint",
+      colors: [
+        { id: "a", color: null },
+        { id: "a", color: "#123456" },
+      ],
+    },
+    {
+      type: "node.paint",
+      onlyIfUnset: true,
+      colors: [
+        { id: "missing", color: null },
+        { id: "missing", color: "#123456" },
+      ],
+    },
+  ]) {
+    await expect(
+      run(
+        store.execute(actor, {
+          requestId: crypto.randomUUID(),
+          expectedRevision: 1,
+          command,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "Invalid" });
+    expect(await run(store.exportGraph)).toEqual(before);
+  }
+  await expect(
+    send({
+      type: "node.paint",
+      colors: [
+        { id: "a", color: "#123456" },
+        { id: "missing", color: null },
+      ],
+    }),
+  ).rejects.toMatchObject({ code: "NotFound" });
+  expect(await run(store.exportGraph)).toEqual(before);
+  await send({
+    type: "node.paint",
+    onlyIfUnset: true,
+    colors: Array.from({ length: PAINT_BATCH_MAX }, (_, index) => ({
+      id: `n${index}`,
+      color: null,
+    })),
+  });
+  expect((await run(store.read)).revision).toBe(2);
+});
+
+test("paint and its undo preserve content provenance and pending Jev judgments", async () => {
+  const { store, run, send } = await fixture();
+  await send(capture);
+  await send({
+    type: "suggestion.record",
+    suggestion: suggestion("paint-judgment", "a", "c", 1),
+  });
+  const before = await run(store.read);
+  await send({
+    type: "node.paint",
+    colors: [
+      { id: "a", color: "#abcdef" },
+      { id: "b", color: null },
+    ],
+  });
+  const painted = await run(store.read);
+  expect(painted.nodes.map(({ updated }) => updated)).toEqual(
+    before.nodes.map(({ updated }) => updated),
+  );
+  expect(painted.edges).toEqual(before.edges);
+  expect(painted.suggestions).toEqual(before.suggestions);
+  await send({ type: "undo", revision: 3 });
+  expect(await run(store.read)).toEqual({ ...before, revision: 4 });
+  await send({ type: "undo", revision: 4 });
+  expect(await run(store.read)).toEqual({ ...painted, revision: 5 });
+  await expect(send({ type: "undo", revision: 3 })).rejects.toMatchObject({
+    code: "Conflict",
+  });
+  await send({ type: "node.put", node: node("a", "A changed intention") });
+  expect((await run(store.read)).suggestions[0]?.status).toBe("superseded");
+  await send({ type: "undo", revision: 6 });
+  const restored = await run(store.read);
+  expect(restored.nodes[0]?.color).toBe("#abcdef");
+  expect(restored.nodes.every(({ updated }) => updated.revision === 7)).toBe(
+    true,
+  );
+  expect(restored.edges.every(({ updated }) => updated.revision === 7)).toBe(
+    true,
+  );
+  expect(restored.suggestions[0]?.status).toBe("superseded");
+});
+
+test("paint journal failures roll back color and revision together", async () => {
+  const { store, run, send, path } = await fixture();
+  await send(capture);
+  const before = await run(store.exportGraph);
+  const database = new Database(path);
+  try {
+    database.exec(
+      "CREATE TRIGGER reject_paint BEFORE INSERT ON graph_history BEGIN SELECT RAISE(ABORT, 'injected color journal failure'); END",
+    );
+    await expect(
+      send({ type: "node.paint", colors: [{ id: "a", color: "#123456" }] }),
+    ).rejects.toMatchObject({ _tag: "StorageError" });
+    expect(await run(store.exportGraph)).toEqual(before);
+  } finally {
+    database.close();
+  }
+});
 
 test("asymmetric direction, cycles, non-blocking claims and diamonds remain distinct", async () => {
   const { store, run, send } = await fixture();
