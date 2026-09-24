@@ -56,7 +56,7 @@ The official TypeSafe skill is vendored in `.agents/skills/typesafe-ai`, with it
 
 Public code, private graph. The deployment exposes public HTTPS on a Railway service domain; the owner token is the lock. Reads and writes require application authentication: owner-token exchange for a browser session, or owner bearer for native HTTP/MCP. Read [the deployment guide](docs/deployment.md) for configuration and credentials; see [MCP configuration](docs/mcp.md) for agent access.
 
-**Nothing is deployed by cloning, building, running CI, or starting an orb.** Configured orbs join the tailnet on resume; this does not deploy Yakjev. Deployment, enrollment, and network grants remain separately authorized operations. Production requires `YAKJEV_OWNER_TOKEN` of at least 32 characters and rejects `YAKJEV_DEV_AUTH`.
+**Nothing is deployed by cloning, building, running CI, or starting an orb.** Owner orbs that carry tailnet configuration join on resume; a fork without that configuration does not. Joining does not deploy Yakjev. Deployment, enrollment, and network grants remain separately authorized operations. Production requires `YAKJEV_OWNER_TOKEN` of at least 32 characters and rejects `YAKJEV_DEV_AUTH`.
 
 ## License
 
