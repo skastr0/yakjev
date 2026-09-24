@@ -5,6 +5,28 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 version=1.4.2
 
+locate_orb_setup() {
+  local candidate
+  for candidate in \
+    "${root}/../repos/orb-setup" \
+    "${root}/../repos/skastr0/orb-setup" \
+    "${root}/../orb-setup"; do
+    if [[ -x "${candidate}/bin/setup.sh" ]]; then
+      printf '%s' "$(cd "$candidate" && pwd)"
+      return 0
+    fi
+  done
+  return 1
+}
+
+orb_setup="$(locate_orb_setup)" || {
+  printf '[setup] error: orb-setup checkout not found next to this repository\n' >&2
+  exit 1
+}
+printf '[setup] Using shared runtime at %s\n' "$orb_setup"
+bash "${orb_setup}/bin/setup.sh"
+export PATH="${HOME}/.local/bin:${PATH}"
+
 if [[ "$(uname -s)" == Linux ]]; then
   missing=()
   for cmd in curl unzip python3 gh; do
@@ -35,15 +57,15 @@ echo "Building web scaffold"
 time bun run build
 
 if [[ "${AMP_ORB:-}" == 1 && "$(uname -s)" == Linux ]]; then
-  # Install clients only; authentication belongs in resume, after snapshotting.
-  for spec in '@railway/cli@5.58.0' '@skastr0/quasar-cli@0.5.3'; do
-    package="${spec%@*}"
-    expected="${spec##*@}"
-    installed="$(node -e 'try { console.log(require(process.argv[1]).version) } catch {}' "$HOME/.local/lib/node_modules/$package/package.json")"
-    if [[ "$installed" != "$expected" ]]; then
-      npm install --global --prefix "$HOME/.local" "$spec"
-    fi
-  done
+  # Install the Railway client only. Tailscale and Quasar come from the shared
+  # runtime; authentication belongs in resume, after snapshotting.
+  spec='@railway/cli@5.58.0'
+  package="${spec%@*}"
+  expected="${spec##*@}"
+  installed="$(node -e 'try { console.log(require(process.argv[1]).version) } catch {}' "$HOME/.local/lib/node_modules/$package/package.json")"
+  if [[ "$installed" != "$expected" ]]; then
+    npm install --global --prefix "$HOME/.local" "$spec"
+  fi
   marker='# yakjev orb clients'
   if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
     cat >> "$HOME/.bash_profile" <<'EOF'

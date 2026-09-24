@@ -11,10 +11,39 @@ command -v bun >/dev/null
 
 [[ "${AMP_ORB:-}" == 1 ]] || exit 0
 
-# Forks can develop without the owner's private integrations.
-# Public app. No tailnet enrollment.
+# Public app health is project-owned and does not join a tailnet.
 if [[ -n "${YAKJEV_REMOTE_URL:-}" ]]; then
   curl --fail --silent --show-error --max-time 8 --proto '=https' "$YAKJEV_REMOTE_URL/healthz" >/dev/null \
     && echo '[resume] yakjev /healthz ok' \
     || echo '[resume] yakjev /healthz not reachable yet' >&2
 fi
+
+# Forks can develop without the owner's private integrations. Owner Amp orbs
+# carry the tailnet configuration, so they join through the shared runtime.
+# A fork or a checkout without it resumes here without that private runtime.
+if [[ -z "${TAILSCALE_CLIENT_ID:-}${TAILSCALE_AUDIENCE:-}${QUASAR_SERVER_URL:-}" ]]; then
+  printf '[resume] No tailnet configuration present; skipping Tailscale enrollment\n'
+  exit 0
+fi
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+locate_orb_setup() {
+  local candidate
+  for candidate in \
+    "${root}/../repos/orb-setup" \
+    "${root}/../repos/skastr0/orb-setup" \
+    "${root}/../orb-setup"; do
+    if [[ -x "${candidate}/bin/resume.sh" ]]; then
+      printf '%s' "$(cd "$candidate" && pwd)"
+      return 0
+    fi
+  done
+  return 1
+}
+
+orb_setup="$(locate_orb_setup)" || {
+  printf '[resume] error: orb-setup checkout not found next to this repository\n' >&2
+  exit 1
+}
+bash "${orb_setup}/bin/resume.sh"

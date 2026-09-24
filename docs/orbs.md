@@ -2,7 +2,7 @@
 
 ## Development
 
-Setup installs Bun 1.4.2, dependencies, a web build, GitHub CLI if missing, Railway CLI 5.58.0, and Quasar CLI 0.5.3. Toolchains may be cached. Setup does not authenticate.
+Setup installs the shared orb runtime first, then Bun 1.4.2, dependencies, a web build, GitHub CLI if missing, and Railway CLI 5.58.0. Tailscale and Quasar come from that shared runtime. Toolchains may be cached. Setup does not authenticate.
 
 `amp orb services ensure` starts a private API on 3210 with `YAKJEV_DEV_AUTH=true` and an Amp-authenticated web portal. The synthetic owner token is `synthetic-yakjev-owner-token-local-only`. The server accepts this mode only with a non-production loopback origin. Production must not set the flag.
 
