@@ -4,6 +4,10 @@ dist/
 .env
 .env.*
 !.env.example
+# Host runtime secrets (the Mac mini keeps them in ~/.config/yakjev/env).
+env
+*.env
+.config/
 *.sqlite
 *.sqlite-*
 *.db
