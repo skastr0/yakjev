@@ -24,7 +24,7 @@
     "start": "bun packages/server/src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test packages apps/web",
-    "test:deploy": "bash deploy/tests/run.sh && bash deploy/tests/resume.sh",
+    "test:deploy": "bash deploy/tests/run.sh && bash deploy/tests/resume.sh && bash deploy/tests/macmini.sh",
     "test:acceptance": "bun test tests/acceptance",
     "jev:eval": "bun packages/server/scripts/jev-eval.ts",
     "jev:retrieval": "bun packages/server/scripts/jev-retrieval-eval.ts",
