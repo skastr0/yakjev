@@ -271,7 +271,16 @@ groups="$(asc_cli testflight groups list --app "$APP_ID" --internal --paginate -
 jq -e --arg id "$GROUP_ID" '.data | any(.id == $id)' <<<"$groups" >/dev/null || fail 'Group must be an internal group belonging to this app'
 
 asc_cli builds add-groups --build-id "$BUILD_ID" --group "$GROUP_ID" --output table
-if [[ "$SEND_INVITE" -eq 1 ]]; then
+in_group() {
+  local members
+  members="$(asc_cli testflight testers list --app "$APP_ID" --group "$GROUP_ID" \
+    --email "$INVITE_EMAIL" --output json | normalize_list)"
+  jq -e --arg email "$INVITE_EMAIL" '.data | any((.attributes.email | ascii_downcase) == ($email | ascii_downcase))' <<<"$members" >/dev/null
+}
+if [[ "$SEND_INVITE" -eq 1 ]] && in_group; then
+  # ASC rejects re-assigning a group member; the group already receives this build.
+  log "Tester is already in the internal group; no invitation needed"
+elif [[ "$SEND_INVITE" -eq 1 ]]; then
   # ASC 2.7 invite only applies --group when creating a missing tester. An
   # existing app tester must be assigned explicitly before sending the invite.
   app_testers="$(asc_cli testflight testers list --app "$APP_ID" \
@@ -284,9 +293,7 @@ if [[ "$SEND_INVITE" -eq 1 ]]; then
   # Let real errors fail; uploading alone is not a successful invitation.
   asc_cli testflight testers invite --app "$APP_ID" --email "$INVITE_EMAIL" \
     --group "$GROUP_ID" --output table
-  testers="$(asc_cli testflight testers list --app "$APP_ID" --group "$GROUP_ID" \
-    --email "$INVITE_EMAIL" --output json | normalize_list)"
-  jq -e --arg email "$INVITE_EMAIL" '.data | any((.attributes.email | ascii_downcase) == ($email | ascii_downcase))' <<<"$testers" >/dev/null || fail 'Invited tester is not present in the target group'
+  in_group || fail 'Invited tester is not present in the target group'
 fi
 asc_cli builds build-beta-detail view --build-id "$BUILD_ID" --output table
 log "Distributed exact build $BUILD_ID to internal group $GROUP_ID"
