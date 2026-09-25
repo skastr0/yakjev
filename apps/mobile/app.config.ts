@@ -30,6 +30,8 @@ const config: ExpoConfig = {
     ["expo-splash-screen", { backgroundColor: "#f5f2e9" }],
   ],
   experiments: { typedRoutes: true },
+  // Private tailnet origin from the release environment; never a source default.
+  extra: { serverUrl: process.env.YAKJEV_SERVER_URL?.trim() || undefined },
 };
 
 export default config;

@@ -21,7 +21,7 @@ bun run mobile:ios
 bun run mobile:start
 ```
 
-The app defaults to `https://yakjev-production.up.railway.app`, shared with Electron through `@yakjev/client/config`. Enter your owner token to unlock it. For synthetic simulator development, change the server to `http://127.0.0.1:3210` and use `synthetic-yakjev-owner-token-local-only`. HTTP is accepted only for loopback in development builds. Never put the token in app config, an `EXPO_PUBLIC_` variable, or source code.
+The app connects to the server named by `YAKJEV_SERVER_URL` at build time (`https://yakjev.<tailnet>.ts.net`; see [deployment](deployment.md)). The value lives in the private release environment, never in source. Without it, the connect screen asks for the address. A session saved against the retired Railway origin moves to that server on launch and keeps its token. Enter your owner token to unlock it. For synthetic simulator development, change the server to `http://127.0.0.1:3210` and use `synthetic-yakjev-owner-token-local-only`. HTTP is accepted only for loopback in development builds. Never put the token in app config, an `EXPO_PUBLIC_` variable, or source code.
 
 The graph is a local Expo native module, so use a development build rather than Expo Go. Native projects are generated and ignored; Swift sources live in `apps/mobile/modules/yakjev-graph`. Rebuild after native changes. If adding Swift or shader files to an existing generated project, run CocoaPods installation again before building.
 

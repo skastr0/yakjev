@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import * as SecureStore from "expo-secure-store";
+import { SERVER_URL } from "./server-url";
 import { SessionController } from "./session-storage";
 
 export type { Session } from "./session-storage";
@@ -19,6 +20,7 @@ export function useSession() {
           remove: () => SecureStore.deleteItemAsync(SESSION_KEY),
         },
         __DEV__,
+        SERVER_URL,
       ),
     [],
   );

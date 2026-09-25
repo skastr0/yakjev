@@ -11,7 +11,7 @@ import {
   type MenuItemConstructorOptions,
 } from "electron";
 import { Context, Effect, Layer, Semaphore } from "effect";
-import { DEFAULT_SERVER_URL } from "@yakjev/client/config";
+import { currentServerUrl } from "@yakjev/client/config";
 import {
   decodeOrigin,
   DesktopError,
@@ -351,7 +351,12 @@ export class DesktopHost extends Context.Service<
                     ),
                   )
                 : yield* decodeOrigin(options.configuredOrigin);
-            yield* openWorkbench(saved ?? DEFAULT_SERVER_URL);
+            // electron-vite inlines YAKJEV_SERVER_URL at build time.
+            const serverUrl = process.env.YAKJEV_SERVER_URL || undefined;
+            const origin = saved
+              ? currentServerUrl(saved, serverUrl)
+              : serverUrl;
+            yield* origin ? openWorkbench(origin) : showConnection;
           }),
           focus: Effect.suspend(() => {
             const current = connection ?? workbench;

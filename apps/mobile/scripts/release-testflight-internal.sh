@@ -117,6 +117,7 @@ if [[ -z "$IPA_PATH" && -z "$BUILD_ID" ]]; then
   [[ -n "$TEAM_ID" ]] || fail 'Set YAKJEV_APPLE_TEAM_ID in the private release environment'
   [[ -n "$PROFILE_NAME" ]] || fail 'Set PROFILE_NAME in the private release environment'
   [[ -n "$CODE_SIGN_IDENTITY" ]] || fail 'Set CODE_SIGN_IDENTITY in the private release environment'
+  [[ "${YAKJEV_SERVER_URL:-}" =~ ^https://[^/?#@]+$ ]] || fail 'Set YAKJEV_SERVER_URL to the HTTPS server origin in the private release environment'
 fi
 if [[ "$BUILD_ONLY" -eq 0 && "$SEND_INVITE" -eq 1 ]]; then
   [[ -n "$INVITE_EMAIL" ]] || fail 'Set INVITE_EMAIL or pass --invite-email; use --no-invite to skip invitations'
@@ -141,6 +142,7 @@ if [[ -z "$IPA_PATH" && -z "$BUILD_ID" ]]; then
   [[ "$identities" == *"$CODE_SIGN_IDENTITY"* ]] || fail "Installed signing identity not found: $CODE_SIGN_IDENTITY"
   export YAKJEV_IOS_BUILD_NUMBER="$BUILD_NUMBER"
   export YAKJEV_APPLE_TEAM_ID="$TEAM_ID"
+  export YAKJEV_SERVER_URL
   RUN_DIR="$ARTIFACTS_DIR/build-$BUILD_NUMBER"
   ARCHIVE_PATH="$RUN_DIR/yakjev.xcarchive"
   IPA_PATH="$RUN_DIR/yakjev.ipa"
@@ -179,9 +181,9 @@ fi
 
 if [[ -z "$BUILD_ID" ]]; then
   [[ -f "$IPA_PATH" ]] || fail "IPA not found: $IPA_PATH"
-  metadata="$(python3 - "$IPA_PATH" "$BUNDLE_ID" "$BUILD_NUMBER" <<'PY'
+  metadata="$(python3 - "$IPA_PATH" "$BUNDLE_ID" "$BUILD_NUMBER" "${YAKJEV_SERVER_URL:-}" <<'PY'
 import hashlib, json, plistlib, re, sys, zipfile
-path, bundle, expected_build = sys.argv[1:]
+path, bundle, expected_build, server_url = sys.argv[1:]
 with zipfile.ZipFile(path) as archive:
     names = set(archive.namelist())
     roots = [name for name in names if re.fullmatch(r'Payload/[^/]+\.app/Info\.plist', name)]
@@ -211,6 +213,12 @@ with zipfile.ZipFile(path) as archive:
     ))]
     if not shaders or not any(archive.getinfo(name).file_size > 0 for name in shaders):
         raise SystemExit('IPA is missing the native graph shader resource')
+    configs = [name for name in names if name.startswith(prefix) and name.endswith('EXConstants.bundle/app.config')]
+    embedded = json.loads(archive.read(configs[0])).get('extra', {}).get('serverUrl') if configs else None
+    if server_url and embedded != server_url:
+        raise SystemExit('IPA does not embed YAKJEV_SERVER_URL as its server')
+    if not embedded:
+        raise SystemExit('IPA has no embedded server URL')
 with open(path, 'rb') as source:
     checksum = hashlib.file_digest(source, 'sha256').hexdigest()
 print(json.dumps({'bundleId': bundle, 'version': version, 'buildNumber': build, 'sha256': checksum}))

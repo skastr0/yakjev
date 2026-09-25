@@ -11,6 +11,12 @@ const external = ["electron", /^electron\/.+/, /^node:/];
 export default defineConfig({
   main: {
     envDir: false,
+    // The private server origin comes from the build environment, never source.
+    define: {
+      "process.env.YAKJEV_SERVER_URL": JSON.stringify(
+        process.env.YAKJEV_SERVER_URL ?? "",
+      ),
+    },
     plugins: [
       {
         name: "desktop-connection-page",

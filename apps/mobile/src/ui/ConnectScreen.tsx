@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { DEFAULT_SERVER_URL } from "@yakjev/client/config";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -8,6 +7,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { SERVER_URL } from "../state/server-url";
 import { Button, Field } from "./primitives";
 import { color, styles } from "./theme";
 
@@ -20,8 +20,8 @@ export function ConnectScreen({
   error: string | null;
   onConnect: (url: string, token: string) => Promise<boolean>;
 }) {
-  const [url, setUrl] = useState(DEFAULT_SERVER_URL);
-  const [changingServer, setChangingServer] = useState(false);
+  const [url, setUrl] = useState(SERVER_URL ?? "");
+  const [changingServer, setChangingServer] = useState(!SERVER_URL);
   const [token, setToken] = useState("");
   const [connecting, setConnecting] = useState(false);
   async function connect() {
@@ -93,7 +93,7 @@ export function ConnectScreen({
             {changingServer && (
               <Field
                 label="Server address"
-                placeholder={DEFAULT_SERVER_URL}
+                placeholder="https://yakjev.your-tailnet.ts.net"
                 value={url}
                 onChangeText={setUrl}
                 autoCapitalize="none"

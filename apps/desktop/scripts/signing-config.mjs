@@ -30,6 +30,7 @@ export function buildEnvironment(env = process.env) {
     "TEMP",
     "LANG",
     "LC_ALL",
+    "YAKJEV_SERVER_URL",
   ]) {
     if (env[key] !== undefined) result[key] = env[key];
   }

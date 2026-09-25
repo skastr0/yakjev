@@ -1,4 +1,5 @@
 import { normalizeServerUrl } from "@yakjev/client";
+import { currentServerUrl } from "@yakjev/client/config";
 
 export type Session = { baseUrl: string; token: string };
 
@@ -62,6 +63,7 @@ export class SessionController {
   constructor(
     private readonly storage: SessionStorage,
     private readonly development = false,
+    private readonly serverUrl?: string,
   ) {}
 
   getSnapshot = () => this.state;
@@ -86,11 +88,17 @@ export class SessionController {
     try {
       const saved = await this.storage.get();
       if (generation !== this.generation) return;
-      this.update({
-        session: saved ? decodeSession(saved, this.development) : null,
-        loading: false,
-        error: null,
-      });
+      let session = saved ? decodeSession(saved, this.development) : null;
+      const baseUrl =
+        session && currentServerUrl(session.baseUrl, this.serverUrl);
+      if (session && baseUrl && baseUrl !== session.baseUrl) {
+        session = validateSession(baseUrl, session.token, this.development);
+        const moved = JSON.stringify(session);
+        // A failed write re-migrates on the next restore.
+        await this.mutate(() => this.storage.set(moved)).catch(() => {});
+        if (generation !== this.generation) return;
+      }
+      this.update({ session, loading: false, error: null });
     } catch {
       if (generation === this.generation)
         this.update({

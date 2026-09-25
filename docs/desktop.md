@@ -13,9 +13,11 @@ bun run desktop:build
 bun run desktop:start
 ```
 
-On first launch, the app connects to **https://yakjev-production.up.railway.app**.
-Unlock with the existing owner-token form. Desktop and mobile share this default
-through `@yakjev/client/config`.
+On first launch, the app connects to the server named by `YAKJEV_SERVER_URL`
+when it was built (`https://yakjev.<tailnet>.ts.net`, kept in private
+`.local/desktop-release.env`, never in source). Without it, the app asks for the
+address. A remembered Railway origin opens that server instead.
+Unlock with the existing owner-token form.
 Use **File → Connect to Server…** to switch servers. The app remembers the
 server address. Each server has its own Chromium session and browser storage.
 Source links open in your system browser.
@@ -31,11 +33,11 @@ for the migration and release contract.
 You can also select a server when launching from a terminal:
 
 ```sh
-YAKJEV_REMOTE_URL=https://your-yakjev.up.railway.app bun run desktop:start
+YAKJEV_REMOTE_URL=https://yakjev.your-tailnet.ts.net bun run desktop:start
 ```
 
 `YAKJEV_URL` is an alias. Server selection is environment override, then remembered
-address, then the shared production default. Never put an owner token or provider
+address, then the build's `YAKJEV_SERVER_URL`. Never put an owner token or provider
 credential in build settings.
 
 ## Local development

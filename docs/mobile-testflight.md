@@ -1,6 +1,6 @@
 # Internal TestFlight releases
 
-Yakjev uses local Xcode archives and `asc` CLI 2.7, following the release approach in `../ripple`. The app connects to the existing production server; the owner token is entered on the phone and is never bundled in a release.
+Yakjev uses local Xcode archives and `asc` CLI 2.7, following the release approach in `../ripple`. The app connects to the server in `YAKJEV_SERVER_URL`; the owner token is entered on the phone and is never bundled in a release.
 
 ## Identity and prerequisites
 
@@ -27,7 +27,10 @@ YAKJEV_APPLE_TEAM_ID=
 PROFILE_NAME=
 CODE_SIGN_IDENTITY=
 INVITE_EMAIL=
+YAKJEV_SERVER_URL=
 ```
+
+`YAKJEV_SERVER_URL` is the tailnet server origin the app opens, required when archiving. The IPA check fails unless the archive embeds it.
 
 `ASC_PROFILE` is always required and passed explicitly to the CLI. The team, provisioning profile name, and code-signing identity are required only when archiving. Uploading an existing IPA or distributing an existing build does not need signing settings. `INVITE_EMAIL` is required only when inviting a tester; `--no-invite` omits that step. No credentials belong in this file beyond the local profile references; keep authentication material in the existing ASC credential store/keychain.
 

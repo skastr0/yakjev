@@ -136,6 +136,54 @@ describe("secure session", () => {
     ).toThrow();
   });
 
+  test("a session saved against a retired server moves to the build's server", async () => {
+    let stored: string | null = JSON.stringify({
+      baseUrl: "https://yakjev-production.up.railway.app",
+      token: "synthetic",
+    });
+    const storage = {
+      get: async () => stored,
+      set: async (value: string) => {
+        stored = value;
+      },
+      remove: async () => {},
+    };
+    const session = new SessionController(
+      storage,
+      false,
+      "https://yakjev.example.ts.net",
+    );
+    sessions.push(session);
+    await session.restore();
+    const moved = {
+      baseUrl: "https://yakjev.example.ts.net",
+      token: "synthetic",
+    };
+    expect(session.getSnapshot().session).toEqual(moved);
+    expect(JSON.parse(stored!)).toEqual(moved);
+
+    // Other servers, and builds without a configured server, are left alone.
+    stored = JSON.stringify({ baseUrl: "https://other.example", token: "t" });
+    const other = new SessionController(
+      storage,
+      false,
+      "https://yakjev.example.ts.net",
+    );
+    sessions.push(other);
+    await other.restore();
+    expect(other.getSnapshot().session?.baseUrl).toBe("https://other.example");
+    stored = JSON.stringify({
+      baseUrl: "https://yakjev-production.up.railway.app",
+      token: "t",
+    });
+    const unconfigured = new SessionController(storage);
+    sessions.push(unconfigured);
+    await unconfigured.restore();
+    expect(unconfigured.getSnapshot().session?.baseUrl).toBe(
+      "https://yakjev-production.up.railway.app",
+    );
+  });
+
   test("a delayed credential restore cannot unlock after disconnect", async () => {
     const read = deferred<string | null>();
     const session = new SessionController({
