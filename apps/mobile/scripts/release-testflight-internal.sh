@@ -125,6 +125,9 @@ fi
 for command in asc jq python3; do
   command -v "$command" >/dev/null || fail "Missing command: $command"
 done
+# IPA inspection uses hashlib.file_digest; fail before a long archive, not after.
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' \
+  || fail "Python 3.11 or newer must be first on PATH (found $(python3 --version 2>&1))"
 mkdir -p "$ARTIFACTS_DIR"
 
 if [[ "$BUILD_ONLY" -eq 0 ]]; then
