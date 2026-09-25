@@ -8,16 +8,18 @@ Setup installs the shared orb runtime first, then Bun 1.4.2, dependencies, a web
 
 ## Deployed app
 
-| Setting                                                              | Purpose                                                           |
-| -------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `YAKJEV_REMOTE_URL`                                                  | Public origin, `https://<service>.up.railway.app`                 |
-| `YAKJEV_OWNER_TOKEN`                                                 | Same owner token as the Railway service. Required for MCP writes. |
-| `TYPESAFE_API_KEY`                                                   | Server-side Jev calls                                             |
-| `SYNTHETIC_API_KEY`                                                  | Semantic retrieval embeddings; absent means lexical ranking       |
-| `RAILWAY_API_TOKEN`                                                  | Railway CLI                                                       |
-| `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID`, `RAILWAY_SERVICE_ID` | This app's deployment                                             |
-| `QUASAR_SERVER_URL`                                                  | Session-memory endpoint                                           |
+| Setting                                                              | Purpose                                                        |
+| -------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `YAKJEV_REMOTE_URL`                                                  | Tailnet origin, `https://yakjev.<tailnet>.ts.net`              |
+| `YAKJEV_OWNER_TOKEN`                                                 | Same owner token as the Mac mini env. Required for MCP writes. |
+| `TYPESAFE_API_KEY`                                                   | Server-side Jev calls                                          |
+| `SYNTHETIC_API_KEY`                                                  | Semantic retrieval embeddings; absent means lexical ranking    |
+| `RAILWAY_API_TOKEN`                                                  | Railway CLI                                                    |
+| `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID`, `RAILWAY_SERVICE_ID` | This app's deployment                                          |
+| `QUASAR_SERVER_URL`                                                  | Session-memory endpoint                                        |
 
 MCP endpoint: `$YAKJEV_REMOTE_URL/mcp` with `Authorization: Bearer $YAKJEV_OWNER_TOKEN`.
+
+The deployed app is reachable only on the tailnet. Owner orbs join through the shared runtime on resume, then probe `$YAKJEV_REMOTE_URL/healthz`. The orb's tag needs a grant for `tcp:443` to `svc:yakjev`; that grant is applied in the Tailscale admin console, not from this repository. The Railway settings below are only for the paused Railway service.
 
 Do not put the owner token in Vite or in this repository. Lifecycle hooks do not create projects or deploy.

@@ -13,7 +13,7 @@ Owner direction (2026-09-22): Jev is not an on-demand action. It runs transparen
 - The server owns graph writes. HTTP and MCP share `Store`, `Auth`, and `Evaluations`; neither owns a second database. Preserve actor-scoped replay, atomic revision checks, and the transaction journal.
 - Authorized Amp orbs must be able to use Yakjev as MCP clients, including from the owner's other projects. Tailnet connectivity and application authorization are separate requirements; access to Yakjev does not grant Railway deployment authority or access to unrelated tailnet services.
 - Use the checked-in TypeSafe skill when implementing Jev. Keep provider credentials server-side.
-- Deployment is public HTTPS on a Railway service domain. The owner token is the lock. Read `docs/deployment.md` before deployment changes.
+- Deployment is the Mac mini on the owner's tailnet: loopback app behind Tailscale Serve (`svc:yakjev`), launchd from `deploy/macmini`. Railway is paused. The owner token is still the lock. Keep the tailnet name out of the repository. Read `docs/deployment.md` before deployment changes.
 
 ## Workflow
 

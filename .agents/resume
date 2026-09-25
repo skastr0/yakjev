@@ -11,18 +11,20 @@ command -v bun >/dev/null
 
 [[ "${AMP_ORB:-}" == 1 ]] || exit 0
 
-# Public app health is project-owned and does not join a tailnet.
-if [[ -n "${YAKJEV_REMOTE_URL:-}" ]]; then
+# The deployed app is on the tailnet, so probe it only after joining.
+probe_remote() {
+  [[ -n "${YAKJEV_REMOTE_URL:-}" ]] || return 0
   curl --fail --silent --show-error --max-time 8 --proto '=https' "$YAKJEV_REMOTE_URL/healthz" >/dev/null \
     && echo '[resume] yakjev /healthz ok' \
     || echo '[resume] yakjev /healthz not reachable yet' >&2
-fi
+}
 
 # Forks can develop without the owner's private integrations. Owner Amp orbs
 # carry the tailnet configuration, so they join through the shared runtime.
 # A fork or a checkout without it resumes here without that private runtime.
 if [[ -z "${TAILSCALE_CLIENT_ID:-}${TAILSCALE_AUDIENCE:-}${QUASAR_SERVER_URL:-}" ]]; then
   printf '[resume] No tailnet configuration present; skipping Tailscale enrollment\n'
+  probe_remote
   exit 0
 fi
 
@@ -47,3 +49,4 @@ orb_setup="$(locate_orb_setup)" || {
   exit 1
 }
 bash "${orb_setup}/bin/resume.sh"
+probe_remote

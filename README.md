@@ -43,7 +43,7 @@ The [Electron desktop app](docs/desktop.md) builds the same web workbench. Both 
 | `apps/mobile`       | Expo iOS client with a native Swift/Metal graph                |
 | `apps/desktop`      | Electron client using the web workbench                        |
 | `tests/acceptance`  | Black-box HTTP/SSE graph-loop acceptance                       |
-| `deploy`            | Railway image and synthetic deployment tests                   |
+| `deploy`            | Mac mini launchd runner, paused Railway image, synthetic tests |
 | `.agents`           | Orb setup/resume and vendored Jev skill                        |
 
 ## Amp orbs
@@ -54,7 +54,7 @@ The official TypeSafe skill is vendored in `.agents/skills/typesafe-ai`, with it
 
 ## Private deployment
 
-Public code, private graph. The deployment exposes public HTTPS on a Railway service domain; the owner token is the lock. Reads and writes require application authentication: owner-token exchange for a browser session, or owner bearer for native HTTP/MCP. Read [the deployment guide](docs/deployment.md) for configuration and credentials; see [MCP configuration](docs/mcp.md) for agent access.
+Public code, private graph. The deployment runs on a Mac mini inside the owner's tailnet behind Tailscale Serve; the owner token is still the lock. Reads and writes require application authentication: owner-token exchange for a browser session, or owner bearer for native HTTP/MCP. Read [the deployment guide](docs/deployment.md) for configuration and credentials; see [MCP configuration](docs/mcp.md) for agent access.
 
 **Nothing is deployed by cloning, building, running CI, or starting an orb.** Owner orbs that carry tailnet configuration join on resume; a fork without that configuration does not. Joining does not deploy Yakjev. Deployment, enrollment, and network grants remain separately authorized operations. Production requires `YAKJEV_OWNER_TOKEN` of at least 32 characters and rejects `YAKJEV_DEV_AUTH`.
 
