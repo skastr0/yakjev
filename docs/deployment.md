@@ -12,6 +12,7 @@ Keep the tailnet name out of this public repository. The origin and every secret
 | Config  | `~/.config/yakjev/env` (0600)                                               |
 | Data    | `~/.yakjev/data/yakjev.sqlite`                                              |
 | Logs    | `~/.yakjev/logs/yakjev.{out,err}.log`                                       |
+| Backup  | `com.skastr0.yakjev.backup` daily 04:15 → `~/.yakjev/backups`, keeps 14     |
 | Auth    | `Authorization: Bearer <YAKJEV_OWNER_TOKEN>` and the browser session cookie |
 
 ## Mac mini
@@ -28,8 +29,22 @@ Keep the tailnet name out of this public repository. The origin and every secret
 
    The runner forces `NODE_ENV=production`, `YAKJEV_LISTEN_HOST=127.0.0.1`, port 3210 and `YAKJEV_DATA_DIR=~/.yakjev/data`. It refuses `YAKJEV_DEV_AUTH`, any `RAILWAY_*` variable, a non-loopback host, and an origin that is not `https://*.ts.net`.
 
-3. `BUN_BIN=<absolute bun 1.4.2 path> deploy/macmini/install.sh` renders the launchd plist and loads it. Re-run it after changing the Bun path; restart after a deploy with `launchctl kickstart -k gui/$(id -u)/com.skastr0.yakjev`.
+3. `BUN_BIN=<absolute bun 1.4.2 path> deploy/macmini/install.sh` renders and loads two launchd agents: the server and its daily backup. Re-run it after changing the Bun path.
 4. Check loopback: `curl -fsS http://127.0.0.1:3210/healthz`.
+
+## Redeploy
+
+On the mini, from the checkout:
+
+```sh
+git pull --ff-only
+bun install --frozen-lockfile
+bun run build
+launchctl kickstart -k gui/$(id -u)/com.skastr0.yakjev
+curl -fsS http://127.0.0.1:3210/healthz
+```
+
+The graph lives outside the checkout, so a pull never touches it. The server creates its tables at startup; take a backup first (`deploy/macmini/backup.sh`) when a deploy changes `packages/server/src/store.ts`.
 
 ## Tailscale
 
@@ -54,7 +69,11 @@ The client must be on the tailnet.
 
 ## Backup
 
-Use SQLite `VACUUM INTO` for a consistent copy, never a copy of the live file. Restore by stopping the agent (`launchctl bootout gui/$(id -u)/com.skastr0.yakjev`), placing the copy at `~/.yakjev/data/yakjev.sqlite`, running `PRAGMA integrity_check`, and running `install.sh` again.
+`deploy/macmini/backup.sh` writes `~/.yakjev/backups/yakjev-<UTC stamp>.sqlite` with SQLite `VACUUM INTO`, which is consistent beside the running server. It checks `PRAGMA integrity_check` on the copy and keeps the newest 14 (`YAKJEV_BACKUP_KEEP`). launchd runs it daily at 04:15, and at the next wake if the mini slept through that time. Never copy the live database file.
+
+The mini is one disk. To keep a copy elsewhere, run `deploy/macmini/pull-backups.sh --install` on another machine with `ssh mac-mini` access. It pulls new backups daily into `~/Backups/yakjev` over SSH, keeps 60, and never writes to the mini.
+
+Restore: `launchctl bootout gui/$(id -u)/com.skastr0.yakjev`, remove `yakjev.sqlite-wal` and `yakjev.sqlite-shm`, copy the backup to `~/.yakjev/data/yakjev.sqlite`, check `PRAGMA integrity_check`, then run `install.sh` again.
 
 ## Railway (paused)
 
