@@ -57,7 +57,17 @@ $3
 PLIST
   plutil -lint "$plist" >/dev/null
   launchctl bootout "$domain/$1" 2>/dev/null || true
-  launchctl bootstrap "$domain" "$plist"
+  # bootout returns before launchd lets go of the label; bootstrapping too early
+  # fails with "5: Input/output error" and leaves the service unloaded.
+  for _ in $(seq 1 40); do
+    launchctl print "$domain/$1" >/dev/null 2>&1 || break
+    sleep 0.25
+  done
+  for attempt in 1 2 3 4 5; do
+    launchctl bootstrap "$domain" "$plist" 2>/dev/null && break
+    [ "$attempt" -lt 5 ] || die "could not load $1; run: launchctl bootstrap $domain $plist"
+    sleep 1
+  done
   printf 'yakjev: loaded %s\n' "$1"
 }
 
