@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install or reload the yakjev launchd agent on the Mac mini. Does not touch Tailscale.
+# Install or reload the yakjev launchd agents on the Mac mini: the server and its daily
+# backup. Does not touch Tailscale.
 set -euo pipefail
 
 die() {
@@ -15,20 +16,25 @@ bun_bin="${BUN_BIN:-$(command -v bun || true)}"
 [ -r "$HOME/.config/yakjev/env" ] || die "create $HOME/.config/yakjev/env (0600) first"
 
 logs="$HOME/.yakjev/logs"
-plist="$HOME/Library/LaunchAgents/$label.plist"
-mkdir -p "$logs" "$(dirname "$plist")"
+agents="$HOME/Library/LaunchAgents"
+domain="gui/$(id -u)"
+mkdir -p "$logs" "$agents"
 chmod 0700 "$HOME/.yakjev"
 
-cat >"$plist" <<PLIST
+# load <label> <program> <schedule plist fragment>
+load() {
+  plist="$agents/$1.plist"
+  log="$logs/yakjev${1#"$label"}"
+  cat >"$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>$label</string>
+  <string>$1</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$root/deploy/macmini/run.sh</string>
+    <string>$2</string>
   </array>
   <key>WorkingDirectory</key>
   <string>$root</string>
@@ -41,22 +47,33 @@ cat >"$plist" <<PLIST
     <key>PATH</key>
     <string>$(dirname "$bun_bin"):/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
-  <key>RunAtLoad</key>
+$3
+  <key>StandardOutPath</key>
+  <string>$log.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>$log.err.log</string>
+</dict>
+</plist>
+PLIST
+  plutil -lint "$plist" >/dev/null
+  launchctl bootout "$domain/$1" 2>/dev/null || true
+  launchctl bootstrap "$domain" "$plist"
+  printf 'yakjev: loaded %s\n' "$1"
+}
+
+load "$label" "$root/deploy/macmini/run.sh" '  <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <true/>
   <key>ThrottleInterval</key>
-  <integer>10</integer>
-  <key>StandardOutPath</key>
-  <string>$logs/yakjev.out.log</string>
-  <key>StandardErrorPath</key>
-  <string>$logs/yakjev.err.log</string>
-</dict>
-</plist>
-PLIST
-plutil -lint "$plist" >/dev/null
+  <integer>10</integer>'
 
-domain="gui/$(id -u)"
-launchctl bootout "$domain/$label" 2>/dev/null || true
-launchctl bootstrap "$domain" "$plist"
-printf 'yakjev: loaded %s; logs in %s\n' "$label" "$logs"
+load "$label.backup" "$root/deploy/macmini/backup.sh" '  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>15</integer>
+  </dict>'
+
+printf 'yakjev: logs in %s\n' "$logs"

@@ -46,4 +46,33 @@ else
   check needs-build "run bun run build first" "$origin"
 fi
 
+BACKUP="$root/deploy/macmini/backup.sh"
+if command -v sqlite3 >/dev/null 2>&1; then
+  b="$tmp/backup"
+  mkdir -p "$b/data" "$b/out"
+  sqlite3 "$b/data/yakjev.sqlite" 'PRAGMA journal_mode=WAL; CREATE TABLE t(x); INSERT INTO t VALUES (1),(2),(3);' >/dev/null
+  for old in 20200101T000000Z 20200102T000000Z 20200103T000000Z; do
+    : >"$b/out/yakjev-$old.sqlite"
+    touch -t "${old:0:8}0000" "$b/out/yakjev-$old.sqlite"
+  done
+  if env -i PATH="/usr/bin:/bin" HOME="$tmp/home" SQLITE_BIN="$(command -v sqlite3)" \
+    YAKJEV_DATA_DIR="$b/data" YAKJEV_BACKUP_DIR="$b/out" YAKJEV_BACKUP_KEEP=2 \
+    bash "$BACKUP" >"$b/log" 2>&1; then
+    newest="$(ls -1t "$b/out"/yakjev-*.sqlite | head -1)"
+    count="$(ls -1 "$b/out"/yakjev-*.sqlite | wc -l | tr -d ' ')"
+    rows="$(sqlite3 "$newest" 'SELECT count(*) FROM t')"
+    if [ "$count" = 2 ] && [ "$rows" = 3 ] && [ ! -e "$b/out/yakjev-20200101T000000Z.sqlite" ]; then
+      printf 'ok backup-rotates\n'
+    else
+      printf 'FAIL backup-rotates: count=%s rows=%s\n' "$count" "$rows" >&2
+      fail=1
+    fi
+  else
+    printf 'FAIL backup-rotates: %s\n' "$(cat "$b/log")" >&2
+    fail=1
+  fi
+else
+  printf 'skip backup-rotates (no sqlite3)\n'
+fi
+
 exit "$fail"
