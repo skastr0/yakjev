@@ -6,14 +6,14 @@ Yakjev uses local Xcode archives and `asc` CLI 2.7, following the release approa
 
 | Setting        | Value                                             |
 | -------------- | ------------------------------------------------- |
-| ASC app ID     | `<APP_ID>`                                      |
+| ASC app ID     | `APP_ID` in the private release environment       |
 | Bundle ID      | `engineer.castro.yakjev`                          |
 | Internal group | `Internal Testers`                                |
 | App icon       | `apps/mobile/assets/icon.png`, opaque 1024 × 1024 |
 
 Use Bun 1.4.2, Xcode with the iOS SDK, CocoaPods, `asc`, `jq`, and Python 3.11 or newer. The distribution certificate and provisioning profile must already be installed. The release script does not create or revoke certificates, change keychain settings, or change the default ASC auth profile.
 
-The [Yakjev app record](https://appstoreconnect.apple.com/apps/<APP_ID>/distribution) exists with primary language English (U.S.) and SKU `yakjev-ios`. Uploads and TestFlight distribution use a locally configured ASC API profile. Management access remains with the account owner.
+The Yakjev app record (`https://appstoreconnect.apple.com/apps/$APP_ID/distribution`) exists with primary language English (U.S.) and SKU `yakjev-ios`. Uploads and TestFlight distribution use a locally configured ASC API profile. Management access remains with the account owner.
 
 ## Private release configuration
 
@@ -27,6 +27,7 @@ YAKJEV_APPLE_TEAM_ID=
 PROFILE_NAME=
 CODE_SIGN_IDENTITY=
 INVITE_EMAIL=
+APP_ID=
 YAKJEV_SERVER_URL=
 ```
 
@@ -50,7 +51,6 @@ From the repository root, validate the source and select an unused build number:
 ```sh
 bun install --frozen-lockfile
 bun run verify
-APP_ID=<APP_ID>
 asc --profile "$ASC_PROFILE" builds next-build-number --app "$APP_ID" --version 0.1.0 --platform IOS
 bun run mobile:testflight --app-id "$APP_ID" --build-number 1
 ```
