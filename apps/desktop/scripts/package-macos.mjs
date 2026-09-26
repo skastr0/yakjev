@@ -8,6 +8,7 @@ import {
   readFile,
   realpath,
   rename,
+  rm,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -210,6 +211,9 @@ if (!args.has("--dir")) {
     ],
     { log: log("dmg") },
   );
+  // The staging folder links to /Applications; left in the checkout, tsc and
+  // bun test walk into every installed app. rm unlinks without following it.
+  await rm(imageRoot, { recursive: true });
   if (signed)
     await command(
       "codesign",
