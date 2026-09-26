@@ -48,4 +48,4 @@ jobs:
             echo 'Image unexpectedly started without configuration'
             exit 1
           fi
-          grep -q 'YAKJEV_ORIGIN is required' /tmp/yakjev-rejection.log
+          grep -q 'RAILWAY_PUBLIC_DOMAIN is required' /tmp/yakjev-rejection.log
