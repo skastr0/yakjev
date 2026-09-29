@@ -75,8 +75,10 @@ or artifact uploads. No command publishes a release or configures updates.
 
 ### Maintainer macOS distribution
 
-Supply `YAKJEV_MAC_TEAM_ID` and the full `YAKJEV_MAC_SIGNING_IDENTITY` from private
-local configuration. Signing certificates stay in the macOS Keychain; `asc`
+Supply `YAKJEV_MAC_TEAM_ID`, the full `YAKJEV_MAC_SIGNING_IDENTITY` and
+`YAKJEV_SERVER_URL` in ignored `.local/desktop-release.env` (or the file in
+`YAKJEV_RELEASE_ENV_FILE`). `desktop:package:mac` and `desktop:install:mac` load
+it automatically. Signing certificates stay in the macOS Keychain; `asc`
 uses its existing local Apple Notary API authentication. The public repository
 contains no certificate identity defaults, private keys, account IDs, or auth
 profiles. Never commit credentials or raw build/notarization logs.

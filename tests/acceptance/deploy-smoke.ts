@@ -2,7 +2,7 @@
 // Read-only deployed-instance smoke. Never writes graph data and never mutates
 // deployment state.
 //
-//   YAKJEV_REMOTE_URL=https://<service>.up.railway.app bun tests/acceptance/deploy-smoke.ts
+//   YAKJEV_REMOTE_URL=https://yakjev.<tailnet>.ts.net bun tests/acceptance/deploy-smoke.ts
 //
 // Requires a tailnet identity that is allowed tcp:443 to the host. The script
 // fails loudly if the environment variable is missing: a silent skip would look

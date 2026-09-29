@@ -13,8 +13,8 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "package": "bun run build && electron-builder --publish never",
-    "package:mac": "bun scripts/package-macos.mjs",
-    "install:mac": "bun scripts/install-macos.mjs",
+    "package:mac": "bash scripts/with-release-env.sh bun scripts/package-macos.mjs",
+    "install:mac": "bash scripts/with-release-env.sh bun scripts/install-macos.mjs",
     "test": "bun test test",
     "smoke": "bun run build && bun e2e/smoke.ts"
   },
