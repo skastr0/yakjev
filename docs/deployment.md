@@ -71,7 +71,7 @@ The client must be on the tailnet.
 
 `deploy/macmini/backup.sh` writes `~/.yakjev/backups/yakjev-<UTC stamp>.sqlite` with SQLite `VACUUM INTO`, which is consistent beside the running server. It checks `PRAGMA integrity_check` on the copy and keeps the newest 14 (`YAKJEV_BACKUP_KEEP`). launchd runs it daily at 04:15, and at the next wake if the mini slept through that time. Never copy the live database file.
 
-The mini is one disk. To keep a copy elsewhere, run `deploy/macmini/pull-backups.sh --install` on another machine with `ssh mac-mini` access. It pulls new backups daily into `~/Backups/yakjev` over SSH, keeps 60, and never writes to the mini.
+Backups share the mini's disk with the live graph; there is no off-host copy.
 
 Restore: `launchctl bootout gui/$(id -u)/com.skastr0.yakjev`, remove `yakjev.sqlite-wal` and `yakjev.sqlite-shm`, copy the backup to `~/.yakjev/data/yakjev.sqlite`, check `PRAGMA integrity_check`, then run `install.sh` again.
 
