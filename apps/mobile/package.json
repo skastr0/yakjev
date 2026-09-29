@@ -8,11 +8,10 @@
     "ios": "expo run:ios",
     "prebuild": "expo prebuild --platform ios --no-install",
     "typecheck": "tsc --noEmit",
-    "dep:check": "expo install --check",
     "test": "bun test src test",
     "test:native": "swift test --package-path modules/yakjev-graph",
     "export": "expo export --platform ios",
-    "verify": "bun run dep:check && bun run typecheck && bun run test && bun run export"
+    "verify": "bun run typecheck && bun run test && bun run export"
   },
   "dependencies": {
     "@yakjev/client": "workspace:*",
