@@ -4,7 +4,7 @@
 
 Guilherme owns the product. The owner's current word supersedes anything written here or in `docs/`; when they disagree, follow the owner and update the doc. Do not invent product rules.
 
-Owner direction (2026-09-22): Jev is not an on-demand action. It runs transparently as the graph is edited: while an intention is typed it shows the nodes it will connect to; on create it connects them; while a node is dragged it shows what will connect on drop; when an edge is drawn it pre-selects as much as it can. Jev connects directly, it does not propose. Corrections to its connections are captured and learned from. The graph should feel alive and beautiful.
+Owner direction (2026-10-13): Jev never spends a call by accident. A plain mouse drag only moves the node; asking Jev while dragging takes a deliberate key press (⌥-drag). Layout edits must never reach Jev. Jev is otherwise not an on-demand action: it runs transparently as the graph is edited — while an intention is typed it shows the nodes it will connect to; on create it connects them; with ⌥ held during a drag it shows what will connect on drop; when an edge is drawn it pre-selects as much as it can. Jev connects directly, it does not propose. Corrections to its connections are captured and learned from. The graph should feel alive and beautiful.
 
 ## Stack and boundaries
 
