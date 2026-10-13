@@ -34,6 +34,7 @@ import {
   type Selection,
 } from "./graph-model";
 import { backgroundArrivals, type Ghost } from "./jev";
+import { dragIntent } from "./drag-intent";
 
 export type Point = { x: number; y: number };
 export type CanvasHandle = {
@@ -107,7 +108,9 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
       new Map<string, { x: number; y: number }>(props.savedLayout),
     );
     const lastSaved = useRef(new Map<string, Point>(props.savedLayout));
-    const moveOnly = useRef(false);
+    // Whether the drag in progress is asking Jev. It is decided when the drag
+    // starts, so a gesture that begins without the key never reaches Jev later.
+    const withJev = useRef(false);
     // What the current drag is doing, for the status chip and rings.
     const [dragging, setDragging] = useState<{
       id: string;
@@ -501,10 +504,11 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           settleFrame.current = requestAnimationFrame(step);
         };
         sigma.on("nodeDragStart", (payload) => {
-          const shift =
-            payload.event.original instanceof MouseEvent &&
-            payload.event.original.shiftKey;
-          if (shift) {
+          const original = payload.event.original;
+          const intent = dragIntent(
+            original instanceof MouseEvent ? original : null,
+          );
+          if (intent === "link") {
             payload.preventSigmaDefault();
             link.current = {
               source: payload.node,
@@ -514,10 +518,9 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             };
             return;
           }
-          // Option/Alt-drag just moves: no Jev, no connection on drop.
-          moveOnly.current =
-            payload.event.original instanceof MouseEvent &&
-            payload.event.original.altKey;
+          // A plain drag only moves. Holding Option/Alt asks Jev what the drop
+          // would connect, and only that gesture can connect on drop.
+          withJev.current = intent === "jev";
           dragGesture.current = {
             x: payload.event.x,
             y: payload.event.y,
@@ -530,9 +533,9 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           };
           setDragging({
             id: payload.node,
-            mode: moveOnly.current ? "move" : "jev",
+            mode: withJev.current ? "jev" : "move",
           });
-          if (!moveOnly.current)
+          if (withJev.current)
             latest.current.onDragStart(
               payload.node,
               reachOf.current(payload.node),
@@ -553,7 +556,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             y: graph.current.getNodeAttribute(node, "y") as number,
           });
           setOverlayTick((value) => value + 1);
-          if (!moveOnly.current)
+          if (withJev.current)
             latest.current.onDragMove(node, reachOf.current(node));
         });
         sigma.on("nodeDragEnd", ({ node }) => {
@@ -562,16 +565,19 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
             x: graph.current.getNodeAttribute(node, "x") as number,
             y: graph.current.getNodeAttribute(node, "y") as number,
           });
-          const nearby = reachOf.current(node);
           const moved = (dragGesture.current?.peak ?? 0) > DRAG_COMMIT_PX;
           dragGesture.current = null;
           setDragging(null);
           if (moved) lastDropped.current = node;
-          if (moveOnly.current) moveOnly.current = false;
-          else if (moved) {
-            releaseNode(node);
-            latest.current.onDragEnd(node, nearby);
-          } else latest.current.onDragCancel();
+          // A Jev drag settles the drop and commits what it found. A plain drag
+          // has nothing to settle and never connects.
+          if (withJev.current) {
+            withJev.current = false;
+            if (moved) {
+              releaseNode(node);
+              latest.current.onDragEnd(node, reachOf.current(node));
+            } else latest.current.onDragCancel();
+          } else if (!moved) latest.current.onDragCancel();
           schedulePersist();
         });
         sigma.on("moveBody", ({ event }) => {
@@ -803,7 +809,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           ref={container}
           className="graph-canvas"
           role="application"
-          aria-label="Intention graph. Double-click to capture. Drag a node toward another to connect it. Shift-drag to choose the link."
+          aria-label="Intention graph. Double-click to capture. Drag a node to move it. Option-drag toward another to connect it. Shift-drag to choose the link."
           data-revision={props.data.revision}
         />
         <svg className="link-band" aria-hidden="true" data-frame={overlayTick}>
@@ -1044,8 +1050,8 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           <div className="canvas-message">
             <h2>Capture an intention.</h2>
             <p>
-              Double-click the canvas. Drag a node toward another and it
-              connects on drop. Shift-drag to choose the link.
+              Double-click the canvas. Drag a node to move it; hold ⌥ and drag
+              toward another to connect on drop. Shift-drag chooses the link.
             </p>
             <button
               className="primary"
@@ -1062,7 +1068,7 @@ export const GraphCanvas = forwardRef<CanvasHandle, Props>(
           </div>
         )}
         <p className="graph-hint">
-          Drag toward a node to connect · ⌥-drag just moves · shift-drag chooses
+          Drag to move · ⌥-drag toward a node to connect · shift-drag chooses
           the link · double-click captures · click an arrow reframes · / finds ·
           ⌘Z undoes
         </p>

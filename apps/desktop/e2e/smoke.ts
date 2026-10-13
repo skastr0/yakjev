@@ -12,6 +12,7 @@ import {
   expect,
   type ElectronApplication,
   type Page,
+  type Request,
 } from "@playwright/test";
 import type { WebPreferences } from "electron";
 import type { Layout } from "../../../packages/protocol/src/index";
@@ -287,7 +288,7 @@ async function main(): Promise<void> {
     );
 
     const savedLayout = await step(
-      "native drag persists layout on the server",
+      "a plain drag moves a node and persists layout without asking Jev",
       async () => {
         await expect
           .poll(
@@ -303,12 +304,27 @@ async function main(): Promise<void> {
           created,
         );
         assert(point, "created node must have a rendered canvas position");
-        await product.keyboard.down("Alt");
-        await product.mouse.move(point.x, point.y);
-        await product.mouse.down();
-        await product.mouse.move(point.x + 110, point.y + 75, { steps: 12 });
-        await product.mouse.up();
-        await product.keyboard.up("Alt");
+        // Moving a node is a layout edit, never something Jev should judge
+        // about: the plain drag has to move the node without reaching preview.
+        const previews: string[] = [];
+        const watch = (request: Request) => {
+          if (request.url().includes("/api/jev/preview"))
+            previews.push(request.url());
+        };
+        product.on("request", watch);
+        try {
+          await product.mouse.move(point.x, point.y);
+          await product.mouse.down();
+          await product.mouse.move(point.x + 110, point.y + 75, { steps: 12 });
+          await product.mouse.up();
+        } finally {
+          product.off("request", watch);
+        }
+        assert.deepEqual(
+          previews,
+          [],
+          "a plain drag must not ask Jev; it only moves the node",
+        );
         await expect
           .poll(
             async () => {
@@ -320,6 +336,68 @@ async function main(): Promise<void> {
                 : 0;
             },
             { timeout: 10_000 },
+          )
+          .toBeGreaterThan(0.1);
+        const afterMove = (
+          await server.json<Layout>("/api/layout")
+        ).positions.find((item) => item.id === created);
+        assert(afterMove);
+        // The same drag with ⌥ held is the deliberate gesture, so it must ask.
+        // Ending beside another node gives Jev something to judge at all; this
+        // server has no provider key, so the preview cannot commit an edge.
+        const asked = new Set<string>();
+        const watchHeld = (request: Request) => {
+          if (request.url().includes("/api/jev/preview"))
+            asked.add(request.url());
+        };
+        product.on("request", watchHeld);
+        try {
+          const at = await product.evaluate(
+            (id) => window.__yakjevCanvas?.anchorNode(id),
+            created,
+          );
+          const remote = await product.evaluate(
+            (id) => window.__yakjevCanvas?.anchorNode(id),
+            "desktop-smoke-remote",
+          );
+          assert(
+            at && remote,
+            "both nodes must have rendered canvas positions",
+          );
+          const away = Math.hypot(remote.x - at.x, remote.y - at.y) || 1;
+          const hop = Math.max(40, away - 90);
+          await product.keyboard.down("Alt");
+          await product.mouse.move(at.x, at.y);
+          await product.mouse.down();
+          await product.mouse.move(
+            at.x + ((remote.x - at.x) / away) * hop,
+            at.y + ((remote.y - at.y) / away) * hop,
+            { steps: 12 },
+          );
+          await product.mouse.up();
+          await product.keyboard.up("Alt");
+          await expect
+            .poll(() => asked.size, {
+              timeout: 15_000,
+              message: "holding Option during a drag must ask Jev",
+            })
+            .toBeGreaterThan(0);
+        } finally {
+          product.off("request", watchHeld);
+        }
+        // The drop settles the node, so wait for that position to land before
+        // reporting the layout the restart check compares against.
+        await expect
+          .poll(
+            async () => {
+              const saved = (
+                await server.json<Layout>("/api/layout")
+              ).positions.find((item) => item.id === created);
+              return saved
+                ? Math.hypot(saved.x - afterMove.x, saved.y - afterMove.y)
+                : 0;
+            },
+            { timeout: 15_000 },
           )
           .toBeGreaterThan(0.1);
         return server.json<Layout>("/api/layout");
